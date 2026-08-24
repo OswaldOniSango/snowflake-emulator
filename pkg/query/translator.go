@@ -117,6 +117,12 @@ func (t *Translator) Translate(sql string) (string, error) {
 		return sql, nil
 	}
 
+	// Vitess follows MySQL semantics and parses || as boolean OR. Snowflake and
+	// DuckDB both use it for string concatenation, so preserve such expressions.
+	if strings.Contains(sql, "||") {
+		return sql, nil
+	}
+
 	// Parse the SQL statement into an AST
 	stmt, err := sqlparser.Parse(sql)
 	if err != nil {

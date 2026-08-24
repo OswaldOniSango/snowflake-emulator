@@ -98,6 +98,21 @@ type QueryHistoryEntry struct {
 	CompletedAt     *time.Time
 }
 
+// Procedure represents a Snowflake SQL stored procedure.
+// Arguments contains the JSON-encoded argument definitions.
+type Procedure struct {
+	ID         string
+	SchemaID   string
+	Name       string
+	Arguments  string
+	ReturnType string
+	Language   string
+	Body       string
+	Comment    string
+	CreatedAt  time.Time
+	Owner      string
+}
+
 // NewRepository creates a new metadata repository.
 // It initializes metadata tables if they don't exist.
 func NewRepository(mgr *connection.Manager) (*Repository, error) {
@@ -177,6 +192,19 @@ func (r *Repository) initMetadataTables(ctx context.Context) error {
 			error_message TEXT,
 			started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			completed_at TIMESTAMP
+		)`,
+		`CREATE TABLE IF NOT EXISTS _metadata_procedures (
+			id VARCHAR PRIMARY KEY,
+			schema_id VARCHAR NOT NULL,
+			name VARCHAR NOT NULL,
+			arguments TEXT NOT NULL,
+			return_type VARCHAR NOT NULL,
+			language VARCHAR NOT NULL,
+			body TEXT NOT NULL,
+			comment VARCHAR,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			owner VARCHAR,
+			UNIQUE(schema_id, name)
 		)`,
 	}
 

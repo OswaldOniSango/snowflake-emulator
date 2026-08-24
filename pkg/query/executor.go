@@ -26,11 +26,12 @@ var (
 
 // Executor executes SQL queries against DuckDB with Snowflake SQL translation.
 type Executor struct {
-	mgr            *connection.Manager
-	repo           *metadata.Repository
-	translator     *Translator
-	copyProcessor  *CopyProcessor
-	mergeProcessor *MergeProcessor
+	mgr                *connection.Manager
+	repo               *metadata.Repository
+	translator         *Translator
+	copyProcessor      *CopyProcessor
+	mergeProcessor     *MergeProcessor
+	procedureProcessor *ProcedureProcessor
 }
 
 // ExecutorOption configures an Executor.
@@ -57,6 +58,7 @@ func NewExecutor(mgr *connection.Manager, repo *metadata.Repository, opts ...Exe
 		repo:       repo,
 		translator: NewTranslator(),
 	}
+	e.procedureProcessor = NewProcedureProcessor(repo, e)
 	for _, opt := range opts {
 		opt(e)
 	}
@@ -73,6 +75,14 @@ func (e *Executor) Configure(opts ...ExecutorOption) {
 
 // Query executes a SELECT query and returns results.
 func (e *Executor) Query(ctx context.Context, sql string) (*Result, error) {
+	classifier := NewClassifier()
+	if classifier.IsCall(sql) {
+		return e.procedureProcessor.Call(ctx, sql)
+	}
+	if classifier.IsShowProcedures(sql) {
+		return e.procedureProcessor.Show(ctx, sql)
+	}
+
 	// Translate Snowflake SQL to DuckDB SQL
 	translatedSQL, err := e.translator.Translate(sql)
 	if err != nil {
@@ -299,6 +309,12 @@ func (e *Executor) ExecuteWithBindings(ctx context.Context, sql string, bindings
 func (e *Executor) Execute(ctx context.Context, sql string) (*ExecResult, error) {
 	// Use classifier to detect DDL statements that need metadata tracking
 	classifier := NewClassifier()
+	if classifier.IsCreateProcedure(sql) {
+		return e.procedureProcessor.Create(ctx, sql)
+	}
+	if classifier.IsDropProcedure(sql) {
+		return e.procedureProcessor.Drop(ctx, sql)
+	}
 
 	// For CREATE TABLE, we need to register it in metadata
 	if classifier.IsCreateTable(sql) {
