@@ -149,7 +149,22 @@ func (c *Classifier) isTransactionStatement(upperSQL string) bool {
 // IsCreateTable checks if the SQL is a CREATE TABLE statement.
 func (c *Classifier) IsCreateTable(sql string) bool {
 	upperSQL := strings.ToUpper(strings.TrimSpace(sql))
-	return strings.HasPrefix(upperSQL, "CREATE TABLE")
+	prefixes := []string{
+		"CREATE TABLE",
+		"CREATE TEMP TABLE",
+		"CREATE TEMPORARY TABLE",
+		"CREATE TRANSIENT TABLE",
+		"CREATE OR REPLACE TABLE",
+		"CREATE OR REPLACE TEMP TABLE",
+		"CREATE OR REPLACE TEMPORARY TABLE",
+		"CREATE OR REPLACE TRANSIENT TABLE",
+	}
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(upperSQL, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // IsDropTable checks if the SQL is a DROP TABLE statement.
