@@ -102,6 +102,12 @@ func (t *Translator) Translate(sql string) (string, error) {
 	// Trim whitespace
 	sql = strings.TrimSpace(sql)
 
+	// DuckDB supports TEMP/TEMPORARY tables, but it has no TRANSIENT keyword.
+	// A Snowflake transient table is therefore stored as a regular persistent
+	// DuckDB table. Its Snowflake-specific kind will eventually live in the
+	// emulator catalog once SQL DDL and metadata creation are unified.
+	sql = translateCreateTableKind(sql)
+
 	// Skip AST transformation for DDL statements - they don't need function translation
 	// and the sqlparser adds unwanted backticks when serializing back to string
 	// Also skip SHOW/DESCRIBE/EXPLAIN which cause vitess-sqlparser to panic
@@ -150,6 +156,27 @@ func (t *Translator) Translate(sql string) (string, error) {
 	result = t.handleComplexTransformations(result)
 
 	return result, nil
+}
+
+// translateCreateTableKind converts Snowflake CREATE TABLE modifiers that
+// DuckDB does not understand while preserving modifiers it supports.
+func translateCreateTableKind(sql string) string {
+	upperSQL := strings.ToUpper(sql)
+	replacements := []struct {
+		from string
+		to   string
+	}{
+		{"CREATE OR REPLACE TRANSIENT TABLE", "CREATE OR REPLACE TABLE"},
+		{"CREATE TRANSIENT TABLE", "CREATE TABLE"},
+	}
+
+	for _, replacement := range replacements {
+		if strings.HasPrefix(upperSQL, replacement.from) {
+			return replacement.to + sql[len(replacement.from):]
+		}
+	}
+
+	return sql
 }
 
 // handleComplexTransformations handles transformations that require more than simple renames.
