@@ -132,10 +132,33 @@ func (c *Classifier) Classify(sql string) ClassifyResult {
 // isQueryStatement checks if the SQL is a query (read-only) statement.
 func (c *Classifier) isQueryStatement(upperSQL string) bool {
 	return strings.HasPrefix(upperSQL, "SELECT") ||
+		strings.HasPrefix(upperSQL, "CALL") ||
 		strings.HasPrefix(upperSQL, "SHOW") ||
 		strings.HasPrefix(upperSQL, "DESCRIBE") ||
 		strings.HasPrefix(upperSQL, "DESC") ||
 		strings.HasPrefix(upperSQL, "EXPLAIN")
+}
+
+// IsCreateProcedure checks if the SQL creates a stored procedure.
+func (c *Classifier) IsCreateProcedure(sql string) bool {
+	upperSQL := strings.ToUpper(strings.TrimSpace(sql))
+	return strings.HasPrefix(upperSQL, "CREATE PROCEDURE") ||
+		strings.HasPrefix(upperSQL, "CREATE OR REPLACE PROCEDURE")
+}
+
+// IsDropProcedure checks if the SQL drops a stored procedure.
+func (c *Classifier) IsDropProcedure(sql string) bool {
+	return strings.HasPrefix(strings.ToUpper(strings.TrimSpace(sql)), "DROP PROCEDURE")
+}
+
+// IsCall checks if the SQL calls a stored procedure.
+func (c *Classifier) IsCall(sql string) bool {
+	return strings.HasPrefix(strings.ToUpper(strings.TrimSpace(sql)), "CALL")
+}
+
+// IsShowProcedures checks if the SQL lists stored procedures.
+func (c *Classifier) IsShowProcedures(sql string) bool {
+	return strings.HasPrefix(strings.ToUpper(strings.TrimSpace(sql)), "SHOW PROCEDURES")
 }
 
 // isTransactionStatement checks if the SQL is a transaction control statement.
