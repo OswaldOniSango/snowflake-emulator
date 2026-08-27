@@ -32,6 +32,7 @@ type Executor struct {
 	copyProcessor      *CopyProcessor
 	mergeProcessor     *MergeProcessor
 	procedureProcessor *ProcedureProcessor
+	streamProcessor    *StreamProcessor
 }
 
 // ExecutorOption configures an Executor.
@@ -59,6 +60,7 @@ func NewExecutor(mgr *connection.Manager, repo *metadata.Repository, opts ...Exe
 		translator: NewTranslator(),
 	}
 	e.procedureProcessor = NewProcedureProcessor(repo, e)
+	e.streamProcessor = NewStreamProcessor(repo, e)
 	for _, opt := range opts {
 		opt(e)
 	}
@@ -82,6 +84,14 @@ func (e *Executor) Query(ctx context.Context, sql string) (*Result, error) {
 	if classifier.IsShowProcedures(sql) {
 		return e.procedureProcessor.Show(ctx, sql)
 	}
+	if classifier.IsShowStreams(sql) {
+		return e.streamProcessor.Show(ctx, sql)
+	}
+	rewrittenSQL, err := e.streamProcessor.RewriteReferences(ctx, sql)
+	if err != nil {
+		return nil, err
+	}
+	sql = rewrittenSQL
 
 	// Translate Snowflake SQL to DuckDB SQL
 	translatedSQL, err := e.translator.Translate(sql)
@@ -315,6 +325,12 @@ func (e *Executor) Execute(ctx context.Context, sql string) (*ExecResult, error)
 	if classifier.IsDropProcedure(sql) {
 		return e.procedureProcessor.Drop(ctx, sql)
 	}
+	if classifier.IsCreateStream(sql) {
+		return e.streamProcessor.Create(ctx, sql)
+	}
+	if classifier.IsDropStream(sql) {
+		return e.streamProcessor.Drop(ctx, sql)
+	}
 
 	// For CREATE TABLE, we need to register it in metadata
 	if classifier.IsCreateTable(sql) {
@@ -349,6 +365,12 @@ func (e *Executor) Execute(ctx context.Context, sql string) (*ExecResult, error)
 // Use this from processors (COPY, MERGE) to avoid infinite recursion.
 // This is a private method as it's only called from same-package processors.
 func (e *Executor) executeRaw(ctx context.Context, sql string) (*ExecResult, error) {
+	rewrittenSQL, err := e.streamProcessor.RewriteReferences(ctx, sql)
+	if err != nil {
+		return nil, err
+	}
+	sql = rewrittenSQL
+
 	// Translate Snowflake SQL to DuckDB SQL
 	translatedSQL, err := e.translator.Translate(sql)
 	if err != nil {
