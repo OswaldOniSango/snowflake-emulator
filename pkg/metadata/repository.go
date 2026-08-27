@@ -113,6 +113,21 @@ type Procedure struct {
 	Owner      string
 }
 
+// Stream represents an append-only Snowflake stream over a source table.
+// Offset stores the highest DuckDB rowid visible when the stream was created.
+type Stream struct {
+	ID             string
+	SchemaID       string
+	Name           string
+	SourceDatabase string
+	SourceSchema   string
+	SourceTable    string
+	StreamType     string
+	Offset         int64
+	CreatedAt      time.Time
+	Owner          string
+}
+
 // NewRepository creates a new metadata repository.
 // It initializes metadata tables if they don't exist.
 func NewRepository(mgr *connection.Manager) (*Repository, error) {
@@ -202,6 +217,19 @@ func (r *Repository) initMetadataTables(ctx context.Context) error {
 			language VARCHAR NOT NULL,
 			body TEXT NOT NULL,
 			comment VARCHAR,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			owner VARCHAR,
+			UNIQUE(schema_id, name)
+		)`,
+		`CREATE TABLE IF NOT EXISTS _metadata_streams (
+			id VARCHAR PRIMARY KEY,
+			schema_id VARCHAR NOT NULL,
+			name VARCHAR NOT NULL,
+			source_database VARCHAR NOT NULL,
+			source_schema VARCHAR NOT NULL,
+			source_table VARCHAR NOT NULL,
+			stream_type VARCHAR NOT NULL,
+			stream_offset BIGINT NOT NULL,
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			owner VARCHAR,
 			UNIQUE(schema_id, name)

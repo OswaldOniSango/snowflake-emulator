@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"time"
@@ -23,22 +24,32 @@ type RestAPIv2Handler struct {
 
 // NewRestAPIv2Handler creates a new REST API v2 handler.
 func NewRestAPIv2Handler(executor *query.Executor, stmtMgr *query.StatementManager, repo *metadata.Repository) *RestAPIv2Handler {
-	return &RestAPIv2Handler{
-		executor:     executor,
-		stmtMgr:      stmtMgr,
-		repo:         repo,
-		warehouseMgr: warehouse.NewManager(),
-	}
-}
-
-// NewRestAPIv2HandlerWithWarehouse creates a new REST API v2 handler with warehouse manager.
-func NewRestAPIv2HandlerWithWarehouse(executor *query.Executor, stmtMgr *query.StatementManager, repo *metadata.Repository, warehouseMgr *warehouse.Manager) *RestAPIv2Handler {
+	warehouseMgr := warehouse.NewManager()
+	configureWarehouseValidation(executor, warehouseMgr)
 	return &RestAPIv2Handler{
 		executor:     executor,
 		stmtMgr:      stmtMgr,
 		repo:         repo,
 		warehouseMgr: warehouseMgr,
 	}
+}
+
+// NewRestAPIv2HandlerWithWarehouse creates a new REST API v2 handler with warehouse manager.
+func NewRestAPIv2HandlerWithWarehouse(executor *query.Executor, stmtMgr *query.StatementManager, repo *metadata.Repository, warehouseMgr *warehouse.Manager) *RestAPIv2Handler {
+	configureWarehouseValidation(executor, warehouseMgr)
+	return &RestAPIv2Handler{
+		executor:     executor,
+		stmtMgr:      stmtMgr,
+		repo:         repo,
+		warehouseMgr: warehouseMgr,
+	}
+}
+
+func configureWarehouseValidation(executor *query.Executor, warehouseMgr *warehouse.Manager) {
+	executor.Configure(query.WithWarehouseValidator(func(ctx context.Context, name string) error {
+		_, err := warehouseMgr.GetWarehouse(ctx, name)
+		return err
+	}))
 }
 
 // SubmitStatement handles POST /api/v2/statements.
@@ -66,6 +77,12 @@ func (h *RestAPIv2Handler) SubmitStatement(w http.ResponseWriter, r *http.Reques
 
 	// Convert bindings from types.BindingValue to query.QueryBindingValue
 	bindings := convertBindings(req.Bindings)
+	executionContext := query.ExecutionContext{
+		Database:  req.Database,
+		Schema:    req.Schema,
+		Warehouse: req.Warehouse,
+		Role:      req.Role,
+	}
 
 	var result *query.Result
 	var execResult *query.ExecResult
@@ -74,16 +91,16 @@ func (h *RestAPIv2Handler) SubmitStatement(w http.ResponseWriter, r *http.Reques
 	if classification.IsQuery {
 		// Handle SELECT, SHOW, DESCRIBE, EXPLAIN
 		if len(bindings) > 0 {
-			result, err = h.executor.QueryWithBindings(ctx, req.Statement, bindings)
+			result, err = h.executor.QueryWithBindingsAndContext(ctx, executionContext, req.Statement, bindings)
 		} else {
-			result, err = h.executor.Query(ctx, req.Statement)
+			result, err = h.executor.QueryWithContext(ctx, executionContext, req.Statement)
 		}
 	} else {
 		// Handle DDL (CREATE, DROP, ALTER) and DML (INSERT, UPDATE, DELETE)
 		if len(bindings) > 0 {
-			execResult, err = h.executor.ExecuteWithBindings(ctx, req.Statement, bindings)
+			execResult, err = h.executor.ExecuteWithBindingsAndContext(ctx, executionContext, req.Statement, bindings)
 		} else {
-			execResult, err = h.executor.Execute(ctx, req.Statement)
+			execResult, err = h.executor.ExecuteWithContext(ctx, executionContext, req.Statement)
 		}
 	}
 

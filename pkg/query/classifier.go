@@ -161,6 +161,23 @@ func (c *Classifier) IsShowProcedures(sql string) bool {
 	return strings.HasPrefix(strings.ToUpper(strings.TrimSpace(sql)), "SHOW PROCEDURES")
 }
 
+// IsCreateStream checks if the SQL creates a stream.
+func (c *Classifier) IsCreateStream(sql string) bool {
+	upperSQL := strings.ToUpper(strings.TrimSpace(sql))
+	return strings.HasPrefix(upperSQL, "CREATE STREAM") ||
+		strings.HasPrefix(upperSQL, "CREATE OR REPLACE STREAM")
+}
+
+// IsDropStream checks if the SQL drops a stream.
+func (c *Classifier) IsDropStream(sql string) bool {
+	return strings.HasPrefix(strings.ToUpper(strings.TrimSpace(sql)), "DROP STREAM")
+}
+
+// IsShowStreams checks if the SQL lists streams.
+func (c *Classifier) IsShowStreams(sql string) bool {
+	return strings.HasPrefix(strings.ToUpper(strings.TrimSpace(sql)), "SHOW STREAMS")
+}
+
 // isTransactionStatement checks if the SQL is a transaction control statement.
 func (c *Classifier) isTransactionStatement(upperSQL string) bool {
 	return strings.HasPrefix(upperSQL, "BEGIN") ||

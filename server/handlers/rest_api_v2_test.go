@@ -39,6 +39,13 @@ func setupRestAPIv2Handler(t *testing.T) (*RestAPIv2Handler, *chi.Mux) {
 	if err != nil {
 		t.Fatalf("failed to create repository: %v", err)
 	}
+	testDatabase, err := repo.CreateDatabase(context.Background(), "TEST_DB", "")
+	if err != nil {
+		t.Fatalf("failed to create test database: %v", err)
+	}
+	if _, err := repo.CreateSchema(context.Background(), testDatabase.ID, "PUBLIC", ""); err != nil {
+		t.Fatalf("failed to create test schema: %v", err)
+	}
 
 	executor := query.NewExecutor(connMgr, repo)
 	stmtMgr := query.NewStatementManager(1 * time.Hour)
@@ -145,6 +152,48 @@ func TestRestAPIv2Handler_SubmitStatement_WithBindings(t *testing.T) {
 	// Check that the values are correct
 	if len(resp.Data[0]) != 2 {
 		t.Errorf("Expected 2 columns, got %d", len(resp.Data[0]))
+	}
+}
+
+func TestRestAPIv2Handler_StreamUsesRequestContext(t *testing.T) {
+	handler, router := setupRestAPIv2Handler(t)
+	ctx := context.Background()
+	database, err := handler.repo.CreateDatabase(ctx, "LEARNING_DB", "")
+	if err != nil {
+		t.Fatalf("CreateDatabase() error = %v", err)
+	}
+	if _, err := handler.repo.CreateSchema(ctx, database.ID, "PUBLIC", ""); err != nil {
+		t.Fatalf("CreateSchema() error = %v", err)
+	}
+
+	execute := func(statement string) types.StatementResponse {
+		t.Helper()
+		requestBody := types.SubmitStatementRequest{Statement: statement, Database: "LEARNING_DB", Schema: "PUBLIC"}
+		body, err := json.Marshal(requestBody)
+		if err != nil {
+			t.Fatalf("json.Marshal() error = %v", err)
+		}
+		request := httptest.NewRequest(http.MethodPost, "/api/v2/statements", bytes.NewReader(body))
+		request.Header.Set("Content-Type", "application/json")
+		responseRecorder := httptest.NewRecorder()
+		router.ServeHTTP(responseRecorder, request)
+
+		var response types.StatementResponse
+		if err := json.Unmarshal(responseRecorder.Body.Bytes(), &response); err != nil {
+			t.Fatalf("response decode error = %v; body = %s", err, responseRecorder.Body.String())
+		}
+		if response.Code != types.ResponseCodeSuccess {
+			t.Fatalf("statement %q failed: %s", statement, response.Message)
+		}
+		return response
+	}
+
+	execute("CREATE TABLE users (ID INTEGER, NAME VARCHAR)")
+	execute("CREATE STREAM users_stream ON TABLE users")
+	execute("INSERT INTO users VALUES (1, 'Oswaldo')")
+	response := execute("SELECT * FROM users_stream")
+	if len(response.Data) != 1 || response.Data[0][1] != "Oswaldo" {
+		t.Fatalf("stream response data = %#v", response.Data)
 	}
 }
 
