@@ -228,6 +228,14 @@ The result includes `METADATA$ACTION`, `METADATA$ISUPDATE`, and
 `METADATA$ROW_ID`. Short object names require a database and schema execution
 context, supplied by the REST request or the `gosnowflake` session.
 
+A plain `SELECT` does not consume a stream. A successful DML statement that
+reads from it advances its offset, so the same changes are not returned again:
+
+```sql
+INSERT INTO processed_users
+SELECT id, name FROM users_stream;
+```
+
 ## Next Steps
 
 | Example | Description |

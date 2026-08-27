@@ -1,6 +1,8 @@
 package query
 
 import (
+	"context"
+	"fmt"
 	"regexp"
 	"strings"
 )
@@ -38,4 +40,48 @@ func rewriteContextualTableReferences(sql string, executionContext ExecutionCont
 		})
 	}
 	return result
+}
+
+// rewriteTablesWithContext validates the logical Snowflake namespace before
+// mapping short table names to physical DuckDB names.
+func (e *Executor) rewriteTablesWithContext(ctx context.Context, executionContext ExecutionContext, sql string) (string, error) {
+	rewritten := rewriteContextualTableReferences(sql, executionContext)
+	return rewritten, nil
+}
+
+// validateExecutionContext checks every explicitly supplied namespace before a
+// statement is classified or executed.
+func (e *Executor) validateExecutionContext(ctx context.Context, executionContext ExecutionContext) error {
+	var databaseID string
+	if executionContext.Database != "" {
+		database, err := e.repo.GetDatabaseByName(ctx, executionContext.Database)
+		if err != nil {
+			return fmt.Errorf("database %s not found: %w", executionContext.Database, err)
+		}
+		databaseID = database.ID
+	}
+
+	if executionContext.Schema != "" {
+		if databaseID == "" {
+			return fmt.Errorf("schema %s requires a database context", executionContext.Schema)
+		}
+		if _, err := e.repo.GetSchemaByName(ctx, databaseID, executionContext.Schema); err != nil {
+			return fmt.Errorf("schema %s not found in database %s: %w", executionContext.Schema, executionContext.Database, err)
+		}
+	}
+
+	if executionContext.Warehouse != "" {
+		if e.warehouseValidator == nil {
+			return fmt.Errorf("warehouse %s cannot be validated: warehouse manager is not configured", executionContext.Warehouse)
+		}
+		if err := e.warehouseValidator(ctx, executionContext.Warehouse); err != nil {
+			return fmt.Errorf("warehouse %s not found: %w", executionContext.Warehouse, err)
+		}
+	}
+
+	if executionContext.Role != "" {
+		return fmt.Errorf("role %s cannot be validated: role management is not implemented", executionContext.Role)
+	}
+
+	return nil
 }

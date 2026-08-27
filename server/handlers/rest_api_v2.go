@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"time"
@@ -23,22 +24,32 @@ type RestAPIv2Handler struct {
 
 // NewRestAPIv2Handler creates a new REST API v2 handler.
 func NewRestAPIv2Handler(executor *query.Executor, stmtMgr *query.StatementManager, repo *metadata.Repository) *RestAPIv2Handler {
-	return &RestAPIv2Handler{
-		executor:     executor,
-		stmtMgr:      stmtMgr,
-		repo:         repo,
-		warehouseMgr: warehouse.NewManager(),
-	}
-}
-
-// NewRestAPIv2HandlerWithWarehouse creates a new REST API v2 handler with warehouse manager.
-func NewRestAPIv2HandlerWithWarehouse(executor *query.Executor, stmtMgr *query.StatementManager, repo *metadata.Repository, warehouseMgr *warehouse.Manager) *RestAPIv2Handler {
+	warehouseMgr := warehouse.NewManager()
+	configureWarehouseValidation(executor, warehouseMgr)
 	return &RestAPIv2Handler{
 		executor:     executor,
 		stmtMgr:      stmtMgr,
 		repo:         repo,
 		warehouseMgr: warehouseMgr,
 	}
+}
+
+// NewRestAPIv2HandlerWithWarehouse creates a new REST API v2 handler with warehouse manager.
+func NewRestAPIv2HandlerWithWarehouse(executor *query.Executor, stmtMgr *query.StatementManager, repo *metadata.Repository, warehouseMgr *warehouse.Manager) *RestAPIv2Handler {
+	configureWarehouseValidation(executor, warehouseMgr)
+	return &RestAPIv2Handler{
+		executor:     executor,
+		stmtMgr:      stmtMgr,
+		repo:         repo,
+		warehouseMgr: warehouseMgr,
+	}
+}
+
+func configureWarehouseValidation(executor *query.Executor, warehouseMgr *warehouse.Manager) {
+	executor.Configure(query.WithWarehouseValidator(func(ctx context.Context, name string) error {
+		_, err := warehouseMgr.GetWarehouse(ctx, name)
+		return err
+	}))
 }
 
 // SubmitStatement handles POST /api/v2/statements.

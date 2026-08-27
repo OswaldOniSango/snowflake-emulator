@@ -39,6 +39,13 @@ func setupRestAPIv2Handler(t *testing.T) (*RestAPIv2Handler, *chi.Mux) {
 	if err != nil {
 		t.Fatalf("failed to create repository: %v", err)
 	}
+	testDatabase, err := repo.CreateDatabase(context.Background(), "TEST_DB", "")
+	if err != nil {
+		t.Fatalf("failed to create test database: %v", err)
+	}
+	if _, err := repo.CreateSchema(context.Background(), testDatabase.ID, "PUBLIC", ""); err != nil {
+		t.Fatalf("failed to create test schema: %v", err)
+	}
 
 	executor := query.NewExecutor(connMgr, repo)
 	stmtMgr := query.NewStatementManager(1 * time.Hour)

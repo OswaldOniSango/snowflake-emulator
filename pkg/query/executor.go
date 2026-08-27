@@ -33,6 +33,7 @@ type Executor struct {
 	mergeProcessor     *MergeProcessor
 	procedureProcessor *ProcedureProcessor
 	streamProcessor    *StreamProcessor
+	warehouseValidator func(context.Context, string) error
 }
 
 // ExecutorOption configures an Executor.
@@ -49,6 +50,13 @@ func WithCopyProcessor(processor *CopyProcessor) ExecutorOption {
 func WithMergeProcessor(processor *MergeProcessor) ExecutorOption {
 	return func(e *Executor) {
 		e.mergeProcessor = processor
+	}
+}
+
+// WithWarehouseValidator configures warehouse existence validation.
+func WithWarehouseValidator(validator func(context.Context, string) error) ExecutorOption {
+	return func(e *Executor) {
+		e.warehouseValidator = validator
 	}
 }
 
@@ -82,6 +90,9 @@ func (e *Executor) Query(ctx context.Context, sql string) (*Result, error) {
 
 // QueryWithContext executes a query using Snowflake database/schema context.
 func (e *Executor) QueryWithContext(ctx context.Context, executionContext ExecutionContext, sql string) (*Result, error) {
+	if err := e.validateExecutionContext(ctx, executionContext); err != nil {
+		return nil, err
+	}
 	classifier := NewClassifier()
 	if classifier.IsCall(sql) {
 		return e.procedureProcessor.Call(ctx, sql)
@@ -97,7 +108,10 @@ func (e *Executor) QueryWithContext(ctx context.Context, executionContext Execut
 		return nil, err
 	}
 	sql = rewrittenSQL
-	sql = rewriteContextualTableReferences(sql, executionContext)
+	sql, err = e.rewriteTablesWithContext(ctx, executionContext, sql)
+	if err != nil {
+		return nil, err
+	}
 
 	// Translate Snowflake SQL to DuckDB SQL
 	translatedSQL, err := e.translator.Translate(sql)
@@ -338,6 +352,9 @@ func (e *Executor) Execute(ctx context.Context, sql string) (*ExecResult, error)
 
 // ExecuteWithContext executes a statement using Snowflake database/schema context.
 func (e *Executor) ExecuteWithContext(ctx context.Context, executionContext ExecutionContext, sql string) (*ExecResult, error) {
+	if err := e.validateExecutionContext(ctx, executionContext); err != nil {
+		return nil, err
+	}
 	// Use classifier to detect DDL statements that need metadata tracking
 	classifier := NewClassifier()
 	if classifier.IsCreateProcedure(sql) {
@@ -355,12 +372,20 @@ func (e *Executor) ExecuteWithContext(ctx context.Context, executionContext Exec
 
 	// For CREATE TABLE, we need to register it in metadata
 	if classifier.IsCreateTable(sql) {
-		return e.executeCreateTable(ctx, rewriteContextualTableReferences(sql, executionContext))
+		rewrittenSQL, err := e.rewriteTablesWithContext(ctx, executionContext, sql)
+		if err != nil {
+			return nil, err
+		}
+		return e.executeCreateTable(ctx, rewrittenSQL)
 	}
 
 	// For DROP TABLE, we need to remove it from metadata
 	if classifier.IsDropTable(sql) {
-		return e.executeDropTable(ctx, rewriteContextualTableReferences(sql, executionContext))
+		rewrittenSQL, err := e.rewriteTablesWithContext(ctx, executionContext, sql)
+		if err != nil {
+			return nil, err
+		}
+		return e.executeDropTable(ctx, rewrittenSQL)
 	}
 
 	// Handle transaction control statements
@@ -390,12 +415,15 @@ func (e *Executor) executeRaw(ctx context.Context, sql string) (*ExecResult, err
 }
 
 func (e *Executor) executeRawWithContext(ctx context.Context, executionContext ExecutionContext, sql string) (*ExecResult, error) {
-	rewrittenSQL, err := e.streamProcessor.RewriteReferences(ctx, executionContext, sql)
+	rewrittenSQL, consumptions, err := e.streamProcessor.RewriteReferencesForConsumption(ctx, executionContext, sql)
 	if err != nil {
 		return nil, err
 	}
 	sql = rewrittenSQL
-	sql = rewriteContextualTableReferences(sql, executionContext)
+	sql, err = e.rewriteTablesWithContext(ctx, executionContext, sql)
+	if err != nil {
+		return nil, err
+	}
 
 	// Translate Snowflake SQL to DuckDB SQL
 	translatedSQL, err := e.translator.Translate(sql)
@@ -412,6 +440,9 @@ func (e *Executor) executeRawWithContext(ctx context.Context, executionContext E
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get rows affected: %w", err)
+	}
+	if err := e.streamProcessor.AdvanceOffsets(ctx, consumptions); err != nil {
+		return nil, err
 	}
 
 	return &ExecResult{

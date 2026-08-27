@@ -117,6 +117,25 @@ func (r *Repository) ListStreams(ctx context.Context, schemaID string) ([]*Strea
 	return streams, nil
 }
 
+// UpdateStreamOffset advances a stream to a new source-table row offset.
+// Offsets are monotonic and can never move backwards.
+func (r *Repository) UpdateStreamOffset(ctx context.Context, id string, offset int64) error {
+	result, err := r.mgr.Exec(ctx, `UPDATE _metadata_streams SET stream_offset = ? WHERE id = ? AND stream_offset < ?`, offset, id, offset)
+	if err != nil {
+		return fmt.Errorf("failed to update stream offset: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get updated stream count: %w", err)
+	}
+	if rowsAffected == 0 {
+		if _, err := r.GetStream(ctx, id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // DropStream removes a stream definition from the catalog.
 func (r *Repository) DropStream(ctx context.Context, schemaID, name string, ifExists bool) error {
 	result, err := r.mgr.Exec(ctx, `DELETE FROM _metadata_streams WHERE schema_id = ? AND name = ?`, schemaID, strings.ToUpper(name))

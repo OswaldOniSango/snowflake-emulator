@@ -21,6 +21,11 @@ type StreamProcessor struct {
 	executor *Executor
 }
 
+type streamConsumption struct {
+	stream *metadata.Stream
+	offset int64
+}
+
 // NewStreamProcessor creates a stream processor.
 func NewStreamProcessor(repo *metadata.Repository, executor *Executor) *StreamProcessor {
 	return &StreamProcessor{repo: repo, executor: executor}
@@ -104,22 +109,34 @@ func (p *StreamProcessor) Show(ctx context.Context, _ string) (*Result, error) {
 
 // RewriteReferences replaces logical stream names with append-only DuckDB subqueries.
 func (p *StreamProcessor) RewriteReferences(ctx context.Context, executionContext ExecutionContext, sql string) (string, error) {
+	rewritten, _, err := p.rewriteReferences(ctx, executionContext, sql, false)
+	return rewritten, err
+}
+
+// RewriteReferencesForConsumption freezes each referenced stream at its
+// current high-water mark so a successful DML statement can advance to the
+// exact set of rows it consumed.
+func (p *StreamProcessor) RewriteReferencesForConsumption(ctx context.Context, executionContext ExecutionContext, sql string) (string, []streamConsumption, error) {
+	return p.rewriteReferences(ctx, executionContext, sql, true)
+}
+
+func (p *StreamProcessor) rewriteReferences(ctx context.Context, executionContext ExecutionContext, sql string, consuming bool) (string, []streamConsumption, error) {
 	streams, err := p.repo.ListStreams(ctx, "")
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	result := sql
+	consumptions := make([]streamConsumption, 0)
 	for _, stream := range streams {
 		schema, err := p.repo.GetSchema(ctx, stream.SchemaID)
 		if err != nil {
-			return "", err
+			return "", nil, err
 		}
 		database, err := p.repo.GetDatabase(ctx, schema.DatabaseID)
 		if err != nil {
-			return "", err
+			return "", nil, err
 		}
 		physicalSource := BuildTableName(stream.SourceDatabase, stream.SourceSchema, stream.SourceTable)
-		replacement := fmt.Sprintf(`(SELECT *, 'INSERT' AS "METADATA$ACTION", FALSE AS "METADATA$ISUPDATE", CAST(rowid AS VARCHAR) AS "METADATA$ROW_ID" FROM %s WHERE rowid > %d)`, physicalSource, stream.Offset)
 		names := []string{database.Name + "." + schema.Name + "." + stream.Name}
 		if strings.EqualFold(executionContext.Database, database.Name) {
 			names = append(names, schema.Name+"."+stream.Name)
@@ -127,12 +144,44 @@ func (p *StreamProcessor) RewriteReferences(ctx context.Context, executionContex
 				names = append(names, stream.Name)
 			}
 		}
+		matched := false
+		patterns := make([]*regexp.Regexp, 0, len(names))
 		for _, logicalName := range names {
 			pattern := regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(logicalName) + `\b`)
+			patterns = append(patterns, pattern)
+			matched = matched || pattern.MatchString(result)
+		}
+		if !matched {
+			continue
+		}
+
+		highWater := int64(-1)
+		where := fmt.Sprintf("rowid > %d", stream.Offset)
+		if consuming {
+			if err := p.executor.mgr.QueryRow(ctx, fmt.Sprintf("SELECT COALESCE(MAX(rowid), -1) FROM %s", physicalSource)).Scan(&highWater); err != nil {
+				return "", nil, fmt.Errorf("failed to read stream %s offset: %w", stream.Name, err)
+			}
+			where += fmt.Sprintf(" AND rowid <= %d", highWater)
+			consumptions = append(consumptions, streamConsumption{stream: stream, offset: highWater})
+		}
+		replacement := fmt.Sprintf(`(SELECT *, 'INSERT' AS "METADATA$ACTION", FALSE AS "METADATA$ISUPDATE", CAST(rowid AS VARCHAR) AS "METADATA$ROW_ID" FROM %s WHERE %s)`, physicalSource, where)
+		for _, pattern := range patterns {
 			result = pattern.ReplaceAllStringFunc(result, func(string) string { return replacement })
 		}
 	}
-	return result, nil
+	return result, consumptions, nil
+}
+
+func (p *StreamProcessor) AdvanceOffsets(ctx context.Context, consumptions []streamConsumption) error {
+	for _, consumption := range consumptions {
+		if consumption.offset <= consumption.stream.Offset {
+			continue
+		}
+		if err := p.repo.UpdateStreamOffset(ctx, consumption.stream.ID, consumption.offset); err != nil {
+			return fmt.Errorf("failed to consume stream %s: %w", consumption.stream.Name, err)
+		}
+	}
+	return nil
 }
 
 func (p *StreamProcessor) resolveSchema(ctx context.Context, databaseName, schemaName string) (*metadata.Schema, error) {
