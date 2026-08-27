@@ -27,17 +27,17 @@ func NewStreamProcessor(repo *metadata.Repository, executor *Executor) *StreamPr
 }
 
 // Create parses CREATE STREAM and stores the source-table offset.
-func (p *StreamProcessor) Create(ctx context.Context, sql string) (*ExecResult, error) {
+func (p *StreamProcessor) Create(ctx context.Context, executionContext ExecutionContext, sql string) (*ExecResult, error) {
 	match := createStreamPattern.FindStringSubmatch(strings.TrimSpace(sql))
 	if match == nil {
 		return nil, fmt.Errorf("unsupported CREATE STREAM syntax")
 	}
 
-	streamDatabase, streamSchema, streamName, err := parseQualifiedObjectName(match[2], "stream")
+	streamDatabase, streamSchema, streamName, err := resolveQualifiedObjectName(match[2], "stream", executionContext)
 	if err != nil {
 		return nil, err
 	}
-	sourceDatabase, sourceSchema, sourceTable, err := parseQualifiedObjectName(match[3], "source table")
+	sourceDatabase, sourceSchema, sourceTable, err := resolveQualifiedObjectName(match[3], "source table", executionContext)
 	if err != nil {
 		return nil, err
 	}
@@ -68,12 +68,12 @@ func (p *StreamProcessor) Create(ctx context.Context, sql string) (*ExecResult, 
 }
 
 // Drop parses DROP STREAM and removes its catalog definition.
-func (p *StreamProcessor) Drop(ctx context.Context, sql string) (*ExecResult, error) {
+func (p *StreamProcessor) Drop(ctx context.Context, executionContext ExecutionContext, sql string) (*ExecResult, error) {
 	match := dropStreamPattern.FindStringSubmatch(strings.TrimSpace(sql))
 	if match == nil {
 		return nil, fmt.Errorf("unsupported DROP STREAM syntax")
 	}
-	databaseName, schemaName, streamName, err := parseQualifiedObjectName(match[2], "stream")
+	databaseName, schemaName, streamName, err := resolveQualifiedObjectName(match[2], "stream", executionContext)
 	if err != nil {
 		return nil, err
 	}
@@ -103,7 +103,7 @@ func (p *StreamProcessor) Show(ctx context.Context, _ string) (*Result, error) {
 }
 
 // RewriteReferences replaces logical stream names with append-only DuckDB subqueries.
-func (p *StreamProcessor) RewriteReferences(ctx context.Context, sql string) (string, error) {
+func (p *StreamProcessor) RewriteReferences(ctx context.Context, executionContext ExecutionContext, sql string) (string, error) {
 	streams, err := p.repo.ListStreams(ctx, "")
 	if err != nil {
 		return "", err
@@ -118,11 +118,19 @@ func (p *StreamProcessor) RewriteReferences(ctx context.Context, sql string) (st
 		if err != nil {
 			return "", err
 		}
-		logicalName := database.Name + "." + schema.Name + "." + stream.Name
 		physicalSource := BuildTableName(stream.SourceDatabase, stream.SourceSchema, stream.SourceTable)
 		replacement := fmt.Sprintf(`(SELECT *, 'INSERT' AS "METADATA$ACTION", FALSE AS "METADATA$ISUPDATE", CAST(rowid AS VARCHAR) AS "METADATA$ROW_ID" FROM %s WHERE rowid > %d)`, physicalSource, stream.Offset)
-		pattern := regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(logicalName) + `\b`)
-		result = pattern.ReplaceAllStringFunc(result, func(string) string { return replacement })
+		names := []string{database.Name + "." + schema.Name + "." + stream.Name}
+		if strings.EqualFold(executionContext.Database, database.Name) {
+			names = append(names, schema.Name+"."+stream.Name)
+			if strings.EqualFold(executionContext.Schema, schema.Name) {
+				names = append(names, stream.Name)
+			}
+		}
+		for _, logicalName := range names {
+			pattern := regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(logicalName) + `\b`)
+			result = pattern.ReplaceAllStringFunc(result, func(string) string { return replacement })
+		}
 	}
 	return result, nil
 }
@@ -136,14 +144,32 @@ func (p *StreamProcessor) resolveSchema(ctx context.Context, databaseName, schem
 }
 
 func parseQualifiedObjectName(name, objectType string) (string, string, string, error) {
+	return resolveQualifiedObjectName(name, objectType, ExecutionContext{})
+}
+
+func resolveQualifiedObjectName(name, objectType string, executionContext ExecutionContext) (string, string, string, error) {
 	parts := strings.Split(name, ".")
-	if len(parts) != 3 {
-		return "", "", "", fmt.Errorf("%s name %s must be fully qualified as DATABASE.SCHEMA.NAME", objectType, name)
+	var databaseName, schemaName, objectName string
+	switch len(parts) {
+	case 1:
+		databaseName, schemaName, objectName = executionContext.Database, executionContext.Schema, parts[0]
+		if databaseName == "" || schemaName == "" {
+			return "", "", "", fmt.Errorf("%s name %s requires database and schema context", objectType, name)
+		}
+	case 2:
+		databaseName, schemaName, objectName = executionContext.Database, parts[0], parts[1]
+		if databaseName == "" {
+			return "", "", "", fmt.Errorf("%s name %s requires database context", objectType, name)
+		}
+	case 3:
+		databaseName, schemaName, objectName = parts[0], parts[1], parts[2]
+	default:
+		return "", "", "", fmt.Errorf("invalid %s name %s", objectType, name)
 	}
-	for _, part := range parts {
+	for _, part := range []string{databaseName, schemaName, objectName} {
 		if !identifierPattern.MatchString(part) {
 			return "", "", "", fmt.Errorf("invalid %s identifier %s", objectType, part)
 		}
 	}
-	return strings.ToUpper(parts[0]), strings.ToUpper(parts[1]), strings.ToUpper(parts[2]), nil
+	return strings.ToUpper(databaseName), strings.ToUpper(schemaName), strings.ToUpper(objectName), nil
 }

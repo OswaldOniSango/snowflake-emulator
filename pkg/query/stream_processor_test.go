@@ -93,3 +93,35 @@ func TestStreamShowAndDrop(t *testing.T) {
 		t.Fatal("stream SELECT after DROP returned nil error")
 	}
 }
+
+func TestStreamUsesExecutionContextForShortNames(t *testing.T) {
+	executor, repo := setupTestExecutor(t)
+	ctx := context.Background()
+
+	database, err := repo.CreateDatabase(ctx, "LEARNING_DB", "")
+	if err != nil {
+		t.Fatalf("CreateDatabase() error = %v", err)
+	}
+	if _, err := repo.CreateSchema(ctx, database.ID, "PUBLIC", ""); err != nil {
+		t.Fatalf("CreateSchema() error = %v", err)
+	}
+	executionContext := ExecutionContext{Database: "LEARNING_DB", Schema: "PUBLIC"}
+
+	if _, err := executor.ExecuteWithContext(ctx, executionContext, "CREATE TABLE users (ID INTEGER, NAME VARCHAR)"); err != nil {
+		t.Fatalf("short CREATE TABLE error = %v", err)
+	}
+	if _, err := executor.ExecuteWithContext(ctx, executionContext, "CREATE STREAM users_stream ON TABLE users"); err != nil {
+		t.Fatalf("short CREATE STREAM error = %v", err)
+	}
+	if _, err := executor.ExecuteWithContext(ctx, executionContext, "INSERT INTO users VALUES (1, 'Oswaldo')"); err != nil {
+		t.Fatalf("short INSERT error = %v", err)
+	}
+
+	result, err := executor.QueryWithContext(ctx, executionContext, "SELECT * FROM users_stream")
+	if err != nil {
+		t.Fatalf("short stream SELECT error = %v", err)
+	}
+	if len(result.Rows) != 1 || result.Rows[0][0] != int32(1) || result.Rows[0][1] != "Oswaldo" {
+		t.Fatalf("short stream SELECT rows = %#v", result.Rows)
+	}
+}

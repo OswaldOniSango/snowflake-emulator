@@ -66,6 +66,12 @@ func (h *RestAPIv2Handler) SubmitStatement(w http.ResponseWriter, r *http.Reques
 
 	// Convert bindings from types.BindingValue to query.QueryBindingValue
 	bindings := convertBindings(req.Bindings)
+	executionContext := query.ExecutionContext{
+		Database:  req.Database,
+		Schema:    req.Schema,
+		Warehouse: req.Warehouse,
+		Role:      req.Role,
+	}
 
 	var result *query.Result
 	var execResult *query.ExecResult
@@ -74,16 +80,16 @@ func (h *RestAPIv2Handler) SubmitStatement(w http.ResponseWriter, r *http.Reques
 	if classification.IsQuery {
 		// Handle SELECT, SHOW, DESCRIBE, EXPLAIN
 		if len(bindings) > 0 {
-			result, err = h.executor.QueryWithBindings(ctx, req.Statement, bindings)
+			result, err = h.executor.QueryWithBindingsAndContext(ctx, executionContext, req.Statement, bindings)
 		} else {
-			result, err = h.executor.Query(ctx, req.Statement)
+			result, err = h.executor.QueryWithContext(ctx, executionContext, req.Statement)
 		}
 	} else {
 		// Handle DDL (CREATE, DROP, ALTER) and DML (INSERT, UPDATE, DELETE)
 		if len(bindings) > 0 {
-			execResult, err = h.executor.ExecuteWithBindings(ctx, req.Statement, bindings)
+			execResult, err = h.executor.ExecuteWithBindingsAndContext(ctx, executionContext, req.Statement, bindings)
 		} else {
-			execResult, err = h.executor.Execute(ctx, req.Statement)
+			execResult, err = h.executor.ExecuteWithContext(ctx, executionContext, req.Statement)
 		}
 	}
 

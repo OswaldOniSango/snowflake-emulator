@@ -170,6 +170,64 @@ curl -X POST http://localhost:8080/api/v2/databases \
 curl http://localhost:8080/api/v2/warehouses
 ```
 
+The `database` and `schema` fields provide the execution context used to resolve
+unqualified object names. For example, the following statements resolve
+`users` and `users_stream` inside `LEARNING_DB.PUBLIC`:
+
+```json
+{
+  "statement": "SELECT * FROM users_stream",
+  "database": "LEARNING_DB",
+  "schema": "PUBLIC"
+}
+```
+
+### SQL Stored Procedures
+
+The emulator supports a small `LANGUAGE SQL` stored procedure subset:
+
+```sql
+CREATE PROCEDURE LEARNING_DB.PUBLIC.GREET(NAME VARCHAR)
+RETURNS VARCHAR
+LANGUAGE SQL
+AS $$
+BEGIN
+    RETURN CONCAT('Hello, ', :NAME);
+END
+$$;
+
+CALL LEARNING_DB.PUBLIC.GREET('Snowflake');
+SHOW PROCEDURES;
+DROP PROCEDURE LEARNING_DB.PUBLIC.GREET;
+```
+
+Procedure definitions are persisted in the emulator catalog when `DB_PATH` is
+configured. Procedure bodies can execute multiple SQL statements and return a
+value, but advanced Snowflake Scripting is not yet supported.
+
+### Append-Only Streams
+
+Streams expose rows inserted after the stream was created:
+
+```sql
+CREATE TABLE users (
+    id INTEGER,
+    name VARCHAR
+);
+
+CREATE STREAM users_stream
+ON TABLE users
+APPEND_ONLY = TRUE;
+
+INSERT INTO users VALUES (1, 'Oswaldo');
+
+SELECT * FROM users_stream;
+```
+
+The result includes `METADATA$ACTION`, `METADATA$ISUPDATE`, and
+`METADATA$ROW_ID`. Short object names require a database and schema execution
+context, supplied by the REST request or the `gosnowflake` session.
+
 ## Next Steps
 
 | Example | Description |
@@ -247,6 +305,8 @@ The emulator supports standard SQL operations with automatic Snowflake-to-DuckDB
 | **Transaction** | `BEGIN`, `COMMIT`, `ROLLBACK` | Transaction control |
 | **Data Loading** | `COPY INTO` | Bulk data loading from internal stages (CSV, JSON) |
 | **Upsert** | `MERGE INTO` | Conditional insert/update/delete operations |
+| **Procedures** | `CREATE [OR REPLACE] PROCEDURE`, `CALL`, `SHOW PROCEDURES`, `DROP PROCEDURE` | Basic `LANGUAGE SQL` stored procedures |
+| **Streams** | `CREATE [OR REPLACE] STREAM`, `SHOW STREAMS`, `DROP STREAM`, `SELECT FROM stream` | Append-only insert tracking |
 
 **Parameter Binding**: Supports positional placeholder substitution (`:1`, `:2`, `?`).
 
@@ -294,14 +354,18 @@ The emulator supports standard SQL operations with automatic Snowflake-to-DuckDB
 
 ## Limitations
 
-This emulator is designed for development and testing. The following features are not supported:
+This emulator is designed for development and testing. The following features
+are not supported or have limited support:
 
 - Authentication/Authorization (skipped in dev mode)
 - Distributed processing / Clustering
 - Time Travel / Zero-Copy Cloning
-- Streams, Tasks, Pipes
+- Tasks and Pipes
 - External stages (S3, Azure, GCS)
-- Stored procedures with JavaScript
+- Stored procedures with JavaScript, Python, or Java
+- Advanced Snowflake Scripting (`DECLARE`, `LET`, `IF`, loops, exceptions, and procedure overloading)
+- Stream change tracking for `UPDATE` and `DELETE`
+- Stream consumption semantics, retention, and stale-state handling
 - User-defined functions
 
 ## Contributing
@@ -311,4 +375,3 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 ## License
 
 [MIT](LICENSE)
-
