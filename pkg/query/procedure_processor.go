@@ -36,13 +36,13 @@ func NewProcedureProcessor(repo *metadata.Repository, executor *Executor) *Proce
 }
 
 // Create parses CREATE PROCEDURE and stores it in the catalog.
-func (p *ProcedureProcessor) Create(ctx context.Context, sql string) (*ExecResult, error) {
+func (p *ProcedureProcessor) Create(ctx context.Context, executionContext ExecutionContext, sql string) (*ExecResult, error) {
 	match := createProcedurePattern.FindStringSubmatch(strings.TrimSpace(sql))
 	if match == nil {
 		return nil, fmt.Errorf("unsupported CREATE PROCEDURE syntax")
 	}
 
-	databaseName, schemaName, procedureName, err := parseQualifiedProcedureName(match[2])
+	databaseName, schemaName, procedureName, err := resolveQualifiedObjectName(match[2], "procedure", executionContext)
 	if err != nil {
 		return nil, err
 	}
@@ -67,12 +67,12 @@ func (p *ProcedureProcessor) Create(ctx context.Context, sql string) (*ExecResul
 }
 
 // Drop parses DROP PROCEDURE and removes it from the catalog.
-func (p *ProcedureProcessor) Drop(ctx context.Context, sql string) (*ExecResult, error) {
+func (p *ProcedureProcessor) Drop(ctx context.Context, executionContext ExecutionContext, sql string) (*ExecResult, error) {
 	match := dropProcedurePattern.FindStringSubmatch(strings.TrimSpace(sql))
 	if match == nil {
 		return nil, fmt.Errorf("unsupported DROP PROCEDURE syntax")
 	}
-	databaseName, schemaName, procedureName, err := parseQualifiedProcedureName(match[2])
+	databaseName, schemaName, procedureName, err := resolveQualifiedObjectName(match[2], "procedure", executionContext)
 	if err != nil {
 		return nil, err
 	}
@@ -87,12 +87,12 @@ func (p *ProcedureProcessor) Drop(ctx context.Context, sql string) (*ExecResult,
 }
 
 // Call executes a stored SQL procedure and returns its RETURN or final SELECT result.
-func (p *ProcedureProcessor) Call(ctx context.Context, sql string) (*Result, error) {
+func (p *ProcedureProcessor) Call(ctx context.Context, executionContext ExecutionContext, sql string) (*Result, error) {
 	match := callProcedurePattern.FindStringSubmatch(strings.TrimSpace(sql))
 	if match == nil {
 		return nil, fmt.Errorf("unsupported CALL syntax")
 	}
-	databaseName, schemaName, procedureName, err := parseQualifiedProcedureName(match[1])
+	databaseName, schemaName, procedureName, err := resolveQualifiedObjectName(match[1], "procedure", executionContext)
 	if err != nil {
 		return nil, err
 	}
@@ -121,7 +121,7 @@ func (p *ProcedureProcessor) Call(ctx context.Context, sql string) (*Result, err
 	for i, parameter := range parameters {
 		body = replaceNamedBinding(body, parameter.Name, strings.TrimSpace(values[i]))
 	}
-	return p.executeBody(ctx, procedure.Name, body)
+	return p.executeBody(ctx, executionContext, procedure.Name, body)
 }
 
 // Show returns all procedures currently stored in the emulator catalog.
@@ -138,7 +138,7 @@ func (p *ProcedureProcessor) Show(ctx context.Context, _ string) (*Result, error
 	return &Result{Columns: columns, ColumnTypes: textColumnMetadata(columns), Rows: rows}, nil
 }
 
-func (p *ProcedureProcessor) executeBody(ctx context.Context, procedureName, body string) (*Result, error) {
+func (p *ProcedureProcessor) executeBody(ctx context.Context, executionContext ExecutionContext, procedureName, body string) (*Result, error) {
 	body = strings.TrimSpace(body)
 	upperBody := strings.ToUpper(body)
 	if strings.HasPrefix(upperBody, "BEGIN") && strings.HasSuffix(upperBody, "END") {
@@ -154,15 +154,15 @@ func (p *ProcedureProcessor) executeBody(ctx context.Context, procedureName, bod
 		upperStatement := strings.ToUpper(trimmed)
 		switch {
 		case strings.HasPrefix(upperStatement, "RETURN "):
-			return p.executor.Query(ctx, "SELECT "+strings.TrimSpace(trimmed[len("RETURN "):])+" AS "+procedureName)
+			return p.executor.QueryWithContext(ctx, executionContext, "SELECT "+strings.TrimSpace(trimmed[len("RETURN "):])+" AS "+procedureName)
 		case IsQuery(trimmed):
-			result, err := p.executor.Query(ctx, trimmed)
+			result, err := p.executor.QueryWithContext(ctx, executionContext, trimmed)
 			if err != nil {
 				return nil, err
 			}
 			finalResult = result
 		default:
-			if _, err := p.executor.Execute(ctx, trimmed); err != nil {
+			if _, err := p.executor.ExecuteWithContext(ctx, executionContext, trimmed); err != nil {
 				return nil, err
 			}
 		}

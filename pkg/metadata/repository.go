@@ -128,6 +128,22 @@ type Stream struct {
 	Owner          string
 }
 
+// Task represents a scheduled Snowflake statement.
+type Task struct {
+	ID              string
+	SchemaID        string
+	Name            string
+	Warehouse       string
+	Schedule        string
+	Definition      string
+	State           string
+	CreatedAt       time.Time
+	LastExecutedAt  *time.Time
+	LastCompletedAt *time.Time
+	LastError       string
+	Owner           string
+}
+
 // NewRepository creates a new metadata repository.
 // It initializes metadata tables if they don't exist.
 func NewRepository(mgr *connection.Manager) (*Repository, error) {
@@ -231,6 +247,21 @@ func (r *Repository) initMetadataTables(ctx context.Context) error {
 			stream_type VARCHAR NOT NULL,
 			stream_offset BIGINT NOT NULL,
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			owner VARCHAR,
+			UNIQUE(schema_id, name)
+		)`,
+		`CREATE TABLE IF NOT EXISTS _metadata_tasks (
+			id VARCHAR PRIMARY KEY,
+			schema_id VARCHAR NOT NULL,
+			name VARCHAR NOT NULL,
+			warehouse VARCHAR NOT NULL,
+			schedule VARCHAR NOT NULL,
+			definition TEXT NOT NULL,
+			state VARCHAR NOT NULL DEFAULT 'SUSPENDED',
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			last_executed_at TIMESTAMP,
+			last_completed_at TIMESTAMP,
+			last_error TEXT,
 			owner VARCHAR,
 			UNIQUE(schema_id, name)
 		)`,

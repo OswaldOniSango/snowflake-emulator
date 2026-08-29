@@ -33,6 +33,7 @@ type Executor struct {
 	mergeProcessor     *MergeProcessor
 	procedureProcessor *ProcedureProcessor
 	streamProcessor    *StreamProcessor
+	taskProcessor      *TaskProcessor
 	warehouseValidator func(context.Context, string) error
 }
 
@@ -69,6 +70,7 @@ func NewExecutor(mgr *connection.Manager, repo *metadata.Repository, opts ...Exe
 	}
 	e.procedureProcessor = NewProcedureProcessor(repo, e)
 	e.streamProcessor = NewStreamProcessor(repo, e)
+	e.taskProcessor = NewTaskProcessor(repo, e)
 	for _, opt := range opts {
 		opt(e)
 	}
@@ -95,13 +97,16 @@ func (e *Executor) QueryWithContext(ctx context.Context, executionContext Execut
 	}
 	classifier := NewClassifier()
 	if classifier.IsCall(sql) {
-		return e.procedureProcessor.Call(ctx, sql)
+		return e.procedureProcessor.Call(ctx, executionContext, sql)
 	}
 	if classifier.IsShowProcedures(sql) {
 		return e.procedureProcessor.Show(ctx, sql)
 	}
 	if classifier.IsShowStreams(sql) {
 		return e.streamProcessor.Show(ctx, sql)
+	}
+	if classifier.IsShowTasks(sql) {
+		return e.taskProcessor.Show(ctx)
 	}
 	rewrittenSQL, err := e.streamProcessor.RewriteReferences(ctx, executionContext, sql)
 	if err != nil {
@@ -358,16 +363,28 @@ func (e *Executor) ExecuteWithContext(ctx context.Context, executionContext Exec
 	// Use classifier to detect DDL statements that need metadata tracking
 	classifier := NewClassifier()
 	if classifier.IsCreateProcedure(sql) {
-		return e.procedureProcessor.Create(ctx, sql)
+		return e.procedureProcessor.Create(ctx, executionContext, sql)
 	}
 	if classifier.IsDropProcedure(sql) {
-		return e.procedureProcessor.Drop(ctx, sql)
+		return e.procedureProcessor.Drop(ctx, executionContext, sql)
 	}
 	if classifier.IsCreateStream(sql) {
 		return e.streamProcessor.Create(ctx, executionContext, sql)
 	}
 	if classifier.IsDropStream(sql) {
 		return e.streamProcessor.Drop(ctx, executionContext, sql)
+	}
+	if classifier.IsCreateTask(sql) {
+		return e.taskProcessor.Create(ctx, executionContext, sql)
+	}
+	if classifier.IsAlterTask(sql) {
+		return e.taskProcessor.Alter(ctx, executionContext, sql)
+	}
+	if classifier.IsDropTask(sql) {
+		return e.taskProcessor.Drop(ctx, executionContext, sql)
+	}
+	if classifier.IsExecuteTask(sql) {
+		return e.taskProcessor.Execute(ctx, executionContext, sql)
 	}
 
 	// For CREATE TABLE, we need to register it in metadata

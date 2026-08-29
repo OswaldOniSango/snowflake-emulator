@@ -236,6 +236,40 @@ INSERT INTO processed_users
 SELECT id, name FROM users_stream;
 ```
 
+### Tasks
+
+Tasks store SQL to be executed in a database/schema context. They are created
+in `SUSPENDED` state and can currently be run manually:
+
+```sql
+CREATE TASK process_users
+  WAREHOUSE = LEARNING_WH
+  SCHEDULE = '1 MINUTE'
+AS
+  INSERT INTO processed_users
+  SELECT id, name FROM users_stream;
+
+ALTER TASK process_users RESUME;
+EXECUTE TASK process_users;
+SHOW TASKS;
+ALTER TASK process_users SUSPEND;
+DROP TASK process_users;
+```
+
+A task body can also call a SQL stored procedure. Short procedure names resolve
+inside the task's database and schema:
+
+```sql
+CREATE TASK greet_task
+  WAREHOUSE = LEARNING_WH
+  SCHEDULE = '5 MINUTES'
+AS
+  CALL greet('Oswaldo');
+```
+
+Automatic schedule execution is not implemented yet; `SCHEDULE` is stored for
+the upcoming scheduler and `EXECUTE TASK` triggers the current MVP manually.
+
 ## Next Steps
 
 | Example | Description |
