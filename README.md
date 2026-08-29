@@ -267,8 +267,10 @@ AS
   CALL greet('Oswaldo');
 ```
 
-Automatic schedule execution is not implemented yet; `SCHEDULE` is stored for
-the upcoming scheduler and `EXECUTE TASK` triggers the current MVP manually.
+Tasks in `STARTED` state run automatically. The scheduler currently supports
+second, minute, and hour intervals, such as `1 SECOND`, `5 MINUTES`, or
+`2 HOURS`. `USING CRON` schedules are not supported yet. `EXECUTE TASK` remains
+available for immediate manual execution, including while a task is suspended.
 
 ## Next Steps
 

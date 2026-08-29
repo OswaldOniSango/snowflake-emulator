@@ -42,6 +42,9 @@ func (p *TaskProcessor) Create(ctx context.Context, executionContext ExecutionCo
 	if err := p.executor.validateExecutionContext(ctx, ExecutionContext{Warehouse: warehouseName}); err != nil {
 		return nil, err
 	}
+	if _, err := parseTaskSchedule(match[4]); err != nil {
+		return nil, err
+	}
 	if _, err := p.repo.CreateTask(ctx, schema.ID, taskName, warehouseName, match[4], match[5], strings.TrimSpace(match[1]) != ""); err != nil {
 		return nil, err
 	}
@@ -116,6 +119,10 @@ func (p *TaskProcessor) Execute(ctx context.Context, executionContext ExecutionC
 	if err != nil {
 		return nil, err
 	}
+	return p.executeStoredTask(ctx, task, executionContext)
+}
+
+func (p *TaskProcessor) executeStoredTask(ctx context.Context, task *metadata.Task, executionContext ExecutionContext) (*ExecResult, error) {
 	schema, err := p.repo.GetSchema(ctx, task.SchemaID)
 	if err != nil {
 		return nil, err
