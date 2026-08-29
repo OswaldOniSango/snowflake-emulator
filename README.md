@@ -416,6 +416,15 @@ are not supported or have limited support:
 
 Contributions are welcome! Please feel free to submit a Pull Request.
 
+## Authors and maintainers
+
+- [Naoki Kuroda](https://github.com/nnnkkk7) — Original author of [snowflake-emulator](https://github.com/nnnkkk7/snowflake-emulator).
+- [Oswaldo Hernández](https://github.com/OswaldOniSango) — Maintainer of this [extended fork](https://github.com/OswaldOniSango/snowflake-emulator) and
+  contributor to its Snowflake learning features.
+
+This fork builds on Naoki Kuroda's original project and extends it as a local
+environment for studying Snowflake concepts.
+
 ## License
 
 [MIT](LICENSE)
