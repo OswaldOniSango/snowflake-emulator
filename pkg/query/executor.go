@@ -26,11 +26,15 @@ var (
 
 // Executor executes SQL queries against DuckDB with Snowflake SQL translation.
 type Executor struct {
-	mgr            *connection.Manager
-	repo           *metadata.Repository
-	translator     *Translator
-	copyProcessor  *CopyProcessor
-	mergeProcessor *MergeProcessor
+	mgr                *connection.Manager
+	repo               *metadata.Repository
+	translator         *Translator
+	copyProcessor      *CopyProcessor
+	mergeProcessor     *MergeProcessor
+	procedureProcessor *ProcedureProcessor
+	streamProcessor    *StreamProcessor
+	taskProcessor      *TaskProcessor
+	warehouseValidator func(context.Context, string) error
 }
 
 // ExecutorOption configures an Executor.
@@ -50,6 +54,13 @@ func WithMergeProcessor(processor *MergeProcessor) ExecutorOption {
 	}
 }
 
+// WithWarehouseValidator configures warehouse existence validation.
+func WithWarehouseValidator(validator func(context.Context, string) error) ExecutorOption {
+	return func(e *Executor) {
+		e.warehouseValidator = validator
+	}
+}
+
 // NewExecutor creates a new query executor.
 func NewExecutor(mgr *connection.Manager, repo *metadata.Repository, opts ...ExecutorOption) *Executor {
 	e := &Executor{
@@ -57,6 +68,9 @@ func NewExecutor(mgr *connection.Manager, repo *metadata.Repository, opts ...Exe
 		repo:       repo,
 		translator: NewTranslator(),
 	}
+	e.procedureProcessor = NewProcedureProcessor(repo, e)
+	e.streamProcessor = NewStreamProcessor(repo, e)
+	e.taskProcessor = NewTaskProcessor(repo, e)
 	for _, opt := range opts {
 		opt(e)
 	}
@@ -73,6 +87,37 @@ func (e *Executor) Configure(opts ...ExecutorOption) {
 
 // Query executes a SELECT query and returns results.
 func (e *Executor) Query(ctx context.Context, sql string) (*Result, error) {
+	return e.QueryWithContext(ctx, ExecutionContext{}, sql)
+}
+
+// QueryWithContext executes a query using Snowflake database/schema context.
+func (e *Executor) QueryWithContext(ctx context.Context, executionContext ExecutionContext, sql string) (*Result, error) {
+	if err := e.validateExecutionContext(ctx, executionContext); err != nil {
+		return nil, err
+	}
+	classifier := NewClassifier()
+	if classifier.IsCall(sql) {
+		return e.procedureProcessor.Call(ctx, executionContext, sql)
+	}
+	if classifier.IsShowProcedures(sql) {
+		return e.procedureProcessor.Show(ctx, sql)
+	}
+	if classifier.IsShowStreams(sql) {
+		return e.streamProcessor.Show(ctx, sql)
+	}
+	if classifier.IsShowTasks(sql) {
+		return e.taskProcessor.Show(ctx)
+	}
+	rewrittenSQL, err := e.streamProcessor.RewriteReferences(ctx, executionContext, sql)
+	if err != nil {
+		return nil, err
+	}
+	sql = rewrittenSQL
+	sql, err = e.rewriteTablesWithContext(ctx, executionContext, sql)
+	if err != nil {
+		return nil, err
+	}
+
 	// Translate Snowflake SQL to DuckDB SQL
 	translatedSQL, err := e.translator.Translate(sql)
 	if err != nil {
@@ -132,8 +177,13 @@ func (e *Executor) Query(ctx context.Context, sql string) (*Result, error) {
 // QueryWithBindings executes a SELECT query with parameter bindings and returns results.
 // Bindings are keyed by position (e.g., "1", "2", "3") and replace :1, :2, :3 placeholders.
 func (e *Executor) QueryWithBindings(ctx context.Context, sql string, bindings map[string]*QueryBindingValue) (*Result, error) {
+	return e.QueryWithBindingsAndContext(ctx, ExecutionContext{}, sql, bindings)
+}
+
+// QueryWithBindingsAndContext executes a bound query with object-resolution context.
+func (e *Executor) QueryWithBindingsAndContext(ctx context.Context, executionContext ExecutionContext, sql string, bindings map[string]*QueryBindingValue) (*Result, error) {
 	if len(bindings) == 0 {
-		return e.Query(ctx, sql)
+		return e.QueryWithContext(ctx, executionContext, sql)
 	}
 
 	// Replace binding placeholders with actual values
@@ -142,7 +192,7 @@ func (e *Executor) QueryWithBindings(ctx context.Context, sql string, bindings m
 		return nil, fmt.Errorf("binding error: %w", err)
 	}
 
-	return e.Query(ctx, boundSQL)
+	return e.QueryWithContext(ctx, executionContext, boundSQL)
 }
 
 // applyBindings replaces :N placeholders with actual values from bindings.
@@ -282,8 +332,13 @@ func formatBindingValue(b *QueryBindingValue) (string, error) {
 // ExecuteWithBindings executes a non-query SQL statement with parameter bindings.
 // Bindings are keyed by position (e.g., "1", "2", "3") and replace :1, :2, :3 placeholders.
 func (e *Executor) ExecuteWithBindings(ctx context.Context, sql string, bindings map[string]*QueryBindingValue) (*ExecResult, error) {
+	return e.ExecuteWithBindingsAndContext(ctx, ExecutionContext{}, sql, bindings)
+}
+
+// ExecuteWithBindingsAndContext executes a bound statement with object-resolution context.
+func (e *Executor) ExecuteWithBindingsAndContext(ctx context.Context, executionContext ExecutionContext, sql string, bindings map[string]*QueryBindingValue) (*ExecResult, error) {
 	if len(bindings) == 0 {
-		return e.Execute(ctx, sql)
+		return e.ExecuteWithContext(ctx, executionContext, sql)
 	}
 
 	// Replace binding placeholders with actual values
@@ -292,22 +347,62 @@ func (e *Executor) ExecuteWithBindings(ctx context.Context, sql string, bindings
 		return nil, fmt.Errorf("binding error: %w", err)
 	}
 
-	return e.Execute(ctx, boundSQL)
+	return e.ExecuteWithContext(ctx, executionContext, boundSQL)
 }
 
 // Execute executes a non-query SQL statement (INSERT, UPDATE, DELETE, CREATE, DROP, etc.).
 func (e *Executor) Execute(ctx context.Context, sql string) (*ExecResult, error) {
+	return e.ExecuteWithContext(ctx, ExecutionContext{}, sql)
+}
+
+// ExecuteWithContext executes a statement using Snowflake database/schema context.
+func (e *Executor) ExecuteWithContext(ctx context.Context, executionContext ExecutionContext, sql string) (*ExecResult, error) {
+	if err := e.validateExecutionContext(ctx, executionContext); err != nil {
+		return nil, err
+	}
 	// Use classifier to detect DDL statements that need metadata tracking
 	classifier := NewClassifier()
+	if classifier.IsCreateProcedure(sql) {
+		return e.procedureProcessor.Create(ctx, executionContext, sql)
+	}
+	if classifier.IsDropProcedure(sql) {
+		return e.procedureProcessor.Drop(ctx, executionContext, sql)
+	}
+	if classifier.IsCreateStream(sql) {
+		return e.streamProcessor.Create(ctx, executionContext, sql)
+	}
+	if classifier.IsDropStream(sql) {
+		return e.streamProcessor.Drop(ctx, executionContext, sql)
+	}
+	if classifier.IsCreateTask(sql) {
+		return e.taskProcessor.Create(ctx, executionContext, sql)
+	}
+	if classifier.IsAlterTask(sql) {
+		return e.taskProcessor.Alter(ctx, executionContext, sql)
+	}
+	if classifier.IsDropTask(sql) {
+		return e.taskProcessor.Drop(ctx, executionContext, sql)
+	}
+	if classifier.IsExecuteTask(sql) {
+		return e.taskProcessor.Execute(ctx, executionContext, sql)
+	}
 
 	// For CREATE TABLE, we need to register it in metadata
 	if classifier.IsCreateTable(sql) {
-		return e.executeCreateTable(ctx, sql)
+		rewrittenSQL, err := e.rewriteTablesWithContext(ctx, executionContext, sql)
+		if err != nil {
+			return nil, err
+		}
+		return e.executeCreateTable(ctx, rewrittenSQL)
 	}
 
 	// For DROP TABLE, we need to remove it from metadata
 	if classifier.IsDropTable(sql) {
-		return e.executeDropTable(ctx, sql)
+		rewrittenSQL, err := e.rewriteTablesWithContext(ctx, executionContext, sql)
+		if err != nil {
+			return nil, err
+		}
+		return e.executeDropTable(ctx, rewrittenSQL)
 	}
 
 	// Handle transaction control statements
@@ -326,13 +421,27 @@ func (e *Executor) Execute(ctx context.Context, sql string) (*ExecResult, error)
 	}
 
 	// Execute regular SQL statement
-	return e.executeRaw(ctx, sql)
+	return e.executeRawWithContext(ctx, executionContext, sql)
 }
 
 // executeRaw executes a SQL statement without classification or processor delegation.
 // Use this from processors (COPY, MERGE) to avoid infinite recursion.
 // This is a private method as it's only called from same-package processors.
 func (e *Executor) executeRaw(ctx context.Context, sql string) (*ExecResult, error) {
+	return e.executeRawWithContext(ctx, ExecutionContext{}, sql)
+}
+
+func (e *Executor) executeRawWithContext(ctx context.Context, executionContext ExecutionContext, sql string) (*ExecResult, error) {
+	rewrittenSQL, consumptions, err := e.streamProcessor.RewriteReferencesForConsumption(ctx, executionContext, sql)
+	if err != nil {
+		return nil, err
+	}
+	sql = rewrittenSQL
+	sql, err = e.rewriteTablesWithContext(ctx, executionContext, sql)
+	if err != nil {
+		return nil, err
+	}
+
 	// Translate Snowflake SQL to DuckDB SQL
 	translatedSQL, err := e.translator.Translate(sql)
 	if err != nil {
@@ -348,6 +457,9 @@ func (e *Executor) executeRaw(ctx context.Context, sql string) (*ExecResult, err
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get rows affected: %w", err)
+	}
+	if err := e.streamProcessor.AdvanceOffsets(ctx, consumptions); err != nil {
+		return nil, err
 	}
 
 	return &ExecResult{
@@ -514,6 +626,11 @@ func convertValue(val interface{}) interface{} {
 
 // ExecuteWithHistory wraps Execute with query history tracking.
 func (e *Executor) ExecuteWithHistory(ctx context.Context, sessionID, queryID, sql string) (*ExecResult, error) {
+	return e.ExecuteWithHistoryAndContext(ctx, ExecutionContext{}, sessionID, queryID, sql)
+}
+
+// ExecuteWithHistoryAndContext tracks a statement executed with session context.
+func (e *Executor) ExecuteWithHistoryAndContext(ctx context.Context, executionContext ExecutionContext, sessionID, queryID, sql string) (*ExecResult, error) {
 	startTime := time.Now()
 
 	// Record query start (non-blocking on failure)
@@ -523,7 +640,7 @@ func (e *Executor) ExecuteWithHistory(ctx context.Context, sessionID, queryID, s
 	}
 
 	// Execute the query
-	result, execErr := e.Execute(ctx, sql)
+	result, execErr := e.ExecuteWithContext(ctx, executionContext, sql)
 
 	// Calculate execution time
 	executionTimeMs := time.Since(startTime).Milliseconds()
@@ -542,6 +659,11 @@ func (e *Executor) ExecuteWithHistory(ctx context.Context, sessionID, queryID, s
 
 // QueryWithHistory wraps Query with query history tracking.
 func (e *Executor) QueryWithHistory(ctx context.Context, sessionID, queryID, sql string) (*Result, error) {
+	return e.QueryWithHistoryAndContext(ctx, ExecutionContext{}, sessionID, queryID, sql)
+}
+
+// QueryWithHistoryAndContext tracks a query executed with session context.
+func (e *Executor) QueryWithHistoryAndContext(ctx context.Context, executionContext ExecutionContext, sessionID, queryID, sql string) (*Result, error) {
 	startTime := time.Now()
 
 	// Record query start (non-blocking on failure)
@@ -551,7 +673,7 @@ func (e *Executor) QueryWithHistory(ctx context.Context, sessionID, queryID, sql
 	}
 
 	// Execute the query
-	result, execErr := e.Query(ctx, sql)
+	result, execErr := e.QueryWithContext(ctx, executionContext, sql)
 
 	// Calculate execution time
 	executionTimeMs := time.Since(startTime).Milliseconds()

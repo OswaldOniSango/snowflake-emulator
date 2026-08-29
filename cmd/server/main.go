@@ -2,6 +2,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"log"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 	"github.com/nnnkkk7/snowflake-emulator/pkg/query"
 	"github.com/nnnkkk7/snowflake-emulator/pkg/session"
 	"github.com/nnnkkk7/snowflake-emulator/pkg/stage"
+	"github.com/nnnkkk7/snowflake-emulator/pkg/warehouse"
 	"github.com/nnnkkk7/snowflake-emulator/server/handlers"
 )
 
@@ -69,10 +71,14 @@ func main() {
 		query.WithCopyProcessor(copyProcessor),
 		query.WithMergeProcessor(mergeProcessor),
 	)
+	warehouseMgr := warehouse.NewManager()
 
 	sessionHandler := handlers.NewSessionHandler(sessionMgr, repo)
 	queryHandler := handlers.NewQueryHandler(executor, sessionMgr)
-	restAPIHandler := handlers.NewRestAPIv2Handler(executor, stmtMgr, repo)
+	restAPIHandler := handlers.NewRestAPIv2HandlerWithWarehouse(executor, stmtMgr, repo, warehouseMgr)
+	taskScheduler := query.NewTaskScheduler(repo, executor, time.Second)
+	taskScheduler.Start(context.Background())
+	defer taskScheduler.Stop()
 
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)

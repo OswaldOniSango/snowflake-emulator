@@ -98,6 +98,52 @@ type QueryHistoryEntry struct {
 	CompletedAt     *time.Time
 }
 
+// Procedure represents a Snowflake SQL stored procedure.
+// Arguments contains the JSON-encoded argument definitions.
+type Procedure struct {
+	ID         string
+	SchemaID   string
+	Name       string
+	Arguments  string
+	ReturnType string
+	Language   string
+	Body       string
+	Comment    string
+	CreatedAt  time.Time
+	Owner      string
+}
+
+// Stream represents an append-only Snowflake stream over a source table.
+// Offset stores the highest DuckDB rowid visible when the stream was created.
+type Stream struct {
+	ID             string
+	SchemaID       string
+	Name           string
+	SourceDatabase string
+	SourceSchema   string
+	SourceTable    string
+	StreamType     string
+	Offset         int64
+	CreatedAt      time.Time
+	Owner          string
+}
+
+// Task represents a scheduled Snowflake statement.
+type Task struct {
+	ID              string
+	SchemaID        string
+	Name            string
+	Warehouse       string
+	Schedule        string
+	Definition      string
+	State           string
+	CreatedAt       time.Time
+	LastExecutedAt  *time.Time
+	LastCompletedAt *time.Time
+	LastError       string
+	Owner           string
+}
+
 // NewRepository creates a new metadata repository.
 // It initializes metadata tables if they don't exist.
 func NewRepository(mgr *connection.Manager) (*Repository, error) {
@@ -177,6 +223,47 @@ func (r *Repository) initMetadataTables(ctx context.Context) error {
 			error_message TEXT,
 			started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			completed_at TIMESTAMP
+		)`,
+		`CREATE TABLE IF NOT EXISTS _metadata_procedures (
+			id VARCHAR PRIMARY KEY,
+			schema_id VARCHAR NOT NULL,
+			name VARCHAR NOT NULL,
+			arguments TEXT NOT NULL,
+			return_type VARCHAR NOT NULL,
+			language VARCHAR NOT NULL,
+			body TEXT NOT NULL,
+			comment VARCHAR,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			owner VARCHAR,
+			UNIQUE(schema_id, name)
+		)`,
+		`CREATE TABLE IF NOT EXISTS _metadata_streams (
+			id VARCHAR PRIMARY KEY,
+			schema_id VARCHAR NOT NULL,
+			name VARCHAR NOT NULL,
+			source_database VARCHAR NOT NULL,
+			source_schema VARCHAR NOT NULL,
+			source_table VARCHAR NOT NULL,
+			stream_type VARCHAR NOT NULL,
+			stream_offset BIGINT NOT NULL,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			owner VARCHAR,
+			UNIQUE(schema_id, name)
+		)`,
+		`CREATE TABLE IF NOT EXISTS _metadata_tasks (
+			id VARCHAR PRIMARY KEY,
+			schema_id VARCHAR NOT NULL,
+			name VARCHAR NOT NULL,
+			warehouse VARCHAR NOT NULL,
+			schedule VARCHAR NOT NULL,
+			definition TEXT NOT NULL,
+			state VARCHAR NOT NULL DEFAULT 'SUSPENDED',
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			last_executed_at TIMESTAMP,
+			last_completed_at TIMESTAMP,
+			last_error TEXT,
+			owner VARCHAR,
+			UNIQUE(schema_id, name)
 		)`,
 	}
 

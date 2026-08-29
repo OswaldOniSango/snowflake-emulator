@@ -52,3 +52,13 @@ type SchemaContext struct {
 	SchemaName   string
 	SchemaID     string
 }
+
+// ExecutionContext contains the Snowflake session context used to resolve
+// unqualified object names while executing a statement.
+type ExecutionContext struct {
+	Database  string
+	Schema    string
+	Warehouse string
+	Role      string
+	SessionID string
+}

@@ -132,10 +132,71 @@ func (c *Classifier) Classify(sql string) ClassifyResult {
 // isQueryStatement checks if the SQL is a query (read-only) statement.
 func (c *Classifier) isQueryStatement(upperSQL string) bool {
 	return strings.HasPrefix(upperSQL, "SELECT") ||
+		strings.HasPrefix(upperSQL, "CALL") ||
 		strings.HasPrefix(upperSQL, "SHOW") ||
 		strings.HasPrefix(upperSQL, "DESCRIBE") ||
 		strings.HasPrefix(upperSQL, "DESC") ||
 		strings.HasPrefix(upperSQL, "EXPLAIN")
+}
+
+// IsCreateProcedure checks if the SQL creates a stored procedure.
+func (c *Classifier) IsCreateProcedure(sql string) bool {
+	upperSQL := strings.ToUpper(strings.TrimSpace(sql))
+	return strings.HasPrefix(upperSQL, "CREATE PROCEDURE") ||
+		strings.HasPrefix(upperSQL, "CREATE OR REPLACE PROCEDURE")
+}
+
+// IsDropProcedure checks if the SQL drops a stored procedure.
+func (c *Classifier) IsDropProcedure(sql string) bool {
+	return strings.HasPrefix(strings.ToUpper(strings.TrimSpace(sql)), "DROP PROCEDURE")
+}
+
+// IsCall checks if the SQL calls a stored procedure.
+func (c *Classifier) IsCall(sql string) bool {
+	return strings.HasPrefix(strings.ToUpper(strings.TrimSpace(sql)), "CALL")
+}
+
+// IsShowProcedures checks if the SQL lists stored procedures.
+func (c *Classifier) IsShowProcedures(sql string) bool {
+	return strings.HasPrefix(strings.ToUpper(strings.TrimSpace(sql)), "SHOW PROCEDURES")
+}
+
+// IsCreateStream checks if the SQL creates a stream.
+func (c *Classifier) IsCreateStream(sql string) bool {
+	upperSQL := strings.ToUpper(strings.TrimSpace(sql))
+	return strings.HasPrefix(upperSQL, "CREATE STREAM") ||
+		strings.HasPrefix(upperSQL, "CREATE OR REPLACE STREAM")
+}
+
+// IsDropStream checks if the SQL drops a stream.
+func (c *Classifier) IsDropStream(sql string) bool {
+	return strings.HasPrefix(strings.ToUpper(strings.TrimSpace(sql)), "DROP STREAM")
+}
+
+// IsShowStreams checks if the SQL lists streams.
+func (c *Classifier) IsShowStreams(sql string) bool {
+	return strings.HasPrefix(strings.ToUpper(strings.TrimSpace(sql)), "SHOW STREAMS")
+}
+
+func (c *Classifier) IsCreateTask(sql string) bool {
+	upperSQL := strings.ToUpper(strings.TrimSpace(sql))
+	return strings.HasPrefix(upperSQL, "CREATE TASK") || strings.HasPrefix(upperSQL, "CREATE OR REPLACE TASK")
+}
+
+func (c *Classifier) IsAlterTask(sql string) bool {
+	return strings.HasPrefix(strings.ToUpper(strings.TrimSpace(sql)), "ALTER TASK")
+}
+
+func (c *Classifier) IsDropTask(sql string) bool {
+	return strings.HasPrefix(strings.ToUpper(strings.TrimSpace(sql)), "DROP TASK")
+}
+
+func (c *Classifier) IsExecuteTask(sql string) bool {
+	return strings.HasPrefix(strings.ToUpper(strings.TrimSpace(sql)), "EXECUTE TASK")
+}
+
+func (c *Classifier) IsShowTasks(sql string) bool {
+	return strings.HasPrefix(strings.ToUpper(strings.TrimSpace(sql)), "SHOW TASKS")
 }
 
 // isTransactionStatement checks if the SQL is a transaction control statement.
@@ -149,7 +210,22 @@ func (c *Classifier) isTransactionStatement(upperSQL string) bool {
 // IsCreateTable checks if the SQL is a CREATE TABLE statement.
 func (c *Classifier) IsCreateTable(sql string) bool {
 	upperSQL := strings.ToUpper(strings.TrimSpace(sql))
-	return strings.HasPrefix(upperSQL, "CREATE TABLE")
+	prefixes := []string{
+		"CREATE TABLE",
+		"CREATE TEMP TABLE",
+		"CREATE TEMPORARY TABLE",
+		"CREATE TRANSIENT TABLE",
+		"CREATE OR REPLACE TABLE",
+		"CREATE OR REPLACE TEMP TABLE",
+		"CREATE OR REPLACE TEMPORARY TABLE",
+		"CREATE OR REPLACE TRANSIENT TABLE",
+	}
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(upperSQL, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // IsDropTable checks if the SQL is a DROP TABLE statement.
