@@ -178,6 +178,27 @@ func (c *Classifier) IsShowStreams(sql string) bool {
 	return strings.HasPrefix(strings.ToUpper(strings.TrimSpace(sql)), "SHOW STREAMS")
 }
 
+func (c *Classifier) IsCreateTask(sql string) bool {
+	upperSQL := strings.ToUpper(strings.TrimSpace(sql))
+	return strings.HasPrefix(upperSQL, "CREATE TASK") || strings.HasPrefix(upperSQL, "CREATE OR REPLACE TASK")
+}
+
+func (c *Classifier) IsAlterTask(sql string) bool {
+	return strings.HasPrefix(strings.ToUpper(strings.TrimSpace(sql)), "ALTER TASK")
+}
+
+func (c *Classifier) IsDropTask(sql string) bool {
+	return strings.HasPrefix(strings.ToUpper(strings.TrimSpace(sql)), "DROP TASK")
+}
+
+func (c *Classifier) IsExecuteTask(sql string) bool {
+	return strings.HasPrefix(strings.ToUpper(strings.TrimSpace(sql)), "EXECUTE TASK")
+}
+
+func (c *Classifier) IsShowTasks(sql string) bool {
+	return strings.HasPrefix(strings.ToUpper(strings.TrimSpace(sql)), "SHOW TASKS")
+}
+
 // isTransactionStatement checks if the SQL is a transaction control statement.
 func (c *Classifier) isTransactionStatement(upperSQL string) bool {
 	return strings.HasPrefix(upperSQL, "BEGIN") ||
