@@ -227,7 +227,7 @@ func TestProcedureSupportsDeclareAssignmentCaseAndIf(t *testing.T) {
 	}
 }
 
-func TestProcedureSupportsDynamicIdentifiers(t *testing.T) {
+func TestProcedureSupportsDynamicTemporaryAndTransientTables(t *testing.T) {
 	executor, repo := setupTestExecutor(t)
 	ctx := context.Background()
 
@@ -240,7 +240,18 @@ func TestProcedureSupportsDynamicIdentifiers(t *testing.T) {
 	}
 	executionContext := ExecutionContext{Database: "DYNAMIC_PROCEDURE_DB", Schema: "PUBLIC"}
 
-	createSQL := `CREATE PROCEDURE build_batch(start_seq VARCHAR, end_seq VARCHAR)
+	tests := []struct {
+		name          string
+		tableKind     string
+		procedureName string
+		tablePrefix   string
+	}{
+		{name: "temporary", tableKind: "TEMPORARY", procedureName: "build_temporary_batch", tablePrefix: "temporary_batch_"},
+		{name: "transient", tableKind: "TRANSIENT", procedureName: "build_transient_batch", tablePrefix: "transient_batch_"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			createSQL := fmt.Sprintf(`CREATE PROCEDURE %s(start_seq VARCHAR, end_seq VARCHAR)
 		RETURNS NUMBER
 		LANGUAGE SQL
 		AS $$
@@ -248,27 +259,83 @@ func TestProcedureSupportsDynamicIdentifiers(t *testing.T) {
 			table_name VARCHAR;
 			row_count NUMBER;
 		BEGIN
-			table_name := 'batch_' || start_seq || end_seq;
-			CREATE OR REPLACE TRANSIENT TABLE IDENTIFIER(:table_name) AS
+			table_name := '%s' || start_seq || end_seq;
+			CREATE OR REPLACE %s TABLE IDENTIFIER(:table_name) AS
 				SELECT 1 AS id UNION ALL SELECT 2 AS id;
 			row_count := (SELECT COUNT(*) FROM identifier ( :table_name ));
 			DROP TABLE IF EXISTS IDENTIFIER(:table_name);
 			RETURN row_count;
 		END
-		$$`
-	if _, err := executor.ExecuteWithContext(ctx, executionContext, createSQL); err != nil {
-		t.Fatalf("CREATE PROCEDURE error = %v", err)
-	}
+		$$`, tt.procedureName, tt.tablePrefix, tt.tableKind)
+			if _, err := executor.ExecuteWithContext(ctx, executionContext, createSQL); err != nil {
+				t.Fatalf("CREATE PROCEDURE error = %v", err)
+			}
 
-	result, err := executor.QueryWithContext(ctx, executionContext, "CALL build_batch('00', '99')")
+			callSQL := fmt.Sprintf("CALL %s('00', '99')", tt.procedureName)
+			result, err := executor.QueryWithContext(ctx, executionContext, callSQL)
+			if err != nil {
+				t.Fatalf("%s error = %v", callSQL, err)
+			}
+			if len(result.Rows) != 1 || !procedureValuesEqual(result.Rows[0][0], 2) {
+				t.Fatalf("%s rows = %#v, want 2", callSQL, result.Rows)
+			}
+
+			tableName := tt.tablePrefix + "0099"
+			if _, err := executor.QueryWithContext(ctx, executionContext, "SELECT * FROM "+tableName); err == nil {
+				t.Fatalf("dynamic %s table %s still exists after DROP", tt.name, tableName)
+			}
+		})
+	}
+}
+
+func TestProcedureCleansTemporaryTablesOnExit(t *testing.T) {
+	executor, repo := setupTestExecutor(t)
+	ctx := context.Background()
+
+	database, err := repo.CreateDatabase(ctx, "TEMP_CLEANUP_DB", "")
 	if err != nil {
-		t.Fatalf("CALL build_batch error = %v", err)
+		t.Fatalf("CreateDatabase() error = %v", err)
 	}
-	if len(result.Rows) != 1 || !procedureValuesEqual(result.Rows[0][0], 2) {
-		t.Fatalf("CALL build_batch rows = %#v, want 2", result.Rows)
+	if _, err := repo.CreateSchema(ctx, database.ID, "PUBLIC", ""); err != nil {
+		t.Fatalf("CreateSchema() error = %v", err)
 	}
-	if _, err := executor.QueryWithContext(ctx, executionContext, "SELECT * FROM batch_0099"); err == nil {
-		t.Fatal("dynamic transient table still exists after DROP")
+	executionContext := ExecutionContext{Database: "TEMP_CLEANUP_DB", Schema: "PUBLIC"}
+
+	tests := []struct {
+		name      string
+		body      string
+		wantError bool
+	}{
+		{name: "return", body: "BEGIN CREATE TEMPORARY TABLE leftover (id INTEGER); RETURN 'OK'; END"},
+		{name: "execution error", body: "BEGIN CREATE TEMPORARY TABLE leftover (id INTEGER); SELECT * FROM missing_table; END", wantError: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			script, err := parseProcedureScript(tt.body)
+			if err != nil {
+				t.Fatalf("parseProcedureScript() error = %v", err)
+			}
+			if err := executor.withPinnedConnection(ctx, func(pinned *Executor) error {
+				interpreter := newProcedureInterpreter(pinned, executionContext, "TEMP_CLEANUP")
+				_, executeErr := interpreter.execute(ctx, script, nil, nil)
+				if (executeErr != nil) != tt.wantError {
+					t.Fatalf("execute() error = %v, wantError %v", executeErr, tt.wantError)
+				}
+				rows, queryErr := pinned.Query(ctx, `
+					SELECT COUNT(*)
+					FROM duckdb_tables()
+					WHERE temporary AND table_name LIKE '__PROC_TEMP_%'`)
+				if queryErr != nil {
+					return queryErr
+				}
+				if len(rows.Rows) != 1 || !procedureValuesEqual(rows.Rows[0][0], 0) {
+					t.Fatalf("temporary tables after procedure exit = %#v, want 0", rows.Rows)
+				}
+				return nil
+			}); err != nil {
+				t.Fatalf("withPinnedConnection() error = %v", err)
+			}
+		})
 	}
 }
 

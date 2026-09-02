@@ -210,7 +210,9 @@ values. A top-level `EXCEPTION WHEN OTHER THEN` handler can inspect the
 emulator-provided `SQLCODE`, `SQLSTATE`, and `SQLERRM` diagnostic variables. SQL
 executed inside a procedure uses the procedure call's database and schema
 context. Dynamic identifiers currently support simple unquoted object names;
-qualified/quoted names and contextual temporary tables remain limited.
+qualified/quoted names remain limited. During a `CALL`, temporary tables use a
+single pinned DuckDB connection, remain isolated from concurrent calls, and are
+cleaned up when the invocation finishes.
 
 ### Append-Only Streams
 

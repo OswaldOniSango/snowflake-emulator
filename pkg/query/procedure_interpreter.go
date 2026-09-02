@@ -3,17 +3,24 @@ package query
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
 	"unicode"
+
+	"github.com/google/uuid"
 )
+
+var procedureTemporaryTablePattern = regexp.MustCompile(`(?i)^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:TEMP|TEMPORARY)\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?\s+([A-Za-z_][A-Za-z0-9_$]*)`)
 
 type procedureInterpreter struct {
 	executor         *Executor
 	executionContext ExecutionContext
 	procedureName    string
 	variables        map[string]any
+	temporaryTables  map[string]string
+	invocationID     string
 }
 
 type procedureExecution struct {
@@ -22,10 +29,25 @@ type procedureExecution struct {
 }
 
 func newProcedureInterpreter(executor *Executor, executionContext ExecutionContext, procedureName string) *procedureInterpreter {
-	return &procedureInterpreter{executor: executor, executionContext: executionContext, procedureName: procedureName, variables: make(map[string]any)}
+	return &procedureInterpreter{
+		executor:         executor,
+		executionContext: executionContext,
+		procedureName:    procedureName,
+		variables:        make(map[string]any),
+		temporaryTables:  make(map[string]string),
+		invocationID:     strings.ReplaceAll(uuid.NewString(), "-", ""),
+	}
 }
 
-func (i *procedureInterpreter) execute(ctx context.Context, script *procedureScript, arguments []ProcedureArgument, values []string) (*Result, error) {
+func (i *procedureInterpreter) execute(ctx context.Context, script *procedureScript, arguments []ProcedureArgument, values []string) (result *Result, err error) {
+	defer func() {
+		cleanupErr := i.cleanupTemporaryTables(ctx)
+		if err == nil && cleanupErr != nil {
+			err = cleanupErr
+			result = nil
+		}
+	}()
+
 	for index, argument := range arguments {
 		value, err := i.evaluateScalar(ctx, values[index], false)
 		if err != nil {
@@ -91,11 +113,15 @@ func (i *procedureInterpreter) executeStatement(ctx context.Context, statement p
 		if err != nil {
 			return procedureExecution{}, err
 		}
+		sql, droppedTemporaryTable := i.rewriteTemporaryTableReferences(sql)
 		if IsQuery(sql) {
 			result, err := i.executor.QueryWithContext(ctx, i.executionContext, sql)
 			return procedureExecution{result: result}, err
 		}
 		_, err = i.executor.ExecuteWithContext(ctx, i.executionContext, sql)
+		if err == nil && droppedTemporaryTable != "" {
+			delete(i.temporaryTables, droppedTemporaryTable)
+		}
 		return procedureExecution{}, err
 	case procedureAssignmentStatement:
 		if _, exists := i.variables[statement.Name]; !exists {
@@ -112,6 +138,7 @@ func (i *procedureInterpreter) executeStatement(ctx context.Context, statement p
 		if err != nil {
 			return procedureExecution{}, err
 		}
+		expression, _ = i.rewriteTemporaryTableReferences(expression)
 		result, err := i.executor.QueryWithContext(ctx, i.executionContext, "SELECT "+expression+" AS "+i.procedureName)
 		return procedureExecution{result: result, returned: true}, err
 	case procedureIfStatement:
@@ -143,6 +170,52 @@ func (i *procedureInterpreter) executeStatement(ctx context.Context, statement p
 	}
 }
 
+func (i *procedureInterpreter) rewriteTemporaryTableReferences(sql string) (string, string) {
+	if match := procedureTemporaryTablePattern.FindStringSubmatch(sql); match != nil {
+		logicalName := strings.ToUpper(match[1])
+		if _, exists := i.temporaryTables[logicalName]; !exists {
+			physicalName := fmt.Sprintf("__PROC_TEMP_%s_%s_%s_%s",
+				i.invocationID,
+				strings.ToUpper(i.executionContext.Database),
+				strings.ToUpper(i.executionContext.Schema),
+				logicalName,
+			)
+			i.temporaryTables[logicalName] = physicalName
+		}
+	}
+
+	droppedTemporaryTable := ""
+	result := sql
+	for _, pattern := range contextualTablePatterns {
+		result = pattern.ReplaceAllStringFunc(result, func(match string) string {
+			parts := pattern.FindStringSubmatch(match)
+			if len(parts) != 3 {
+				return match
+			}
+			logicalName := strings.ToUpper(strings.TrimSpace(parts[2]))
+			physicalName, exists := i.temporaryTables[logicalName]
+			if !exists {
+				return match
+			}
+			if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(parts[1])), "DROP TABLE") {
+				droppedTemporaryTable = logicalName
+			}
+			return parts[1] + physicalName
+		})
+	}
+	return result, droppedTemporaryTable
+}
+
+func (i *procedureInterpreter) cleanupTemporaryTables(ctx context.Context) error {
+	for logicalName, physicalName := range i.temporaryTables {
+		if _, err := i.executor.ExecuteWithContext(ctx, i.executionContext, "DROP TABLE IF EXISTS "+physicalName); err != nil {
+			return fmt.Errorf("failed to clean temporary table %s: %w", logicalName, err)
+		}
+		delete(i.temporaryTables, logicalName)
+	}
+	return nil
+}
+
 func (i *procedureInterpreter) evaluateBoolean(ctx context.Context, expression string) (bool, error) {
 	value, err := i.evaluateScalar(ctx, expression, true)
 	if err != nil {
@@ -164,6 +237,7 @@ func (i *procedureInterpreter) evaluateScalar(ctx context.Context, expression st
 	if err != nil {
 		return nil, err
 	}
+	bound, _ = i.rewriteTemporaryTableReferences(bound)
 	query := "SELECT " + bound + " AS value"
 	if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(bound)), "SELECT ") {
 		query = bound

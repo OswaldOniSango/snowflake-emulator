@@ -122,7 +122,13 @@ func (p *ProcedureProcessor) Call(ctx context.Context, executionContext Executio
 		return nil, fmt.Errorf("procedure %s expects %d arguments, got %d", procedure.Name, len(parameters), len(values))
 	}
 
-	return p.executeBody(ctx, executionContext, procedure.Name, procedure.Body, parameters, values)
+	var result *Result
+	err = p.executor.withPinnedConnection(ctx, func(executor *Executor) error {
+		var executeErr error
+		result, executeErr = p.executeBody(ctx, executor, executionContext, procedure.Name, procedure.Body, parameters, values)
+		return executeErr
+	})
+	return result, err
 }
 
 // Show returns all procedures currently stored in the emulator catalog.
@@ -139,12 +145,12 @@ func (p *ProcedureProcessor) Show(ctx context.Context, _ string) (*Result, error
 	return &Result{Columns: columns, ColumnTypes: textColumnMetadata(columns), Rows: rows}, nil
 }
 
-func (p *ProcedureProcessor) executeBody(ctx context.Context, executionContext ExecutionContext, procedureName, body string, parameters []ProcedureArgument, values []string) (*Result, error) {
+func (p *ProcedureProcessor) executeBody(ctx context.Context, executor *Executor, executionContext ExecutionContext, procedureName, body string, parameters []ProcedureArgument, values []string) (*Result, error) {
 	script, err := parseProcedureScript(body)
 	if err != nil {
 		return nil, fmt.Errorf("invalid procedure %s body: %w", procedureName, err)
 	}
-	interpreter := newProcedureInterpreter(p.executor, executionContext, procedureName)
+	interpreter := newProcedureInterpreter(executor, executionContext, procedureName)
 	return interpreter.execute(ctx, script, parameters, values)
 }
 
