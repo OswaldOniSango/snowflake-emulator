@@ -25,8 +25,12 @@ interface DatabaseNode {
 
 export interface ExplorerOptions {
   parent: HTMLElement;
-  /** The namespace statements run in, which decides how names are inserted. */
-  context: { database: string; schema: string };
+  /**
+   * The namespace statements currently run in, which decides how names are
+   * inserted. Read through a function rather than captured, because it changes
+   * with the worksheet and with the context picker.
+   */
+  context: () => { database: string; schema: string };
   /** Invoked with the name to write into the editor. */
   onInsert: (name: string) => void;
 }
@@ -233,7 +237,7 @@ export function createExplorer(options: ExplorerOptions): Explorer {
             ...(object.detail ? { detail: object.detail } : {}),
             onClick: () =>
               options.onInsert(
-                nameToInsert(database, schema.name, object.name, options.context),
+                nameToInsert(database, schema.name, object.name, options.context()),
               ),
           }),
         );

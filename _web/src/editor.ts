@@ -66,11 +66,19 @@ export interface EditorOptions {
   initialValue: string;
   /** Invoked by the run shortcut, so the keybinding lives with the editor. */
   onRun: () => void;
+  /** Invoked when the buffer changes, so the worksheet can be persisted. */
+  onChange?: (value: string) => void;
 }
 
 export interface Editor {
-  /** The selected text when there is one, otherwise the whole buffer. */
-  statementToRun(): string;
+  /** The whole buffer. */
+  value(): string;
+  /** Replaces the buffer, as when switching worksheets. */
+  setValue(text: string): void;
+  /** The selected text, or "" when nothing is selected. */
+  selection(): string;
+  /** Where the cursor sits, for locating the statement around it. */
+  cursorOffset(): number;
   /** Replaces the selection with text, or inserts it at the cursor. */
   insert(text: string): void;
   focus(): void;
@@ -106,16 +114,32 @@ export function createEditor(options: EditorOptions): Editor {
         runKeymap,
         keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
         EditorView.lineWrapping,
+        EditorView.updateListener.of((update) => {
+          if (update.docChanged) {
+            options.onChange?.(update.state.doc.toString());
+          }
+        }),
         theme,
       ],
     }),
   });
 
   return {
-    statementToRun() {
+    value() {
+      return view.state.doc.toString();
+    },
+    setValue(text: string) {
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: text },
+        selection: { anchor: Math.min(text.length, view.state.selection.main.anchor) },
+      });
+    },
+    selection() {
       const { from, to } = view.state.selection.main;
-      const selected = from === to ? "" : view.state.sliceDoc(from, to);
-      return (selected || view.state.doc.toString()).trim();
+      return from === to ? "" : view.state.sliceDoc(from, to).trim();
+    },
+    cursorOffset() {
+      return view.state.selection.main.head;
     },
     insert(text: string) {
       const { from, to } = view.state.selection.main;
