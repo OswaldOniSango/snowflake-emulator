@@ -85,6 +85,22 @@ func (e *Executor) Configure(opts ...ExecutorOption) {
 	}
 }
 
+// withPinnedConnection runs a unit of work through a single DuckDB connection.
+// Processor instances are rebuilt so recursive execution also uses that
+// connection instead of returning to the database/sql pool.
+func (e *Executor) withPinnedConnection(ctx context.Context, fn func(*Executor) error) error {
+	return e.mgr.WithConnection(ctx, func(mgr *connection.Manager) error {
+		pinned := NewExecutor(mgr, e.repo, WithWarehouseValidator(e.warehouseValidator))
+		if e.mergeProcessor != nil {
+			pinned.mergeProcessor = NewMergeProcessor(pinned)
+		}
+		if e.copyProcessor != nil {
+			pinned.copyProcessor = NewCopyProcessor(e.copyProcessor.stageMgr, e.repo, pinned)
+		}
+		return fn(pinned)
+	})
+}
+
 // Query executes a SELECT query and returns results.
 func (e *Executor) Query(ctx context.Context, sql string) (*Result, error) {
 	return e.QueryWithContext(ctx, ExecutionContext{}, sql)

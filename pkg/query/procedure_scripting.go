@@ -7,8 +7,9 @@ import (
 )
 
 type procedureScript struct {
-	Declarations []procedureDeclaration
-	Statements   []procedureStatement
+	Declarations     []procedureDeclaration
+	Statements       []procedureStatement
+	ExceptionHandler []procedureStatement
 }
 
 type procedureDeclaration struct {
@@ -64,9 +65,21 @@ func parseProcedureScript(body string) (*procedureScript, error) {
 	if !p.consumeKeyword("BEGIN") {
 		return nil, fmt.Errorf("procedure body must contain BEGIN")
 	}
-	statements, terminator, err := p.parseStatements("END")
+	statements, terminator, err := p.parseStatements("EXCEPTION", "END")
 	if err != nil {
 		return nil, err
+	}
+	script.Statements = statements
+	if terminator == "EXCEPTION" {
+		p.consumeKeyword("EXCEPTION")
+		if !p.consumeKeyword("WHEN") || !p.consumeKeyword("OTHER") || !p.consumeKeyword("THEN") {
+			return nil, fmt.Errorf("EXCEPTION handler must use WHEN OTHER THEN")
+		}
+		script.ExceptionHandler = make([]procedureStatement, 0)
+		script.ExceptionHandler, terminator, err = p.parseStatements("END")
+		if err != nil {
+			return nil, err
+		}
 	}
 	if terminator != "END" {
 		return nil, fmt.Errorf("procedure body is missing END")
@@ -77,7 +90,6 @@ func parseProcedureScript(body string) (*procedureScript, error) {
 	if !p.eof() {
 		return nil, fmt.Errorf("unexpected content after procedure END near %q", p.remainingPreview())
 	}
-	script.Statements = statements
 	return script, nil
 }
 
