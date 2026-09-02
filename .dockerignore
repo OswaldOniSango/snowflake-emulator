@@ -39,3 +39,8 @@ snowflake-emulator
 # OS
 .DS_Store
 Thumbs.db
+
+# Web console: the ui-builder stage installs dependencies and bind-mounts its
+# own bundle over server/ui/dist, so neither needs to enter the build context.
+_web/node_modules
+_web/dist

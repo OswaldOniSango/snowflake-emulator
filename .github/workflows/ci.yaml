@@ -38,18 +38,74 @@ jobs:
         run: make test-all
 
 
+  ui:
+    name: Web Console
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      # _web/.nvmrc is the single source of truth for the Node version, the same
+      # way go.mod is for Go. Keep the Dockerfile's node image on that major.
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: _web/.nvmrc
+          cache: npm
+          cache-dependency-path: _web/package-lock.json
+      - name: Install dependencies
+        run: npm --prefix _web ci
+      - name: Lint
+        run: npm --prefix _web run lint
+      - name: Type check
+        run: npm --prefix _web run typecheck
+      - name: Test
+        run: npm --prefix _web run test
+      - name: Build
+        run: npm --prefix _web run build
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      # The Go test job runs without a bundle, so this is the only place the
+      # embed handler is exercised against a real one.
+      - name: Test the embed handler against the real bundle
+        run: CGO_ENABLED=1 go test ./server/ui/...
+      - name: Upload console bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: console-bundle
+          path: server/ui/dist
+          # .gitkeep is excluded by default, which would make the artifact an
+          # incomplete copy of the directory.
+          include-hidden-files: true
+          retention-days: 7
+
   build:
     name: Build
     runs-on: ubuntu-latest
-    needs: [lint, test]
+    needs: [lint, test, ui]
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: go.mod
           cache: true
+      # Embed the bundle the ui job produced rather than rebuilding it here.
+      - name: Download console bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: console-bundle
+          path: server/ui/dist
       - name: Build
         run: CGO_ENABLED=1 go build -o snowflake-emulator ./cmd/server
+      - name: Verify the console was embedded
+        run: |
+          test -f server/ui/dist/index.html
+          ./snowflake-emulator &
+          for i in {1..30}; do
+            if curl -sf http://localhost:8080/health > /dev/null; then break; fi
+            sleep 1
+          done
+          curl -sf http://localhost:8080/ | grep -q "Mallard Console"
+          kill %1
       - name: Upload artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -92,6 +148,11 @@ jobs:
           echo "Emulator failed to start"
           docker logs snowflake-emulator
           exit 1
+      # Without this the image can build green with an empty bundle: if the
+      # ui-builder bind mount ever stops layering, go:embed silently embeds only
+      # the placeholder and the console serves 503 forever.
+      - name: Verify the console is embedded in the image
+        run: curl -sf http://localhost:8080/ | grep -q "Mallard Console"
       - name: Run Docker example
         run: go run ./example/docker
       - name: Stop emulator container
