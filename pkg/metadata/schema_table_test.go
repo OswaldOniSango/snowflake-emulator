@@ -26,9 +26,11 @@ func TestRepository_CreateSchema(t *testing.T) {
 		comment string
 		wantErr bool
 	}{
-		{name: "ValidSchema", schema: "PUBLIC", comment: "Public schema", wantErr: false},
+		{name: "ValidSchema", schema: "ANALYTICS", comment: "Analytics schema", wantErr: false},
 		{name: "CustomSchema", schema: "MY_SCHEMA", comment: "", wantErr: false},
 		{name: "EmptyName", schema: "", comment: "", wantErr: true},
+		// CreateDatabase provisions PUBLIC, so asking for it again is a duplicate.
+		{name: "DefaultSchemaAlreadyExists", schema: "PUBLIC", comment: "", wantErr: true},
 	}
 
 	for _, tt := range tests {
@@ -65,9 +67,9 @@ func TestRepository_CreateTable(t *testing.T) {
 		t.Fatalf("CreateDatabase() error = %v", err)
 	}
 
-	schema, err := repo.CreateSchema(ctx, db.ID, "PUBLIC", "")
+	schema, err := repo.GetSchemaByName(ctx, db.ID, "PUBLIC")
 	if err != nil {
-		t.Fatalf("CreateSchema() error = %v", err)
+		t.Fatalf("GetSchemaByName() error = %v", err)
 	}
 
 	tests := []struct {
@@ -137,9 +139,9 @@ func TestRepository_GetSchema(t *testing.T) {
 		t.Fatalf("CreateDatabase() error = %v", err)
 	}
 
-	schema, err := repo.CreateSchema(ctx, db.ID, "PUBLIC", "Test schema")
+	schema, err := repo.GetSchemaByName(ctx, db.ID, "PUBLIC")
 	if err != nil {
-		t.Fatalf("CreateSchema() error = %v", err)
+		t.Fatalf("GetSchemaByName() error = %v", err)
 	}
 
 	got, err := repo.GetSchema(ctx, schema.ID)
@@ -163,9 +165,9 @@ func TestRepository_GetTable(t *testing.T) {
 		t.Fatalf("CreateDatabase() error = %v", err)
 	}
 
-	schema, err := repo.CreateSchema(ctx, db.ID, "PUBLIC", "")
+	schema, err := repo.GetSchemaByName(ctx, db.ID, "PUBLIC")
 	if err != nil {
-		t.Fatalf("CreateSchema() error = %v", err)
+		t.Fatalf("GetSchemaByName() error = %v", err)
 	}
 
 	columns := []ColumnDef{
@@ -198,10 +200,10 @@ func TestRepository_ListSchemas(t *testing.T) {
 		t.Fatalf("CreateDatabase() error = %v", err)
 	}
 
-	// Create multiple schemas
-	s1, err := repo.CreateSchema(ctx, db.ID, "PUBLIC", "")
+	// PUBLIC comes with the database; STAGING is created on top of it.
+	s1, err := repo.GetSchemaByName(ctx, db.ID, "PUBLIC")
 	if err != nil {
-		t.Fatalf("CreateSchema(PUBLIC) error = %v", err)
+		t.Fatalf("GetSchemaByName(PUBLIC) error = %v", err)
 	}
 
 	s2, err := repo.CreateSchema(ctx, db.ID, "STAGING", "")
@@ -251,9 +253,9 @@ func TestRepository_ListTables(t *testing.T) {
 		t.Fatalf("CreateDatabase() error = %v", err)
 	}
 
-	schema, err := repo.CreateSchema(ctx, db.ID, "PUBLIC", "")
+	schema, err := repo.GetSchemaByName(ctx, db.ID, "PUBLIC")
 	if err != nil {
-		t.Fatalf("CreateSchema() error = %v", err)
+		t.Fatalf("GetSchemaByName() error = %v", err)
 	}
 
 	// Create multiple tables
@@ -310,9 +312,9 @@ func TestRepository_DropSchema(t *testing.T) {
 		t.Fatalf("CreateDatabase() error = %v", err)
 	}
 
-	schema, err := repo.CreateSchema(ctx, db.ID, "PUBLIC", "")
+	schema, err := repo.GetSchemaByName(ctx, db.ID, "PUBLIC")
 	if err != nil {
-		t.Fatalf("CreateSchema() error = %v", err)
+		t.Fatalf("GetSchemaByName() error = %v", err)
 	}
 
 	err = repo.DropSchema(ctx, schema.ID)
@@ -337,9 +339,9 @@ func TestRepository_DropTable(t *testing.T) {
 		t.Fatalf("CreateDatabase() error = %v", err)
 	}
 
-	schema, err := repo.CreateSchema(ctx, db.ID, "PUBLIC", "")
+	schema, err := repo.GetSchemaByName(ctx, db.ID, "PUBLIC")
 	if err != nil {
-		t.Fatalf("CreateSchema() error = %v", err)
+		t.Fatalf("GetSchemaByName() error = %v", err)
 	}
 
 	cols := []ColumnDef{{Name: "ID", Type: "INTEGER"}}

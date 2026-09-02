@@ -246,7 +246,7 @@ func TestCopyProcessor_ExecuteCopyCSV(t *testing.T) {
 
 	// Setup: Create database, schema, stage, and table
 	db, _ := repo.CreateDatabase(ctx, "COPY_DB", "")
-	schema, _ := repo.CreateSchema(ctx, db.ID, "PUBLIC", "")
+	schema, _ := repo.GetSchemaByName(ctx, db.ID, "PUBLIC")
 	_, _ = stageMgr.CreateStage(ctx, schema.ID, "DATA_STAGE", "INTERNAL", "", "")
 
 	// Create target table (DuckDB uses DATABASE.SCHEMA_TABLE format)
@@ -308,7 +308,7 @@ func TestCopyProcessor_ExecuteCopyCSVWithSkipHeader(t *testing.T) {
 	ctx := context.Background()
 
 	db, _ := repo.CreateDatabase(ctx, "HEADER_DB", "")
-	schema, _ := repo.CreateSchema(ctx, db.ID, "PUBLIC", "")
+	schema, _ := repo.GetSchemaByName(ctx, db.ID, "PUBLIC")
 	_, _ = stageMgr.CreateStage(ctx, schema.ID, "HEADER_STAGE", "INTERNAL", "", "")
 
 	_, _ = handler.executor.Execute(ctx, "CREATE TABLE HEADER_DB.PUBLIC_HEADER_TABLE (id INTEGER, name VARCHAR)")
@@ -349,7 +349,7 @@ func TestCopyProcessor_ExecuteCopyJSON(t *testing.T) {
 	ctx := context.Background()
 
 	db, _ := repo.CreateDatabase(ctx, "JSON_DB", "")
-	schema, _ := repo.CreateSchema(ctx, db.ID, "PUBLIC", "")
+	schema, _ := repo.GetSchemaByName(ctx, db.ID, "PUBLIC")
 	_, _ = stageMgr.CreateStage(ctx, schema.ID, "JSON_STAGE", "INTERNAL", "", "")
 
 	_, _ = handler.executor.Execute(ctx, "CREATE TABLE JSON_DB.PUBLIC_JSON_TABLE (data VARCHAR)")
@@ -400,7 +400,7 @@ func TestCopyProcessor_ExecuteCopyWithPurge(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create database: %v", err)
 	}
-	schema, err := repo.CreateSchema(ctx, db.ID, "PUBLIC", "")
+	schema, err := repo.GetSchemaByName(ctx, db.ID, "PUBLIC")
 	if err != nil {
 		t.Fatalf("Failed to create schema: %v", err)
 	}

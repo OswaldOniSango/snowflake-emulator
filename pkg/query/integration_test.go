@@ -47,7 +47,7 @@ func TestIntegration_QueryEngineWorkflow(t *testing.T) { //nolint:gocyclo // Int
 
 	schema, err := repo.CreateSchema(ctx, database.ID, "PROD", "Production schema")
 	if err != nil {
-		t.Fatalf("CreateSchema() error = %v", err)
+		t.Fatalf("GetSchemaByName() error = %v", err)
 	}
 
 	// Step 2: Create tables
@@ -657,7 +657,7 @@ func TestIntegration_ConcurrentQueries(t *testing.T) {
 
 	// Setup data
 	database, _ := repo.CreateDatabase(ctx, "CONCURRENT_DB", "")
-	schema, _ := repo.CreateSchema(ctx, database.ID, "PUBLIC", "")
+	schema, _ := repo.GetSchemaByName(ctx, database.ID, "PUBLIC")
 	cols := []metadata.ColumnDef{
 		{Name: "ID", Type: "INTEGER", PrimaryKey: true},
 		{Name: "VALUE", Type: "INTEGER"},

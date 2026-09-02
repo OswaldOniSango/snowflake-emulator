@@ -34,8 +34,8 @@ func TestExecutorValidatesAllExecutionContextFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateDatabase() error = %v", err)
 	}
-	if _, err := repo.CreateSchema(ctx, database.ID, "PUBLIC", ""); err != nil {
-		t.Fatalf("CreateSchema() error = %v", err)
+	if _, err := repo.GetSchemaByName(ctx, database.ID, "PUBLIC"); err != nil {
+		t.Fatalf("GetSchemaByName() error = %v", err)
 	}
 
 	warehouseManager := warehouse.NewManager()

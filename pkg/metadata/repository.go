@@ -345,6 +345,14 @@ func (r *Repository) CreateDatabase(ctx context.Context, name, comment string) (
 		return nil, err
 	}
 
+	// Snowflake gives every new database a PUBLIC schema, and the emulator
+	// validates execution contexts against the catalog — without this, a
+	// database created through the REST API or auto-created at login would
+	// reject every statement that targets DATABASE.PUBLIC.
+	if _, err := r.CreateSchema(ctx, id, config.DefaultSchema, "Public schema"); err != nil {
+		return nil, fmt.Errorf("failed to create default schema for database %s: %w", normalizedName, err)
+	}
+
 	// Retrieve the created database
 	return r.GetDatabase(ctx, id)
 }
