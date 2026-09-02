@@ -3,6 +3,7 @@ package query
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -204,4 +205,71 @@ func (sm *StatementManager) cleanup() {
 func generateStatementHandle() string {
 	id := uuid.New()
 	return fmt.Sprintf("01%s", id.String()[:32])
+}
+
+// StatementSummary describes a finished or running statement for a history
+// listing. It carries no result set: a history is scanned, not read.
+type StatementSummary struct {
+	Handle       string
+	Status       StatementStatus
+	SQLText      string
+	Database     string
+	Schema       string
+	Warehouse    string
+	CreatedOn    time.Time
+	CompletedOn  *time.Time
+	RowCount     int
+	ErrorCode    string
+	ErrorMessage string
+}
+
+// ListStatements returns the statements still held, most recent first.
+//
+// The manager keeps statements in memory for its TTL, so this is a recent
+// history rather than a complete one: statements older than the TTL, and every
+// statement from before a restart, are gone. A limit of zero returns them all.
+func (sm *StatementManager) ListStatements(limit int) []StatementSummary {
+	sm.mu.RLock()
+	summaries := make([]StatementSummary, 0, len(sm.statements))
+	for _, statement := range sm.statements {
+		summaries = append(summaries, summarize(statement))
+	}
+	sm.mu.RUnlock()
+
+	sort.Slice(summaries, func(i, j int) bool {
+		return summaries[i].CreatedOn.After(summaries[j].CreatedOn)
+	})
+
+	if limit > 0 && len(summaries) > limit {
+		summaries = summaries[:limit]
+	}
+	return summaries
+}
+
+func summarize(statement *Statement) StatementSummary {
+	summary := StatementSummary{
+		Handle:      statement.Handle,
+		Status:      statement.Status,
+		SQLText:     statement.SQLText,
+		Database:    statement.Database,
+		Schema:      statement.Schema,
+		Warehouse:   statement.Warehouse,
+		CreatedOn:   statement.CreatedOn,
+		CompletedOn: statement.CompletedOn,
+	}
+
+	if statement.Result != nil {
+		summary.RowCount = len(statement.Result.Rows)
+	}
+	if statement.Error != nil {
+		summary.ErrorCode = statement.Error.Code
+		summary.ErrorMessage = statement.Error.Message
+	}
+
+	return summary
+}
+
+// RetentionPeriod is how long a statement is kept before it is discarded.
+func (sm *StatementManager) RetentionPeriod() time.Duration {
+	return sm.ttl
 }
