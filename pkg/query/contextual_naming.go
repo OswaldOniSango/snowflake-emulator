@@ -16,6 +16,26 @@ var contextualTablePatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\b(JOIN\s+)([^\s(;]+)`),
 	regexp.MustCompile(`(?i)\b(ALTER\s+TABLE\s+)([^\s(;]+)`),
 	regexp.MustCompile(`(?i)\b(DROP\s+TABLE(?:\s+IF\s+EXISTS)?\s+)([^\s(;]+)`),
+	// MERGE resolves two tables. The USING pattern cannot match a JOIN's
+	// USING (col) list, because the capture group rejects a leading "(".
+	regexp.MustCompile(`(?i)\b(DESC(?:RIBE)?\s+TABLE\s+)([^\s(;]+)`),
+	regexp.MustCompile(`(?i)\b(TRUNCATE\s+TABLE\s+)([^\s(;]+)`),
+	regexp.MustCompile(`(?i)\b(MERGE\s+INTO\s+)([^\s(;]+)`),
+	regexp.MustCompile(`(?i)\b(USING\s+)([^\s(;]+)`),
+}
+
+// sqlKeywords are words a table-reference pattern can capture by accident. The
+// clearest case is a MERGE's "WHEN MATCHED THEN UPDATE SET", where the UPDATE
+// pattern would otherwise rewrite SET as though it named a table.
+var sqlKeywords = map[string]bool{
+	"SET":    true,
+	"VALUES": true,
+	"SELECT": true,
+	"WHERE":  true,
+	"FROM":   true,
+	"USING":  true,
+	"ON":     true,
+	"AS":     true,
 }
 
 // rewriteContextualTableReferences maps unqualified Snowflake table names to
@@ -34,6 +54,9 @@ func rewriteContextualTableReferences(sql string, executionContext ExecutionCont
 			}
 			name := strings.TrimSpace(parts[2])
 			if strings.Contains(name, ".") || strings.HasPrefix(name, "_") || !identifierPattern.MatchString(name) {
+				return match
+			}
+			if sqlKeywords[strings.ToUpper(name)] {
 				return match
 			}
 			return parts[1] + BuildTableName(executionContext.Database, executionContext.Schema, name)

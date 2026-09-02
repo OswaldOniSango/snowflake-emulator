@@ -57,6 +57,12 @@ func setupTestEmulator(t *testing.T) *httptest.Server {
 		t.Fatalf("failed to create repository: %v", err)
 	}
 
+	// Mirror the real server's startup: it creates the default namespace that
+	// the gosnowflake DSN below connects to.
+	if err := repo.EnsureDefaultNamespace(context.Background()); err != nil {
+		t.Fatalf("failed to create default namespace: %v", err)
+	}
+
 	sessionMgr := session.NewManager(1 * time.Hour)
 	executor := query.NewExecutor(connMgr, repo)
 
