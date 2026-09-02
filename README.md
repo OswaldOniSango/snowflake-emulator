@@ -386,6 +386,7 @@ go run ./example/gosnowflake
 | `/api/v2/databases/{db}` | GET, PUT, DELETE | Get/Alter/Drop database |
 | `/api/v2/databases/{db}/schemas` | GET, POST | List/Create schemas |
 | `/api/v2/databases/{db}/schemas/{schema}` | GET, DELETE | Get/Drop schema |
+| `/api/v2/databases/{db}/schemas/{schema}/objects` | GET | List everything a schema contains (tables, streams, procedures, tasks, stages) |
 | `/api/v2/databases/{db}/schemas/{schema}/tables` | GET, POST | List/Create tables |
 | `/api/v2/databases/{db}/schemas/{schema}/tables/{table}` | GET, PUT, DELETE | Get/Alter/Drop table |
 | `/api/v2/warehouses` | GET, POST | List/Create warehouses |

@@ -1,6 +1,7 @@
 import "./style.css";
 import { runStatement, StatementError, translateStatement } from "./api";
 import { createEditor } from "./editor";
+import { createExplorer } from "./explorer";
 import { renderGrid, renderNotice } from "./grid";
 import { renderTranslation } from "./translation";
 import { checkHealth } from "./health";
@@ -46,6 +47,9 @@ const SHELL = `
 </header>
 
 <main class="workspace">
+  <aside class="sidebar" data-role="sidebar"></aside>
+
+  <div class="center">
   <section class="editor" data-role="editor"></section>
 
   <div class="toolbar">
@@ -62,6 +66,7 @@ const SHELL = `
   </div>
 
   <section class="dock" data-role="dock" aria-live="polite"></section>
+  </div>
 </main>`;
 
 function pick<T extends HTMLElement>(root: ParentNode, role: string): T {
@@ -194,6 +199,12 @@ function main(): void {
       const tab = button.dataset["tab"];
       showTab(tab === "translation" ? "translation" : "results");
     });
+  });
+
+  createExplorer({
+    parent: pick(root, "sidebar"),
+    context: CONTEXT,
+    onInsert: (name) => editor.insert(name),
   });
 
   showTab("results");

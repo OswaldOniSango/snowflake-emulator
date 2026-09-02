@@ -522,3 +522,100 @@ func TestEnsureDefaultNamespace(t *testing.T) {
 		t.Errorf("found %d instances of %s, want exactly 1", count, config.DefaultDatabase)
 	}
 }
+
+// TestListPhysicalTables covers the gap it exists to close: _metadata_tables
+// only records tables created through the REST API, so a table created with
+// SQL is invisible to ListTables and has to be read from DuckDB instead.
+func TestListPhysicalTables(t *testing.T) {
+	repo := setupTestRepository(t)
+	ctx := context.Background()
+
+	if err := repo.EnsureDefaultNamespace(ctx); err != nil {
+		t.Fatalf("EnsureDefaultNamespace() error = %v", err)
+	}
+
+	// Created the way the executor creates them: a DuckDB schema per database,
+	// and the Snowflake schema as a prefix on the table name.
+	for _, statement := range []string{
+		`CREATE TABLE TEST_DB.PUBLIC_USERS (id INTEGER)`,
+		`CREATE TABLE TEST_DB.PUBLIC_ORDERS_STAGING (id INTEGER)`,
+		`CREATE TABLE TEST_DB.STAGING_USERS (id INTEGER)`,
+	} {
+		if _, err := repo.mgr.Exec(ctx, statement); err != nil {
+			t.Fatalf("creating a fixture table: %v", err)
+		}
+	}
+
+	tests := []struct {
+		name   string
+		schema string
+		want   []string
+	}{
+		{
+			// A name with its own underscores keeps them: only the schema
+			// prefix is stripped.
+			name:   "tables in the schema, with logical names",
+			schema: "PUBLIC",
+			want:   []string{"ORDERS_STAGING", "USERS"},
+		},
+		{
+			name:   "another schema sees only its own",
+			schema: "STAGING",
+			want:   []string{"USERS"},
+		},
+		{
+			name:   "an empty schema lists nothing",
+			schema: "ANALYTICS",
+			want:   []string{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := repo.ListPhysicalTables(ctx, "TEST_DB", tt.schema)
+			if err != nil {
+				t.Fatalf("ListPhysicalTables() error = %v", err)
+			}
+			if diff := cmp.Diff(tt.want, got); diff != "" {
+				t.Errorf("tables mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestListPhysicalTablesRequiresANamespace(t *testing.T) {
+	repo := setupTestRepository(t)
+	ctx := context.Background()
+
+	for _, tt := range []struct{ database, schema string }{
+		{"", "PUBLIC"},
+		{"TEST_DB", ""},
+		{"", ""},
+	} {
+		if _, err := repo.ListPhysicalTables(ctx, tt.database, tt.schema); err == nil {
+			t.Errorf("ListPhysicalTables(%q, %q) succeeded, want an error", tt.database, tt.schema)
+		}
+	}
+}
+
+// TestListPhysicalTablesExcludesInternals pins that the emulator's own catalog
+// tables never reach an object explorer.
+func TestListPhysicalTablesExcludesInternals(t *testing.T) {
+	repo := setupTestRepository(t)
+	ctx := context.Background()
+
+	if err := repo.EnsureDefaultNamespace(ctx); err != nil {
+		t.Fatalf("EnsureDefaultNamespace() error = %v", err)
+	}
+
+	got, err := repo.ListPhysicalTables(ctx, "TEST_DB", "PUBLIC")
+	if err != nil {
+		t.Fatalf("ListPhysicalTables() error = %v", err)
+	}
+
+	for _, name := range got {
+		if strings.HasPrefix(name, "_METADATA") || strings.HasPrefix(name, "_metadata") {
+			t.Errorf("internal table %q leaked into the listing", name)
+		}
+	}
+}

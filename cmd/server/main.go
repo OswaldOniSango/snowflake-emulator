@@ -169,6 +169,9 @@ func newRouter(
 		r.Delete("/databases/{database}/schemas/{schema}", restAPIHandler.DeleteSchema)
 
 		// Table endpoints
+		// Everything a schema contains, for the console's object explorer
+		r.Get("/databases/{database}/schemas/{schema}/objects", restAPIHandler.ListSchemaObjects)
+
 		r.Get("/databases/{database}/schemas/{schema}/tables", restAPIHandler.ListTables)
 		r.Post("/databases/{database}/schemas/{schema}/tables", restAPIHandler.CreateTable)
 		r.Get("/databases/{database}/schemas/{schema}/tables/{table}", restAPIHandler.GetTable)
