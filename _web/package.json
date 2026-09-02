@@ -7,12 +7,13 @@
     "node": ">=24"
   },
   "scripts": {
-    "dev": "vite",
-    "build": "npm run typecheck && vite build && node scripts/publish-dist.mjs",
-    "typecheck": "tsc --noEmit",
+    "dev": "npm run generate && vite",
+    "build": "npm run generate && npm run typecheck && vite build && node scripts/publish-dist.mjs",
+    "typecheck": "npm run generate && tsc --noEmit",
     "lint": "eslint .",
-    "test": "vitest run",
-    "preview": "vite preview"
+    "test": "npm run generate && vitest run",
+    "preview": "vite preview",
+    "generate": "node scripts/generate-limitations.mjs"
   },
   "devDependencies": {
     "@codemirror/commands": "^6.11.0",

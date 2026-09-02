@@ -30,18 +30,20 @@ export function createWarehousesView(parent: HTMLElement): { refresh: () => Prom
   parent.append(root);
 
   async function refresh(): Promise<void> {
-    root.replaceChildren(header());
+    root.replaceChildren(header(), renderNotice("info", "Loading warehouses…"));
     try {
       const warehouses = await listWarehouses();
       // The API lists them in whatever order it holds them; sorting keeps a
       // card from moving under the pointer after an action.
       warehouses.sort((a, b) => a.name.localeCompare(b.name));
+      root.replaceChildren(header());
       root.append(
         warehouses.length === 0
           ? renderNotice("info", "No warehouses", "Create one to see how the API reports it.")
           : grid(warehouses),
       );
     } catch (cause) {
+      root.replaceChildren(header());
       root.append(renderNotice("error", "Could not load warehouses", messageOf(cause)));
     }
   }

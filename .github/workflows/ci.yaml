@@ -56,6 +56,12 @@ jobs:
         run: npm --prefix _web run lint
       - name: Type check
         run: npm --prefix _web run typecheck
+      # The limitations the console shows are generated from the README, so a
+      # stale copy would let the two disagree without anyone noticing.
+      - name: Check generated files are current
+        run: |
+          npm --prefix _web run generate
+          git diff --exit-code -- _web/src/limitations.generated.ts
       - name: Test
         run: npm --prefix _web run test
       - name: Build

@@ -22,6 +22,7 @@ export function createHistoryView(options: HistoryOptions): { refresh: () => Pro
   options.parent.append(root);
 
   async function refresh(): Promise<void> {
+    root.replaceChildren(header(""), renderNotice("info", "Loading history…"));
     try {
       const history = await listHistory();
       root.replaceChildren(header(history.retainedFor));

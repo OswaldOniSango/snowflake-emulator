@@ -7,6 +7,8 @@ import { checkHealth } from "./health";
 import { createContextPicker } from "./context-picker";
 import { createHistoryView } from "./history";
 import { createWarehousesView } from "./warehouses";
+import { createLimitationsButton } from "./limitations";
+import { createThemeToggle } from "./theme";
 import { splitStatements, statementAt } from "./statements";
 import { renderTranslation } from "./translation";
 import {
@@ -47,6 +49,7 @@ const SHELL = `
   <div class="conn" data-state="pending" role="status">
     <span class="dot"></span><span data-role="health">Checking emulator…</span>
   </div>
+  <div data-role="theme"></div>
 </header>
 
 <main class="workspace" data-view-pane="worksheets">
@@ -80,7 +83,12 @@ const SHELL = `
 </main>
 
 <div class="view-pane" data-view-pane="warehouses" hidden></div>
-<div class="view-pane" data-view-pane="history" hidden></div>`;
+<div class="view-pane" data-view-pane="history" hidden></div>
+
+<footer class="footer">
+  <span>Not affiliated with or endorsed by Snowflake Inc. Snowflake is a trademark of Snowflake Inc.</span>
+  <span data-role="limitations"></span>
+</footer>`;
 
 function pick<T extends HTMLElement>(root: ParentNode, role: string): T {
   const node = root.querySelector<T>(`[data-role="${role}"]`);
@@ -112,6 +120,8 @@ function main(): void {
   let running = false;
 
   pick(root, "shortcut").textContent = isApplePlatform() ? "⌘↵" : "Ctrl+↵";
+  pick(root, "theme").append(createThemeToggle());
+  pick(root, "limitations").append(createLimitationsButton());
 
   const editor: Editor = createEditor({
     parent: pick(root, "editor"),

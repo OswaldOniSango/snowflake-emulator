@@ -109,6 +109,14 @@ The emulator serves a browser console at `http://localhost:8080/`. It is a stati
 bundle compiled into the binary, so Docker images and releases need no extra
 assets and no separate process.
 
+| | |
+|---|---|
+| **Worksheets** | Tabbed SQL editor with syntax highlighting. `Cmd`/`Ctrl` + `Enter` runs the statement under the cursor, or the selection. Multiple statements in one buffer are split correctly — including procedure bodies between `$$`, which are full of semicolons. Worksheets, their names and their execution context are kept in the browser. |
+| **Translated SQL** | Shows the DuckDB SQL a statement becomes, beside what you wrote, without running it. Statements handled by a processor (COPY, MERGE, procedures) say so rather than showing a partial translation as though it were the whole story. |
+| **Object explorer** | Databases, schemas, tables, streams, procedures, tasks and stages. Clicking an object writes its name into the editor. |
+| **Warehouses** | Create, resume, suspend and drop. Compute is emulated: a suspended warehouse changes what the API reports, not where statements run. |
+| **History** | Recent statements with their status, duration and handle. Click one to reopen it in a new worksheet. Statements are held in memory and are lost on restart. |
+
 > **Note**: The console is an original interface for this emulator. It is not
 > affiliated with or endorsed by Snowflake Inc.
 
