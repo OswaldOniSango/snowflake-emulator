@@ -253,7 +253,7 @@ func TestMergeProcessor_ExecuteMerge_Integration(t *testing.T) {
 			},
 		}
 
-		result, err := handler.ExecuteMerge(ctx, stmt)
+		result, err := handler.ExecuteMerge(ctx, ExecutionContext{}, stmt)
 		if err != nil {
 			t.Fatalf("ExecuteMerge failed: %v", err)
 		}
@@ -297,7 +297,7 @@ func TestMergeProcessor_ExecuteMerge_Integration(t *testing.T) {
 			},
 		}
 
-		_, err := handler.ExecuteMerge(ctx, stmt)
+		_, err := handler.ExecuteMerge(ctx, ExecutionContext{}, stmt)
 		if err != nil {
 			t.Fatalf("ExecuteMerge failed: %v", err)
 		}
@@ -357,5 +357,68 @@ func TestClassifier_Merge(t *testing.T) {
 	}
 	if result.IsQuery {
 		t.Error("Expected IsQuery to be false")
+	}
+}
+
+func TestResolveMergeTables(t *testing.T) {
+	withContext := ExecutionContext{Database: "TEST_DB", Schema: "PUBLIC"}
+
+	tests := []struct {
+		name             string
+		executionContext ExecutionContext
+		target           string
+		source           string
+		wantTarget       string
+		wantSource       string
+	}{
+		{
+			name:             "short names resolve to physical names",
+			executionContext: withContext,
+			target:           "merge_target",
+			source:           "merge_source",
+			wantTarget:       "TEST_DB.PUBLIC_MERGE_TARGET",
+			wantSource:       "TEST_DB.PUBLIC_MERGE_SOURCE",
+		},
+		{
+			name:             "qualified names are left alone",
+			executionContext: withContext,
+			target:           "OTHER_DB.PUBLIC_TARGET",
+			source:           "merge_source",
+			wantTarget:       "OTHER_DB.PUBLIC_TARGET",
+			wantSource:       "TEST_DB.PUBLIC_MERGE_SOURCE",
+		},
+		{
+			name:             "a subquery source is left alone",
+			executionContext: withContext,
+			target:           "merge_target",
+			source:           "(SELECT 1 AS id)",
+			wantTarget:       "TEST_DB.PUBLIC_MERGE_TARGET",
+			wantSource:       "(SELECT 1 AS id)",
+		},
+		{
+			name:             "without a context nothing is resolved",
+			executionContext: ExecutionContext{},
+			target:           "merge_target",
+			source:           "merge_source",
+			wantTarget:       "merge_target",
+			wantSource:       "merge_source",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stmt := &MergeStatement{TargetTable: tt.target, SourceTable: tt.source}
+			got := resolveMergeTables(stmt, tt.executionContext)
+
+			if got.TargetTable != tt.wantTarget {
+				t.Errorf("TargetTable = %q, want %q", got.TargetTable, tt.wantTarget)
+			}
+			if got.SourceTable != tt.wantSource {
+				t.Errorf("SourceTable = %q, want %q", got.SourceTable, tt.wantSource)
+			}
+			if stmt.TargetTable != tt.target || stmt.SourceTable != tt.source {
+				t.Error("resolveMergeTables mutated its argument; it must return a copy")
+			}
+		})
 	}
 }

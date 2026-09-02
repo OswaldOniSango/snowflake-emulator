@@ -10,7 +10,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: ghcr.io/nnnkkk7/snowflake-emulator:latest
+    image: snowflake-emulator:local
     container_name: snowflake-emulator
     ports:
       - "${PORT:-8080}:8080"

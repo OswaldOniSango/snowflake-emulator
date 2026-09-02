@@ -141,7 +141,7 @@ func (p *ProcedureProcessor) Show(ctx context.Context, _ string) (*Result, error
 	for _, procedure := range procedures {
 		rows = append(rows, []interface{}{procedure.CreatedAt, procedure.Name, procedure.Arguments, procedure.ReturnType, procedure.Language})
 	}
-	columns := []string{"created_on", "name", "arguments", "return_type", "language"}
+	columns := []string{columnCreatedOn, columnName, "arguments", "return_type", "language"}
 	return &Result{Columns: columns, ColumnTypes: textColumnMetadata(columns), Rows: rows}, nil
 }
 
@@ -164,14 +164,6 @@ func (p *ProcedureProcessor) resolveSchema(ctx context.Context, databaseName, sc
 		return nil, err
 	}
 	return schema, nil
-}
-
-func parseQualifiedProcedureName(name string) (string, string, string, error) {
-	parts := strings.Split(name, ".")
-	if len(parts) != 3 {
-		return "", "", "", fmt.Errorf("procedure name %s must be fully qualified as DATABASE.SCHEMA.NAME", name)
-	}
-	return strings.ToUpper(parts[0]), strings.ToUpper(parts[1]), strings.ToUpper(parts[2]), nil
 }
 
 func parseProcedureArguments(value string) ([]ProcedureArgument, error) {
@@ -227,9 +219,10 @@ func splitSQL(value string, separator rune) []string {
 }
 
 func textColumnMetadata(columns []string) []servertypes.ColumnMetadata {
-	metadata := make([]servertypes.ColumnMetadata, len(columns))
+	// Not named "metadata": that shadows the imported package of the same name.
+	result := make([]servertypes.ColumnMetadata, len(columns))
 	for i, column := range columns {
-		metadata[i] = servertypes.ColumnMetadata{Name: column, Type: TypeText, Nullable: true}
+		result[i] = servertypes.ColumnMetadata{Name: column, Type: TypeText, Nullable: true}
 	}
-	return metadata
+	return result
 }

@@ -50,9 +50,9 @@ func setupTestQueryHandler(t *testing.T) (*QueryHandler, *session.Manager, *meta
 		t.Fatalf("failed to create database: %v", err)
 	}
 
-	schema, err := repo.CreateSchema(ctx, database.ID, "PUBLIC", "")
+	schema, err := repo.GetSchemaByName(ctx, database.ID, "PUBLIC")
 	if err != nil {
-		t.Fatalf("failed to create schema: %v", err)
+		t.Fatalf("failed to get default schema: %v", err)
 	}
 
 	// Create test table

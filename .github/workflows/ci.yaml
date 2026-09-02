@@ -74,11 +74,11 @@ jobs:
         with:
           context: .
           load: true
-          tags: ghcr.io/nnnkkk7/snowflake-emulator:test
+          tags: snowflake-emulator:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: Start emulator container
-        run: docker run -d --name snowflake-emulator -p 8080:8080 ghcr.io/nnnkkk7/snowflake-emulator:test
+        run: docker run -d --name snowflake-emulator -p 8080:8080 snowflake-emulator:ci
       - name: Wait for emulator to be ready
         run: |
           for i in {1..30}; do

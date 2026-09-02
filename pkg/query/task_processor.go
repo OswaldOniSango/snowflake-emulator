@@ -106,7 +106,7 @@ func (p *TaskProcessor) Show(ctx context.Context) (*Result, error) {
 		}
 		rows = append(rows, []interface{}{task.CreatedAt, task.Name, database.Name, schema.Name, task.Warehouse, task.Schedule, task.State, task.Definition, task.LastExecutedAt, task.LastCompletedAt, task.LastError})
 	}
-	columns := []string{"created_on", "name", "database_name", "schema_name", "warehouse", "schedule", "state", "definition", "last_executed_on", "last_completed_on", "last_error"}
+	columns := []string{columnCreatedOn, columnName, "database_name", "schema_name", "warehouse", "schedule", "state", "definition", "last_executed_on", "last_completed_on", "last_error"}
 	return &Result{Columns: columns, ColumnTypes: textColumnMetadata(columns), Rows: rows}, nil
 }
 
@@ -135,12 +135,13 @@ func (p *TaskProcessor) executeStoredTask(ctx context.Context, task *metadata.Ta
 
 	classifier := NewClassifier()
 	var result *ExecResult
-	if classifier.IsCall(task.Definition) {
+	switch {
+	case classifier.IsCall(task.Definition):
 		_, err = p.executor.QueryWithContext(ctx, taskContext, task.Definition)
 		result = &ExecResult{}
-	} else if classifier.Classify(task.Definition).IsQuery {
+	case classifier.Classify(task.Definition).IsQuery:
 		err = fmt.Errorf("task definition must be DML or CALL")
-	} else {
+	default:
 		result, err = p.executor.ExecuteWithContext(ctx, taskContext, task.Definition)
 	}
 	errorMessage := ""
@@ -151,7 +152,7 @@ func (p *TaskProcessor) executeStoredTask(ctx context.Context, task *metadata.Ta
 		if err == nil {
 			return nil, recordErr
 		}
-		return nil, fmt.Errorf("%v; additionally failed to record task execution: %w", err, recordErr)
+		return nil, fmt.Errorf("%w; additionally failed to record task execution: %w", err, recordErr)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("task %s execution failed: %w", task.Name, err)

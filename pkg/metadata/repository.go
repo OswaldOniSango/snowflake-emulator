@@ -9,7 +9,14 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/nnnkkk7/snowflake-emulator/pkg/config"
 	"github.com/nnnkkk7/snowflake-emulator/pkg/connection"
+)
+
+// SQL fragments shared by the object repositories.
+const (
+	sqlWhereSchemaID = " WHERE schema_id = ?"
+	sqlOrderByName   = " ORDER BY name"
 )
 
 // Repository manages Snowflake metadata (databases, schemas, tables) in DuckDB.
@@ -155,6 +162,30 @@ func NewRepository(mgr *connection.Manager) (*Repository, error) {
 	}
 
 	return repo, nil
+}
+
+// EnsureDefaultNamespace creates the default database and schema when they are
+// absent. config.DefaultDatabase and config.DefaultSchema are the namespace the
+// documented quickstart DSN connects to, and execution contexts are validated
+// against the catalog, so a fresh emulator must actually contain them.
+//
+// It is idempotent: callers that manage their own namespaces are unaffected.
+func (r *Repository) EnsureDefaultNamespace(ctx context.Context) error {
+	database, err := r.GetDatabaseByName(ctx, config.DefaultDatabase)
+	if err != nil {
+		database, err = r.CreateDatabase(ctx, config.DefaultDatabase, "Default database")
+		if err != nil {
+			return fmt.Errorf("failed to create default database %s: %w", config.DefaultDatabase, err)
+		}
+	}
+
+	if _, err := r.GetSchemaByName(ctx, database.ID, config.DefaultSchema); err != nil {
+		if _, err := r.CreateSchema(ctx, database.ID, config.DefaultSchema, "Default schema"); err != nil {
+			return fmt.Errorf("failed to create default schema %s: %w", config.DefaultSchema, err)
+		}
+	}
+
+	return nil
 }
 
 // initMetadataTables creates metadata tables if they don't exist.
@@ -312,6 +343,14 @@ func (r *Repository) CreateDatabase(ctx context.Context, name, comment string) (
 	})
 	if err != nil {
 		return nil, err
+	}
+
+	// Snowflake gives every new database a PUBLIC schema, and the emulator
+	// validates execution contexts against the catalog — without this, a
+	// database created through the REST API or auto-created at login would
+	// reject every statement that targets DATABASE.PUBLIC.
+	if _, err := r.CreateSchema(ctx, id, config.DefaultSchema, "Public schema"); err != nil {
+		return nil, fmt.Errorf("failed to create default schema for database %s: %w", normalizedName, err)
 	}
 
 	// Retrieve the created database

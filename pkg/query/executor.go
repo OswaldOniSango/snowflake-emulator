@@ -280,8 +280,6 @@ func (e *Executor) replaceQuestionMarkPlaceholders(sql string, bindings map[stri
 }
 
 // formatBindingValue formats a binding value for SQL substitution.
-//
-//nolint:gocyclo // switch statement for type handling inherently has many branches
 func formatBindingValue(b *QueryBindingValue) (string, error) {
 	if b == nil {
 		return ValueNull, nil
@@ -433,7 +431,7 @@ func (e *Executor) ExecuteWithContext(ctx context.Context, executionContext Exec
 
 	// Handle MERGE INTO statements
 	if IsMerge(sql) {
-		return e.executeMerge(ctx, sql)
+		return e.executeMerge(ctx, executionContext, sql)
 	}
 
 	// Execute regular SQL statement
@@ -448,7 +446,7 @@ func (e *Executor) executeRaw(ctx context.Context, sql string) (*ExecResult, err
 }
 
 func (e *Executor) executeRawWithContext(ctx context.Context, executionContext ExecutionContext, sql string) (*ExecResult, error) {
-	rewrittenSQL, consumptions, err := e.streamProcessor.RewriteReferencesForConsumption(ctx, executionContext, sql)
+	rewrittenSQL, consumptions, err := e.streamProcessor.rewriteReferencesForConsumption(ctx, executionContext, sql)
 	if err != nil {
 		return nil, err
 	}
@@ -474,7 +472,7 @@ func (e *Executor) executeRawWithContext(ctx context.Context, executionContext E
 	if err != nil {
 		return nil, fmt.Errorf("failed to get rows affected: %w", err)
 	}
-	if err := e.streamProcessor.AdvanceOffsets(ctx, consumptions); err != nil {
+	if err := e.streamProcessor.advanceOffsets(ctx, consumptions); err != nil {
 		return nil, err
 	}
 
@@ -592,8 +590,10 @@ func (e *Executor) executeCopy(ctx context.Context, sql string) (*ExecResult, er
 	}, nil
 }
 
-// executeMerge handles MERGE INTO statements.
-func (e *Executor) executeMerge(ctx context.Context, sql string) (*ExecResult, error) {
+// executeMerge handles MERGE INTO statements. The execution context travels
+// with the statement: MERGE decomposes into statements that must resolve short
+// table names against the same database and schema as the original.
+func (e *Executor) executeMerge(ctx context.Context, executionContext ExecutionContext, sql string) (*ExecResult, error) {
 	if e.mergeProcessor == nil {
 		return nil, fmt.Errorf("MERGE processor not configured")
 	}
@@ -605,7 +605,7 @@ func (e *Executor) executeMerge(ctx context.Context, sql string) (*ExecResult, e
 	}
 
 	// Execute MERGE
-	result, err := e.mergeProcessor.ExecuteMerge(ctx, stmt)
+	result, err := e.mergeProcessor.ExecuteMerge(ctx, executionContext, stmt)
 	if err != nil {
 		return nil, fmt.Errorf("MERGE failed: %w", err)
 	}

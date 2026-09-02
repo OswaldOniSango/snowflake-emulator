@@ -16,8 +16,8 @@ func setupTaskTest(t *testing.T) (*Executor, context.Context, ExecutionContext) 
 	if err != nil {
 		t.Fatalf("CreateDatabase() error = %v", err)
 	}
-	if _, err := repo.CreateSchema(ctx, database.ID, "PUBLIC", ""); err != nil {
-		t.Fatalf("CreateSchema() error = %v", err)
+	if _, err := repo.GetSchemaByName(ctx, database.ID, "PUBLIC"); err != nil {
+		t.Fatalf("GetSchemaByName() error = %v", err)
 	}
 	warehouseManager := warehouse.NewManager()
 	if _, err := warehouseManager.CreateWarehouse(ctx, "TASK_WH", "X-SMALL", ""); err != nil {

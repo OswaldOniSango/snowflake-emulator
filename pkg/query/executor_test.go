@@ -47,9 +47,9 @@ func TestExecutor_ExecuteQuery(t *testing.T) {
 		t.Fatalf("CreateDatabase() error = %v", err)
 	}
 
-	schema, err := repo.CreateSchema(ctx, db.ID, "PUBLIC", "")
+	schema, err := repo.GetSchemaByName(ctx, db.ID, "PUBLIC")
 	if err != nil {
-		t.Fatalf("CreateSchema() error = %v", err)
+		t.Fatalf("GetSchemaByName() error = %v", err)
 	}
 
 	columns := []metadata.ColumnDef{
@@ -100,9 +100,9 @@ func TestExecutor_ExecuteWithTranslation(t *testing.T) { //nolint:gocyclo // Tes
 		t.Fatalf("CreateDatabase() error = %v", err)
 	}
 
-	schema, err := repo.CreateSchema(ctx, db.ID, "PUBLIC", "")
+	schema, err := repo.GetSchemaByName(ctx, db.ID, "PUBLIC")
 	if err != nil {
-		t.Fatalf("CreateSchema() error = %v", err)
+		t.Fatalf("GetSchemaByName() error = %v", err)
 	}
 
 	columns := []metadata.ColumnDef{
@@ -206,9 +206,9 @@ func TestExecutor_DDLOperations(t *testing.T) {
 		t.Fatalf("CreateDatabase() error = %v", err)
 	}
 
-	schema, err := repo.CreateSchema(ctx, db.ID, "PUBLIC", "")
+	schema, err := repo.GetSchemaByName(ctx, db.ID, "PUBLIC")
 	if err != nil {
-		t.Fatalf("CreateSchema() error = %v", err)
+		t.Fatalf("GetSchemaByName() error = %v", err)
 	}
 	_ = schema // Suppress unused warning
 
@@ -294,9 +294,9 @@ func TestExecutor_GetColumnInfo(t *testing.T) {
 		t.Fatalf("CreateDatabase() error = %v", err)
 	}
 
-	schema, err := repo.CreateSchema(ctx, db.ID, "PUBLIC", "")
+	schema, err := repo.GetSchemaByName(ctx, db.ID, "PUBLIC")
 	if err != nil {
-		t.Fatalf("CreateSchema() error = %v", err)
+		t.Fatalf("GetSchemaByName() error = %v", err)
 	}
 
 	columns := []metadata.ColumnDef{
