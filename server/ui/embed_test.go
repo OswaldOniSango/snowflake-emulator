@@ -30,6 +30,9 @@ func newHandler(t *testing.T, root fstest.MapFS) http.Handler {
 	return h
 }
 
+// do performs a request against h. Callers own the returned body and must close
+// it; the bodyclose linter only recognises a Close on a syntactically visible
+// path, so deferring inside a helper would not satisfy it.
 func do(t *testing.T, h http.Handler, method, target string) *http.Response {
 	t.Helper()
 	rec := httptest.NewRecorder()
@@ -39,7 +42,6 @@ func do(t *testing.T, h http.Handler, method, target string) *http.Response {
 
 func bodyOf(t *testing.T, resp *http.Response) string {
 	t.Helper()
-	defer func() { _ = resp.Body.Close() }()
 	b, err := io.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatalf("reading body: %v", err)
@@ -106,14 +108,13 @@ func TestHandlerServesBundle(t *testing.T) {
 			wantBody:   "404 page not found\n",
 		},
 		{
-			name:        "index.html is served in place rather than redirected",
-			target:      "/index.html",
-			wantStatus:  http.StatusOK,
-			wantBody:    testIndex,
-			wantCaching: "",
+			name:       "index.html is served in place rather than redirected",
+			target:     "/index.html",
+			wantStatus: http.StatusOK,
+			wantBody:   testIndex,
 		},
 		{
-			name:       "nested client routes still reach the entry point",
+			name:       "nested files are served from the bundle",
 			target:     "/nested/page/asset.txt",
 			wantStatus: http.StatusOK,
 			wantBody:   "nested",
@@ -123,6 +124,8 @@ func TestHandlerServesBundle(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			resp := do(t, h, http.MethodGet, tt.target)
+			defer func() { _ = resp.Body.Close() }()
+
 			if resp.StatusCode != tt.wantStatus {
 				t.Errorf("status = %d, want %d", resp.StatusCode, tt.wantStatus)
 			}
@@ -142,6 +145,8 @@ func TestHandlerHeadRequestOmitsBody(t *testing.T) {
 	h := newHandler(t, builtBundle())
 
 	resp := do(t, h, http.MethodHead, "/")
+	defer func() { _ = resp.Body.Close() }()
+
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusOK)
 	}
@@ -156,13 +161,14 @@ func TestHandlerRejectsWriteMethods(t *testing.T) {
 	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete} {
 		t.Run(method, func(t *testing.T) {
 			resp := do(t, h, method, "/")
+			defer func() { _ = resp.Body.Close() }()
+
 			if resp.StatusCode != http.StatusMethodNotAllowed {
 				t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusMethodNotAllowed)
 			}
 			if got := resp.Header.Get("Allow"); got != "GET, HEAD" {
 				t.Errorf("Allow = %q, want %q", got, "GET, HEAD")
 			}
-			_ = resp.Body.Close()
 		})
 	}
 }
@@ -201,6 +207,8 @@ func TestHandlerWithoutBundleExplainsHowToBuild(t *testing.T) {
 	h := newHandler(t, fstest.MapFS{".gitkeep": {Data: []byte{}}})
 
 	resp := do(t, h, http.MethodGet, "/")
+	defer func() { _ = resp.Body.Close() }()
+
 	if resp.StatusCode != http.StatusServiceUnavailable {
 		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusServiceUnavailable)
 	}

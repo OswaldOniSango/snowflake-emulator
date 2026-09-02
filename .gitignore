@@ -26,6 +26,11 @@ vendor/
 go.work
 go.work.sum
 
+# DuckDB database files created by running the emulator locally
+*.db
+*.db.wal
+*.duckdb
+
 # env file
 .env
 
