@@ -102,6 +102,54 @@ func TestManager_Query_Concurrent(t *testing.T) {
 	}
 }
 
+func TestManagerWithConnectionIsolatesTemporaryTables(t *testing.T) {
+	db := setupTestDuckDB(t)
+	mgr := NewManager(db)
+	ctx := context.Background()
+
+	ready := make(chan struct{}, 2)
+	release := make(chan struct{})
+	results := make(chan int, 2)
+	errors := make(chan error, 2)
+
+	for _, value := range []int{10, 20} {
+		go func(value int) {
+			err := mgr.WithConnection(ctx, func(pinned *Manager) error {
+				if _, err := pinned.Exec(ctx, "CREATE TEMPORARY TABLE shared_name (value INTEGER)"); err != nil {
+					return err
+				}
+				if _, err := pinned.Exec(ctx, "INSERT INTO shared_name VALUES (?)", value); err != nil {
+					return err
+				}
+				ready <- struct{}{}
+				<-release
+				var got int
+				if err := pinned.QueryRow(ctx, "SELECT value FROM shared_name").Scan(&got); err != nil {
+					return err
+				}
+				results <- got
+				return nil
+			})
+			errors <- err
+		}(value)
+	}
+
+	<-ready
+	<-ready
+	close(release)
+
+	seen := map[int]bool{}
+	for range 2 {
+		if err := <-errors; err != nil {
+			t.Fatalf("WithConnection() error = %v", err)
+		}
+		seen[<-results] = true
+	}
+	if !seen[10] || !seen[20] {
+		t.Fatalf("isolated temporary table results = %v", seen)
+	}
+}
+
 // TestManager_Exec_Sequential tests sequential write operations.
 // Based on DESIGN.md Section 15.3.1.
 func TestManager_Exec_Sequential(t *testing.T) {

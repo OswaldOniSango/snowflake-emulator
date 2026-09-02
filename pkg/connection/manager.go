@@ -15,23 +15,30 @@ import (
 //   - Transactions are also serialized to maintain consistency
 type Manager struct {
 	db      *sql.DB
-	writeMu sync.Mutex
+	runner  sqlRunner
+	writeMu *sync.Mutex
+}
+
+type sqlRunner interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
 
 // NewManager creates a new connection manager for the given database.
 func NewManager(db *sql.DB) *Manager {
-	return &Manager{db: db}
+	return &Manager{db: db, runner: db, writeMu: &sync.Mutex{}}
 }
 
 // Query executes a read query (can be concurrent).
 // Multiple goroutines can call Query simultaneously.
 func (m *Manager) Query(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
-	return m.db.QueryContext(ctx, query, args...)
+	return m.runner.QueryContext(ctx, query, args...)
 }
 
 // QueryRow executes a query that is expected to return at most one row.
 func (m *Manager) QueryRow(ctx context.Context, query string, args ...any) *sql.Row {
-	return m.db.QueryRowContext(ctx, query, args...)
+	return m.runner.QueryRowContext(ctx, query, args...)
 }
 
 // Exec executes a write operation (serialized).
@@ -39,7 +46,21 @@ func (m *Manager) QueryRow(ctx context.Context, query string, args ...any) *sql.
 func (m *Manager) Exec(ctx context.Context, query string, args ...any) (sql.Result, error) {
 	m.writeMu.Lock()
 	defer m.writeMu.Unlock()
-	return m.db.ExecContext(ctx, query, args...)
+	return m.runner.ExecContext(ctx, query, args...)
+}
+
+// WithConnection pins all operations performed by the callback to one
+// database/sql connection. This is required for DuckDB connection-scoped
+// objects such as temporary tables.
+func (m *Manager) WithConnection(ctx context.Context, fn func(*Manager) error) error {
+	conn, err := m.db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conn.Close() }()
+
+	pinned := &Manager{db: m.db, runner: conn, writeMu: m.writeMu}
+	return fn(pinned)
 }
 
 // ExecTx executes multiple statements in a transaction.

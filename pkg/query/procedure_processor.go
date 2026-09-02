@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
-	"unicode"
 
 	"github.com/nnnkkk7/snowflake-emulator/pkg/metadata"
 	servertypes "github.com/nnnkkk7/snowflake-emulator/server/types"
@@ -49,6 +48,12 @@ func (p *ProcedureProcessor) Create(ctx context.Context, executionContext Execut
 	arguments, err := parseProcedureArguments(match[3])
 	if err != nil {
 		return nil, err
+	}
+	if !strings.EqualFold(match[5], "SQL") {
+		return nil, fmt.Errorf("only LANGUAGE SQL procedures are supported")
+	}
+	if _, err := parseProcedureScript(strings.TrimSpace(match[6])); err != nil {
+		return nil, fmt.Errorf("invalid procedure %s body: %w", procedureName, err)
 	}
 	encodedArguments, err := json.Marshal(arguments)
 	if err != nil {
@@ -117,11 +122,13 @@ func (p *ProcedureProcessor) Call(ctx context.Context, executionContext Executio
 		return nil, fmt.Errorf("procedure %s expects %d arguments, got %d", procedure.Name, len(parameters), len(values))
 	}
 
-	body := procedure.Body
-	for i, parameter := range parameters {
-		body = replaceNamedBinding(body, parameter.Name, strings.TrimSpace(values[i]))
-	}
-	return p.executeBody(ctx, executionContext, procedure.Name, body)
+	var result *Result
+	err = p.executor.withPinnedConnection(ctx, func(executor *Executor) error {
+		var executeErr error
+		result, executeErr = p.executeBody(ctx, executor, executionContext, procedure.Name, procedure.Body, parameters, values)
+		return executeErr
+	})
+	return result, err
 }
 
 // Show returns all procedures currently stored in the emulator catalog.
@@ -138,40 +145,13 @@ func (p *ProcedureProcessor) Show(ctx context.Context, _ string) (*Result, error
 	return &Result{Columns: columns, ColumnTypes: textColumnMetadata(columns), Rows: rows}, nil
 }
 
-func (p *ProcedureProcessor) executeBody(ctx context.Context, executionContext ExecutionContext, procedureName, body string) (*Result, error) {
-	body = strings.TrimSpace(body)
-	upperBody := strings.ToUpper(body)
-	if strings.HasPrefix(upperBody, "BEGIN") && strings.HasSuffix(upperBody, "END") {
-		body = strings.TrimSpace(body[len("BEGIN") : len(body)-len("END")])
+func (p *ProcedureProcessor) executeBody(ctx context.Context, executor *Executor, executionContext ExecutionContext, procedureName, body string, parameters []ProcedureArgument, values []string) (*Result, error) {
+	script, err := parseProcedureScript(body)
+	if err != nil {
+		return nil, fmt.Errorf("invalid procedure %s body: %w", procedureName, err)
 	}
-
-	var finalResult *Result
-	for _, statement := range splitSQLStatements(body) {
-		trimmed := strings.TrimSpace(statement)
-		if trimmed == "" {
-			continue
-		}
-		upperStatement := strings.ToUpper(trimmed)
-		switch {
-		case strings.HasPrefix(upperStatement, "RETURN "):
-			return p.executor.QueryWithContext(ctx, executionContext, "SELECT "+strings.TrimSpace(trimmed[len("RETURN "):])+" AS "+procedureName)
-		case IsQuery(trimmed):
-			result, err := p.executor.QueryWithContext(ctx, executionContext, trimmed)
-			if err != nil {
-				return nil, err
-			}
-			finalResult = result
-		default:
-			if _, err := p.executor.ExecuteWithContext(ctx, executionContext, trimmed); err != nil {
-				return nil, err
-			}
-		}
-	}
-	if finalResult != nil {
-		return finalResult, nil
-	}
-	columns := []string{procedureName}
-	return &Result{Columns: columns, ColumnTypes: textColumnMetadata(columns), Rows: [][]interface{}{{nil}}}, nil
+	interpreter := newProcedureInterpreter(executor, executionContext, procedureName)
+	return interpreter.execute(ctx, script, parameters, values)
 }
 
 func (p *ProcedureProcessor) resolveSchema(ctx context.Context, databaseName, schemaName string) (*metadata.Schema, error) {
@@ -214,10 +194,6 @@ func splitSQLList(value string) []string {
 	return splitSQL(value, ',')
 }
 
-func splitSQLStatements(value string) []string {
-	return splitSQL(value, ';')
-}
-
 func splitSQL(value string, separator rune) []string {
 	var result []string
 	start, depth := 0, 0
@@ -248,21 +224,6 @@ func splitSQL(value string, separator rune) []string {
 	}
 	result = append(result, string(runes[start:]))
 	return result
-}
-
-func replaceNamedBinding(sql, name, value string) string {
-	for i := 0; i < len(sql); {
-		if sql[i] == ':' && strings.EqualFold(sql[i+1:min(i+1+len(name), len(sql))], name) {
-			end := i + 1 + len(name)
-			if end == len(sql) || (!unicode.IsLetter(rune(sql[end])) && !unicode.IsDigit(rune(sql[end])) && sql[end] != '_') {
-				sql = sql[:i] + value + sql[end:]
-				i += len(value)
-				continue
-			}
-		}
-		i++
-	}
-	return sql
 }
 
 func textColumnMetadata(columns []string) []servertypes.ColumnMetadata {
