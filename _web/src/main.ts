@@ -1,7 +1,8 @@
 import "./style.css";
-import { runStatement, StatementError } from "./api";
+import { runStatement, StatementError, translateStatement } from "./api";
 import { createEditor } from "./editor";
 import { renderGrid, renderNotice } from "./grid";
+import { renderTranslation } from "./translation";
 import { checkHealth } from "./health";
 
 // The execution context is fixed until the context selectors land. It matches
@@ -55,6 +56,11 @@ const SHELL = `
     </div>
   </div>
 
+  <div class="dock-head" role="tablist" aria-label="Statement output">
+    <button class="dtab" data-tab="results" aria-selected="true" role="tab">Results</button>
+    <button class="dtab" data-tab="translation" aria-selected="false" role="tab">Translated SQL</button>
+  </div>
+
   <section class="dock" data-role="dock" aria-live="polite"></section>
 </main>`;
 
@@ -82,6 +88,12 @@ function main(): void {
   pick(root, "shortcut").textContent = isApplePlatform() ? "⌘↵" : "Ctrl+↵";
 
   let running = false;
+  let activeTab: "results" | "translation" = "results";
+  let resultsPane: HTMLElement = renderNotice("info", "Run a statement to see results here");
+  // The cached panel is keyed by the statement it describes: editing the
+  // buffer must not leave a translation of something else on screen.
+  let translationPane: HTMLElement | null = null;
+  let translatedStatement = "";
 
   const editor = createEditor({
     parent: pick(root, "editor"),
@@ -105,7 +117,7 @@ function main(): void {
 
     try {
       const result = await runStatement(statement, CONTEXT);
-      dock.replaceChildren(
+      resultsPane =
         result.rowsAffected !== null
           ? renderNotice(
               "info",
@@ -113,17 +125,61 @@ function main(): void {
             )
           : result.rows.length === 0
             ? renderNotice("info", "Statement returned no rows")
-            : renderGrid(result),
-      );
+            : renderGrid(result);
       setStatus("ok", "Succeeded", describe(result.rows.length, result.rowsAffected, result.elapsedMs));
     } catch (cause) {
       const error = asStatementError(cause);
-      dock.replaceChildren(renderNotice("error", summarise(error.message), error.message));
+      resultsPane = renderNotice("error", summarise(error.message), error.message);
       setStatus("err", "Failed", `${error.code} · SQLSTATE ${error.sqlState}`);
     } finally {
       running = false;
       runButton.disabled = false;
+      showTab("results");
     }
+  }
+
+  /**
+   * Renders the active tab. The translation is fetched the first time it is
+   * asked for rather than on every run, so previewing costs nothing until
+   * somebody looks.
+   */
+  function showTab(tab: "results" | "translation"): void {
+    activeTab = tab;
+    root!.querySelectorAll<HTMLElement>(".dtab").forEach((button) => {
+      button.setAttribute("aria-selected", String(button.dataset["tab"] === tab));
+    });
+
+    if (tab === "results") {
+      dock.replaceChildren(resultsPane);
+      return;
+    }
+
+    const statement = editor.statementToRun();
+    if (!statement) {
+      dock.replaceChildren(renderNotice("info", "Write a statement to see how it translates"));
+      return;
+    }
+
+    if (translationPane && statement === translatedStatement) {
+      dock.replaceChildren(translationPane);
+      return;
+    }
+
+    dock.replaceChildren(renderNotice("info", "Translating…"));
+    void translateStatement(statement, CONTEXT)
+      .then((translation) => {
+        translationPane = renderTranslation(translation);
+        translatedStatement = statement;
+        if (activeTab === "translation") {
+          dock.replaceChildren(translationPane);
+        }
+      })
+      .catch((cause: unknown) => {
+        const error = asStatementError(cause);
+        if (activeTab === "translation") {
+          dock.replaceChildren(renderNotice("error", summarise(error.message), error.message));
+        }
+      });
   }
 
   function setStatus(state: string, label: string, detail: string): void {
@@ -133,7 +189,14 @@ function main(): void {
   }
 
   runButton.addEventListener("click", () => void run());
-  dock.replaceChildren(renderNotice("info", "Run a statement to see results here"));
+  root.querySelectorAll<HTMLElement>(".dtab").forEach((button) => {
+    button.addEventListener("click", () => {
+      const tab = button.dataset["tab"];
+      showTab(tab === "translation" ? "translation" : "results");
+    });
+  });
+
+  showTab("results");
   editor.focus();
 
   void showHealth(root);

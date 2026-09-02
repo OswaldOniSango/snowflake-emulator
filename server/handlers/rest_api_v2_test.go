@@ -371,3 +371,119 @@ func TestRestAPIv2Handler_InvalidJSON(t *testing.T) {
 		t.Errorf("Expected status %d, got %d", http.StatusBadRequest, rr.Code)
 	}
 }
+
+func TestRestAPIv2Handler_TranslateStatement(t *testing.T) {
+	handler, _ := setupRestAPIv2Handler(t)
+
+	tests := []struct {
+		name           string
+		body           string
+		wantStatus     int
+		wantTranslated string
+		wantHandledBy  string
+		wantComplete   bool
+	}{
+		{
+			name:           "translates a function",
+			body:           `{"statement":"SELECT IFF(a, 'y', 'n') FROM t"}`,
+			wantStatus:     http.StatusOK,
+			wantTranslated: "select IF(a, 'y', 'n') from t",
+			wantHandledBy:  "translator",
+			wantComplete:   true,
+		},
+		{
+			name:           "resolves short names against the context",
+			body:           `{"statement":"SELECT * FROM users","database":"TEST_DB","schema":"PUBLIC"}`,
+			wantStatus:     http.StatusOK,
+			wantTranslated: "select * from TEST_DB.PUBLIC_USERS",
+			wantHandledBy:  "translator",
+			wantComplete:   true,
+		},
+		{
+			name:          "reports the processor that really handles it",
+			body:          `{"statement":"COPY INTO t FROM @stage"}`,
+			wantStatus:    http.StatusOK,
+			wantHandledBy: "copy_processor",
+			wantComplete:  false,
+		},
+		{
+			name:       "rejects an empty statement",
+			body:       `{"statement":""}`,
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "rejects a malformed body",
+			body:       `not json`,
+			wantStatus: http.StatusBadRequest,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/api/v2/translate", strings.NewReader(tt.body))
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+
+			handler.TranslateStatement(rec, req)
+
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d (body %s)", rec.Code, tt.wantStatus, rec.Body.String())
+			}
+			if tt.wantStatus != http.StatusOK {
+				return
+			}
+
+			var resp types.TranslateResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+				t.Fatalf("decoding response: %v", err)
+			}
+
+			if tt.wantTranslated != "" && resp.Translated != tt.wantTranslated {
+				t.Errorf("translated = %q, want %q", resp.Translated, tt.wantTranslated)
+			}
+			if resp.HandledBy != tt.wantHandledBy {
+				t.Errorf("handledBy = %q, want %q", resp.HandledBy, tt.wantHandledBy)
+			}
+			if resp.Complete != tt.wantComplete {
+				t.Errorf("complete = %v, want %v", resp.Complete, tt.wantComplete)
+			}
+			if !resp.Complete && resp.Note == "" {
+				t.Error("an incomplete preview must explain why")
+			}
+		})
+	}
+}
+
+// TestTranslateStatementDoesNotExecute pins the endpoint's core promise: a
+// statement that would change data must leave the database untouched.
+func TestTranslateStatementDoesNotExecute(t *testing.T) {
+	handler, router := setupRestAPIv2Handler(t)
+
+	create := `{"statement":"CREATE TABLE preview_probe (id INTEGER)","database":"TEST_DB","schema":"PUBLIC"}`
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v2/statements", strings.NewReader(create)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("creating the probe table: status %d, body %s", rec.Code, rec.Body.String())
+	}
+
+	// Preview a statement that would drop it.
+	body := `{"statement":"DROP TABLE preview_probe","database":"TEST_DB","schema":"PUBLIC"}`
+	rec = httptest.NewRecorder()
+	handler.TranslateStatement(rec, httptest.NewRequest(http.MethodPost, "/api/v2/translate", strings.NewReader(body)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	// Selecting from it must still work: the preview ran nothing.
+	probe := `{"statement":"SELECT * FROM preview_probe","database":"TEST_DB","schema":"PUBLIC"}`
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v2/statements", strings.NewReader(probe)))
+
+	var resp types.StatementResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if resp.SQLState != types.SQLState00000 {
+		t.Errorf("the table is gone, so translate executed the DROP: %s", resp.Message)
+	}
+}

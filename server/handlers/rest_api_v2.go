@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"time"
 
@@ -998,4 +999,44 @@ func convertBindings(bindings map[string]*types.BindingValue) map[string]*query.
 		}
 	}
 	return result
+}
+
+// TranslateStatement handles POST /api/v2/translate.
+//
+// It answers what a statement becomes on its way to DuckDB without running it,
+// which is the emulator's one genuinely unusual view: every other console shows
+// the SQL you wrote, not the SQL that executes.
+func (h *RestAPIv2Handler) TranslateStatement(w http.ResponseWriter, r *http.Request) {
+	var req types.TranslateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.sendError(w, http.StatusBadRequest, "Invalid request body", types.SQLState42000)
+		return
+	}
+
+	if req.Statement == "" {
+		h.sendError(w, http.StatusBadRequest, "Statement is required", types.SQLState42000)
+		return
+	}
+
+	preview, err := query.PreviewTranslation(req.Statement, query.ExecutionContext{
+		Database: req.Database,
+		Schema:   req.Schema,
+	})
+	if err != nil {
+		h.sendError(w, http.StatusBadRequest, err.Error(), types.SQLState42000)
+		return
+	}
+
+	resp := types.TranslateResponse{
+		Statement:  preview.Statement,
+		Translated: preview.Translated,
+		HandledBy:  string(preview.HandledBy),
+		Complete:   preview.Complete,
+		Note:       preview.Note,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		log.Printf("Failed to write translate response: %v", err)
+	}
 }

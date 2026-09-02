@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isDecimalValue, runStatement, StatementError } from "./api";
+import { isDecimalValue, runStatement, StatementError, translateStatement } from "./api";
 
 const CONTEXT = { database: "TEST_DB", schema: "PUBLIC" };
 
@@ -89,5 +89,62 @@ describe("isDecimalValue", () => {
 
   it.each([null, 5, "text", {}, { Value: 1 }])("rejects %o", (value) => {
     expect(isDecimalValue(value)).toBe(false);
+  });
+});
+
+describe("translateStatement", () => {
+  it("returns the translation and what handles the statement", async () => {
+    const result = await translateStatement(
+      "SELECT IFF(a, 'y', 'n') FROM users",
+      CONTEXT,
+      respondWith({
+        statement: "SELECT IFF(a, 'y', 'n') FROM users",
+        translated: "select IF(a, 'y', 'n') from TEST_DB.PUBLIC_USERS",
+        handledBy: "translator",
+        complete: true,
+      }),
+    );
+
+    expect(result.translated).toBe("select IF(a, 'y', 'n') from TEST_DB.PUBLIC_USERS");
+    expect(result.handledBy).toBe("translator");
+    expect(result.complete).toBe(true);
+    expect(result.note).toBeUndefined();
+  });
+
+  it("keeps the note explaining a partial preview", async () => {
+    const result = await translateStatement(
+      "COPY INTO t FROM @stage",
+      CONTEXT,
+      respondWith({
+        statement: "COPY INTO t FROM @stage",
+        translated: "COPY INTO t FROM @stage",
+        handledBy: "copy_processor",
+        complete: false,
+        note: "The stage reference is resolved to a file path on disk.",
+      }),
+    );
+
+    expect(result.complete).toBe(false);
+    expect(result.handledBy).toBe("copy_processor");
+    expect(result.note).toContain("file path on disk");
+  });
+
+  it("throws when the request is rejected", async () => {
+    await expect(
+      translateStatement("", CONTEXT, respondWith({ message: "Statement is required" }, false, 400)),
+    ).rejects.toThrow("Statement is required");
+  });
+
+  it("assumes a complete preview when the field is missing", async () => {
+    // An older emulator would answer without the field; treating that as
+    // incomplete would show a warning with nothing to explain it.
+    const result = await translateStatement(
+      "SELECT 1",
+      CONTEXT,
+      respondWith({ translated: "select 1" }),
+    );
+
+    expect(result.complete).toBe(true);
+    expect(result.handledBy).toBe("translator");
   });
 });
