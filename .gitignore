@@ -33,4 +33,7 @@ go.work.sum
 .idea/
 .vscode/
 
+# macOS filesystem metadata
+.DS_Store
+
 CLAUDE.md

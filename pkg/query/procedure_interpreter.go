@@ -49,7 +49,16 @@ func (i *procedureInterpreter) execute(ctx context.Context, script *procedureScr
 	}
 	execution, err := i.executeStatements(ctx, script.Statements)
 	if err != nil {
-		return nil, err
+		if script.ExceptionHandler == nil {
+			return nil, err
+		}
+		i.variables["SQLCODE"] = int64(-1)
+		i.variables["SQLSTATE"] = "XX000"
+		i.variables["SQLERRM"] = err.Error()
+		execution, err = i.executeStatements(ctx, script.ExceptionHandler)
+		if err != nil {
+			return nil, fmt.Errorf("procedure exception handler failed: %w", err)
+		}
 	}
 	if execution.returned || execution.result != nil {
 		return execution.result, nil
@@ -177,6 +186,11 @@ func scalarColumnCount(result *Result) int {
 }
 
 func (i *procedureInterpreter) bindVariables(input string, replaceBareVariables bool) (string, error) {
+	input, err := i.bindDynamicIdentifiers(input)
+	if err != nil {
+		return "", err
+	}
+
 	var output strings.Builder
 	for position := 0; position < len(input); {
 		if input[position] == '\'' {
@@ -225,6 +239,88 @@ func (i *procedureInterpreter) bindVariables(input string, replaceBareVariables 
 		position++
 	}
 	return output.String(), nil
+}
+
+func (i *procedureInterpreter) bindDynamicIdentifiers(input string) (string, error) {
+	var output strings.Builder
+	for position := 0; position < len(input); {
+		if input[position] == '\'' {
+			start := position
+			position++
+			for position < len(input) {
+				if input[position] == '\'' {
+					position++
+					if position < len(input) && input[position] == '\'' {
+						position++
+						continue
+					}
+					break
+				}
+				position++
+			}
+			output.WriteString(input[start:position])
+			continue
+		}
+
+		name, end, matched := readDynamicIdentifierReference(input, position)
+		if !matched {
+			output.WriteByte(input[position])
+			position++
+			continue
+		}
+		value, exists := i.variables[strings.ToUpper(name)]
+		if !exists {
+			return "", fmt.Errorf("variable %s is not declared", name)
+		}
+		identifier, ok := value.(string)
+		if !ok {
+			return "", fmt.Errorf("IDENTIFIER variable %s returned %T, expected VARCHAR", name, value)
+		}
+		if !identifierPattern.MatchString(identifier) {
+			return "", fmt.Errorf("IDENTIFIER variable %s contains invalid object name %q", name, identifier)
+		}
+		output.WriteString(identifier)
+		position = end
+	}
+	return output.String(), nil
+}
+
+func readDynamicIdentifierReference(input string, start int) (string, int, bool) {
+	const keyword = "IDENTIFIER"
+	if start > 0 && isIdentifierCharacter(rune(input[start-1])) {
+		return "", start, false
+	}
+	if start+len(keyword) > len(input) || !strings.EqualFold(input[start:start+len(keyword)], keyword) {
+		return "", start, false
+	}
+	position := start + len(keyword)
+	if position < len(input) && isIdentifierCharacter(rune(input[position])) {
+		return "", start, false
+	}
+	for position < len(input) && unicode.IsSpace(rune(input[position])) {
+		position++
+	}
+	if position >= len(input) || input[position] != '(' {
+		return "", start, false
+	}
+	position++
+	for position < len(input) && unicode.IsSpace(rune(input[position])) {
+		position++
+	}
+	if position >= len(input) || input[position] != ':' {
+		return "", start, false
+	}
+	name, position := readProcedureVariableName(input, position+1)
+	if name == "" {
+		return "", start, false
+	}
+	for position < len(input) && unicode.IsSpace(rune(input[position])) {
+		position++
+	}
+	if position >= len(input) || input[position] != ')' {
+		return "", start, false
+	}
+	return name, position + 1, true
 }
 
 func readProcedureVariableName(input string, start int) (string, int) {

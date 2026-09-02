@@ -2,6 +2,8 @@ package query
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -225,6 +227,147 @@ func TestProcedureSupportsDeclareAssignmentCaseAndIf(t *testing.T) {
 	}
 }
 
+func TestProcedureSupportsDynamicIdentifiers(t *testing.T) {
+	executor, repo := setupTestExecutor(t)
+	ctx := context.Background()
+
+	database, err := repo.CreateDatabase(ctx, "DYNAMIC_PROCEDURE_DB", "")
+	if err != nil {
+		t.Fatalf("CreateDatabase() error = %v", err)
+	}
+	if _, err := repo.CreateSchema(ctx, database.ID, "PUBLIC", ""); err != nil {
+		t.Fatalf("CreateSchema() error = %v", err)
+	}
+	executionContext := ExecutionContext{Database: "DYNAMIC_PROCEDURE_DB", Schema: "PUBLIC"}
+
+	createSQL := `CREATE PROCEDURE build_batch(start_seq VARCHAR, end_seq VARCHAR)
+		RETURNS NUMBER
+		LANGUAGE SQL
+		AS $$
+		DECLARE
+			table_name VARCHAR;
+			row_count NUMBER;
+		BEGIN
+			table_name := 'batch_' || start_seq || end_seq;
+			CREATE OR REPLACE TRANSIENT TABLE IDENTIFIER(:table_name) AS
+				SELECT 1 AS id UNION ALL SELECT 2 AS id;
+			row_count := (SELECT COUNT(*) FROM identifier ( :table_name ));
+			DROP TABLE IF EXISTS IDENTIFIER(:table_name);
+			RETURN row_count;
+		END
+		$$`
+	if _, err := executor.ExecuteWithContext(ctx, executionContext, createSQL); err != nil {
+		t.Fatalf("CREATE PROCEDURE error = %v", err)
+	}
+
+	result, err := executor.QueryWithContext(ctx, executionContext, "CALL build_batch('00', '99')")
+	if err != nil {
+		t.Fatalf("CALL build_batch error = %v", err)
+	}
+	if len(result.Rows) != 1 || !procedureValuesEqual(result.Rows[0][0], 2) {
+		t.Fatalf("CALL build_batch rows = %#v, want 2", result.Rows)
+	}
+	if _, err := executor.QueryWithContext(ctx, executionContext, "SELECT * FROM batch_0099"); err == nil {
+		t.Fatal("dynamic transient table still exists after DROP")
+	}
+}
+
+func TestProcedureDynamicIdentifierValidation(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		variables map[string]any
+		want      string
+		wantError string
+	}{
+		{name: "valid", input: "SELECT * FROM IDENTIFIER(:table_name)", variables: map[string]any{"TABLE_NAME": "dynamic_table"}, want: "SELECT * FROM dynamic_table"},
+		{name: "case and spaces", input: "SELECT * FROM identifier ( :table_name )", variables: map[string]any{"TABLE_NAME": "dynamic_table"}, want: "SELECT * FROM dynamic_table"},
+		{name: "inside string", input: "SELECT 'IDENTIFIER(:table_name)'", variables: map[string]any{"TABLE_NAME": "dynamic_table"}, want: "SELECT 'IDENTIFIER(:table_name)'"},
+		{name: "undeclared", input: "SELECT * FROM IDENTIFIER(:missing)", wantError: "variable missing is not declared"},
+		{name: "non string", input: "SELECT * FROM IDENTIFIER(:table_name)", variables: map[string]any{"TABLE_NAME": int64(42)}, wantError: "expected VARCHAR"},
+		{name: "unsafe name", input: "SELECT * FROM IDENTIFIER(:table_name)", variables: map[string]any{"TABLE_NAME": "users; DROP TABLE users"}, wantError: "invalid object name"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			interpreter := newProcedureInterpreter(nil, ExecutionContext{}, "TEST")
+			interpreter.variables = tt.variables
+			got, err := interpreter.bindVariables(tt.input, false)
+			if tt.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+					t.Fatalf("bindVariables() error = %v, want containing %q", err, tt.wantError)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("bindVariables() error = %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("bindVariables() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestProcedureExceptionWhenOther(t *testing.T) {
+	executor, repo := setupTestExecutor(t)
+	ctx := context.Background()
+
+	database, err := repo.CreateDatabase(ctx, "EXCEPTION_DB", "")
+	if err != nil {
+		t.Fatalf("CreateDatabase() error = %v", err)
+	}
+	if _, err := repo.CreateSchema(ctx, database.ID, "PUBLIC", ""); err != nil {
+		t.Fatalf("CreateSchema() error = %v", err)
+	}
+	executionContext := ExecutionContext{Database: "EXCEPTION_DB", Schema: "PUBLIC"}
+	for _, statement := range []string{
+		"CREATE TABLE existing_table (id INTEGER)",
+		"CREATE TABLE procedure_errors (sql_code BIGINT, sql_state VARCHAR, sql_error VARCHAR)",
+	} {
+		if _, err := executor.ExecuteWithContext(ctx, executionContext, statement); err != nil {
+			t.Fatalf("setup statement %q error = %v", statement, err)
+		}
+	}
+
+	createSQL := `CREATE PROCEDURE catches_error()
+		RETURNS VARCHAR
+		LANGUAGE SQL
+		AS $$
+		BEGIN
+			CREATE TABLE existing_table (id INTEGER);
+			RETURN 'NO ERROR';
+		EXCEPTION WHEN OTHER THEN
+			INSERT INTO procedure_errors VALUES (:SQLCODE, :SQLSTATE, :SQLERRM);
+			RETURN SQLSTATE;
+		END
+		$$`
+	if _, err := executor.ExecuteWithContext(ctx, executionContext, createSQL); err != nil {
+		t.Fatalf("CREATE PROCEDURE error = %v", err)
+	}
+
+	result, err := executor.QueryWithContext(ctx, executionContext, "CALL catches_error()")
+	if err != nil {
+		t.Fatalf("CALL catches_error error = %v", err)
+	}
+	if len(result.Rows) != 1 || result.Rows[0][0] != "XX000" {
+		t.Fatalf("CALL catches_error rows = %#v, want XX000", result.Rows)
+	}
+
+	errorResult, err := executor.QueryWithContext(ctx, executionContext,
+		"SELECT sql_code, sql_state, sql_error FROM procedure_errors",
+	)
+	if err != nil {
+		t.Fatalf("SELECT procedure_errors error = %v", err)
+	}
+	if len(errorResult.Rows) != 1 {
+		t.Fatalf("procedure_errors rows = %#v, want one row", errorResult.Rows)
+	}
+	row := errorResult.Rows[0]
+	if !procedureValuesEqual(row[0], -1) || row[1] != "XX000" || !strings.Contains(fmt.Sprint(row[2]), "already exists") {
+		t.Fatalf("procedure_errors row = %#v", row)
+	}
+}
+
 func TestParseProcedureScriptRejectsMalformedBlocks(t *testing.T) {
 	tests := []struct {
 		name string
@@ -234,6 +377,7 @@ func TestParseProcedureScriptRejectsMalformedBlocks(t *testing.T) {
 		{name: "missing end if", body: "BEGIN IF (TRUE) THEN RETURN 'bad'; END"},
 		{name: "missing end case", body: "BEGIN CASE (1) WHEN 1 THEN RETURN 'bad'; END"},
 		{name: "default without expression", body: "DECLARE value VARCHAR DEFAULT; BEGIN RETURN value; END"},
+		{name: "invalid exception handler", body: "BEGIN RETURN 'ok'; EXCEPTION WHEN SQLSTATE THEN RETURN 'bad'; END"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
