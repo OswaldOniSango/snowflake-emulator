@@ -108,3 +108,30 @@ func (e *Executor) validateExecutionContext(ctx context.Context, executionContex
 
 	return nil
 }
+
+// physicalNameError rewrites the emulator's physical table names back to the
+// names the caller wrote.
+//
+// Statements are rewritten to DATABASE.SCHEMA_TABLE before they reach DuckDB,
+// so an engine error names objects the user never mentioned — and quotes the
+// translated SQL back at them. Reporting "PUBLIC_ORDERS does not exist" for
+// a query that said "orders" is worse than unhelpful; it describes an
+// emulator internal as though it were the user's schema.
+func physicalNameError(err error, executionContext ExecutionContext) error {
+	if err == nil || executionContext.Database == "" || executionContext.Schema == "" {
+		return err
+	}
+
+	message := err.Error()
+	qualified := executionContext.Database + "." + executionContext.Schema + "_"
+	bare := executionContext.Schema + "_"
+
+	// The qualified form is replaced first: it contains the bare one.
+	cleaned := strings.ReplaceAll(message, qualified, "")
+	cleaned = strings.ReplaceAll(cleaned, bare, "")
+	if cleaned == message {
+		return err
+	}
+
+	return fmt.Errorf("%s", cleaned)
+}

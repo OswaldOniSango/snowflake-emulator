@@ -2,6 +2,7 @@ package query
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -168,5 +169,64 @@ func TestRewriteContextualTableReferences_WithoutContext(t *testing.T) {
 		if got := rewriteContextualTableReferences(sql, executionContext); got != sql {
 			t.Errorf("context %+v rewrote to %q, want it unchanged", executionContext, got)
 		}
+	}
+}
+
+// TestPhysicalNameError pins that engine errors name the objects the caller
+// wrote, not the DATABASE.SCHEMA_TABLE form the emulator rewrites them into.
+func TestPhysicalNameError(t *testing.T) {
+	executionContext := ExecutionContext{Database: "TEST_DB", Schema: "PUBLIC"}
+
+	tests := []struct {
+		name             string
+		executionContext ExecutionContext
+		err              error
+		want             string
+	}{
+		{
+			name:             "qualified physical name",
+			executionContext: executionContext,
+			err:              errors.New(`Table with name TEST_DB.PUBLIC_ORDERS does not exist!`),
+			want:             `Table with name ORDERS does not exist!`,
+		},
+		{
+			name:             "bare physical name",
+			executionContext: executionContext,
+			err:              errors.New(`Table with name PUBLIC_ORDERS does not exist!`),
+			want:             `Table with name ORDERS does not exist!`,
+		},
+		{
+			name:             "the quoted statement is cleaned too",
+			executionContext: executionContext,
+			err:              errors.New("LINE 1: select * from TEST_DB.PUBLIC_ORDERS"),
+			want:             "LINE 1: select * from ORDERS",
+		},
+		{
+			name:             "an unrelated message is untouched",
+			executionContext: executionContext,
+			err:              errors.New("Parser Error: syntax error"),
+			want:             "Parser Error: syntax error",
+		},
+		{
+			name:             "without a context nothing is rewritten",
+			executionContext: ExecutionContext{},
+			err:              errors.New("Table with name PUBLIC_ORDERS does not exist!"),
+			want:             "Table with name PUBLIC_ORDERS does not exist!",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := physicalNameError(tt.err, tt.executionContext)
+			if got.Error() != tt.want {
+				t.Errorf("got  %q\nwant %q", got.Error(), tt.want)
+			}
+		})
+	}
+}
+
+func TestPhysicalNameErrorPassesNilThrough(t *testing.T) {
+	if got := physicalNameError(nil, ExecutionContext{Database: "TEST_DB", Schema: "PUBLIC"}); got != nil {
+		t.Errorf("got %v, want nil", got)
 	}
 }
