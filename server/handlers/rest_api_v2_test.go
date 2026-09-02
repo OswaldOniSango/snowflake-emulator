@@ -43,7 +43,7 @@ func setupRestAPIv2Handler(t *testing.T) (*RestAPIv2Handler, *chi.Mux) {
 	if err != nil {
 		t.Fatalf("failed to create test database: %v", err)
 	}
-	if _, err := repo.CreateSchema(context.Background(), testDatabase.ID, "PUBLIC", ""); err != nil {
+	if _, err := repo.GetSchemaByName(context.Background(), testDatabase.ID, "PUBLIC"); err != nil {
 		t.Fatalf("failed to create test schema: %v", err)
 	}
 
@@ -162,8 +162,8 @@ func TestRestAPIv2Handler_StreamUsesRequestContext(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateDatabase() error = %v", err)
 	}
-	if _, err := handler.repo.CreateSchema(ctx, database.ID, "PUBLIC", ""); err != nil {
-		t.Fatalf("CreateSchema() error = %v", err)
+	if _, err := handler.repo.GetSchemaByName(ctx, database.ID, "PUBLIC"); err != nil {
+		t.Fatalf("GetSchemaByName() error = %v", err)
 	}
 
 	execute := func(statement string) types.StatementResponse {

@@ -76,10 +76,10 @@ func (r *Repository) ListTasks(ctx context.Context, schemaID string) ([]*Task, e
 	query := taskSelect
 	var args []any
 	if schemaID != "" {
-		query += ` WHERE schema_id = ?`
+		query += sqlWhereSchemaID
 		args = append(args, schemaID)
 	}
-	query += ` ORDER BY name`
+	query += sqlOrderByName
 	rows, err := r.mgr.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list tasks: %w", err)

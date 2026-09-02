@@ -11,6 +11,10 @@ import (
 const (
 	TypeText  = "TEXT"
 	ValueNull = "NULL"
+
+	// Column names shared by the SHOW result sets.
+	columnCreatedOn = "created_on"
+	columnName      = "name"
 )
 
 // TypeMapper provides DuckDB to Snowflake type mapping functionality.

@@ -105,8 +105,6 @@ func NewMergeProcessor(executor *Executor) *MergeProcessor {
 }
 
 // ParseMergeStatement parses a MERGE INTO SQL statement.
-//
-//nolint:gocyclo // parsing logic inherently has many branches
 func (h *MergeProcessor) ParseMergeStatement(sql string) (*MergeStatement, error) {
 	sql = strings.TrimSpace(sql)
 
@@ -205,8 +203,6 @@ func (h *MergeProcessor) parseWhenClauses(sql string) ([]WhenClause, error) {
 }
 
 // parseWhenClause parses a single WHEN clause.
-//
-//nolint:gocyclo // parsing logic inherently has many branches
 func (h *MergeProcessor) parseWhenClause(section, upperSection string) (WhenClause, error) {
 	clause := WhenClause{}
 
@@ -347,14 +343,20 @@ func splitByCommaRespectingParens(s string) []string {
 
 // ExecuteMerge executes a parsed MERGE statement.
 // Strategy: Try native DuckDB MERGE first. If unsupported, decompose into UPDATE/DELETE/INSERT.
-func (h *MergeProcessor) ExecuteMerge(ctx context.Context, stmt *MergeStatement) (*MergeResult, error) {
+func (h *MergeProcessor) ExecuteMerge(ctx context.Context, executionContext ExecutionContext, stmt *MergeStatement) (*MergeResult, error) {
 	result := &MergeResult{}
+
+	// Resolve table names once, up front. The decomposed fallback substitutes
+	// the target's alias with stmt.TargetTable inside SET and WHERE clauses,
+	// where the contextual rewriter cannot reach it, so both paths must start
+	// from the physical name.
+	stmt = resolveMergeTables(stmt, executionContext)
 
 	// Build the native MERGE SQL
 	mergeSQL := h.buildMergeSQL(stmt)
 
 	// Try native execution first (DuckDB 1.4+ supports MERGE)
-	execResult, err := h.executor.executeRaw(ctx, mergeSQL)
+	execResult, err := h.executor.executeRawWithContext(ctx, executionContext, mergeSQL)
 	if err == nil {
 		// Native MERGE succeeded
 		// DuckDB returns total rows affected; we can't distinguish insert/update/delete
@@ -363,7 +365,28 @@ func (h *MergeProcessor) ExecuteMerge(ctx context.Context, stmt *MergeStatement)
 	}
 
 	// If native MERGE fails (older DuckDB version), decompose into separate statements
-	return h.executeDecomposedMerge(ctx, stmt)
+	return h.executeDecomposedMerge(ctx, executionContext, stmt)
+}
+
+// resolveMergeTables returns a copy of stmt whose unqualified table names are
+// mapped to their physical DuckDB names. Without an execution context, or for
+// names already qualified or shaped like a subquery, the statement is unchanged.
+func resolveMergeTables(stmt *MergeStatement, executionContext ExecutionContext) *MergeStatement {
+	if executionContext.Database == "" || executionContext.Schema == "" {
+		return stmt
+	}
+
+	resolve := func(name string) string {
+		if strings.Contains(name, ".") || !identifierPattern.MatchString(name) {
+			return name
+		}
+		return BuildTableName(executionContext.Database, executionContext.Schema, name)
+	}
+
+	resolved := *stmt
+	resolved.TargetTable = resolve(stmt.TargetTable)
+	resolved.SourceTable = resolve(stmt.SourceTable)
+	return &resolved
 }
 
 // buildMergeSQL constructs the MERGE SQL statement for native execution.
@@ -443,7 +466,7 @@ func (h *MergeProcessor) buildWhenClause(when *WhenClause) string {
 
 // executeDecomposedMerge executes MERGE as separate UPDATE/DELETE/INSERT statements.
 // This fallback is used when native MERGE is not supported.
-func (h *MergeProcessor) executeDecomposedMerge(ctx context.Context, stmt *MergeStatement) (*MergeResult, error) {
+func (h *MergeProcessor) executeDecomposedMerge(ctx context.Context, executionContext ExecutionContext, stmt *MergeStatement) (*MergeResult, error) {
 	result := &MergeResult{}
 
 	// Process WHEN MATCHED clauses first (UPDATE/DELETE)
@@ -455,14 +478,14 @@ func (h *MergeProcessor) executeDecomposedMerge(ctx context.Context, stmt *Merge
 
 		switch when.Action {
 		case MergeActionUpdate:
-			rows, err := h.executeMatchedUpdate(ctx, stmt, when)
+			rows, err := h.executeMatchedUpdate(ctx, executionContext, stmt, when)
 			if err != nil {
 				return result, fmt.Errorf("MERGE UPDATE failed: %w", err)
 			}
 			result.RowsUpdated += rows
 
 		case MergeActionDelete:
-			rows, err := h.executeMatchedDelete(ctx, stmt, when)
+			rows, err := h.executeMatchedDelete(ctx, executionContext, stmt, when)
 			if err != nil {
 				return result, fmt.Errorf("MERGE DELETE failed: %w", err)
 			}
@@ -478,7 +501,7 @@ func (h *MergeProcessor) executeDecomposedMerge(ctx context.Context, stmt *Merge
 		}
 
 		if when.Action == MergeActionInsert {
-			rows, err := h.executeNotMatchedInsert(ctx, stmt, when)
+			rows, err := h.executeNotMatchedInsert(ctx, executionContext, stmt, when)
 			if err != nil {
 				return result, fmt.Errorf("MERGE INSERT failed: %w", err)
 			}
@@ -490,7 +513,7 @@ func (h *MergeProcessor) executeDecomposedMerge(ctx context.Context, stmt *Merge
 }
 
 // executeMatchedUpdate executes UPDATE for WHEN MATCHED THEN UPDATE.
-func (h *MergeProcessor) executeMatchedUpdate(ctx context.Context, stmt *MergeStatement, when *WhenClause) (int64, error) {
+func (h *MergeProcessor) executeMatchedUpdate(ctx context.Context, executionContext ExecutionContext, stmt *MergeStatement, when *WhenClause) (int64, error) {
 	// Build: UPDATE target SET ... FROM source WHERE join_condition [AND when_condition]
 	// DuckDB requires the table name (not alias) in UPDATE clause
 	var sb strings.Builder
@@ -539,7 +562,7 @@ func (h *MergeProcessor) executeMatchedUpdate(ctx context.Context, stmt *MergeSt
 		sb.WriteString(condition)
 	}
 
-	execResult, err := h.executor.executeRaw(ctx, sb.String())
+	execResult, err := h.executor.executeRawWithContext(ctx, executionContext, sb.String())
 	if err != nil {
 		return 0, err
 	}
@@ -548,7 +571,7 @@ func (h *MergeProcessor) executeMatchedUpdate(ctx context.Context, stmt *MergeSt
 }
 
 // executeMatchedDelete executes DELETE for WHEN MATCHED THEN DELETE.
-func (h *MergeProcessor) executeMatchedDelete(ctx context.Context, stmt *MergeStatement, when *WhenClause) (int64, error) {
+func (h *MergeProcessor) executeMatchedDelete(ctx context.Context, executionContext ExecutionContext, stmt *MergeStatement, when *WhenClause) (int64, error) {
 	// Build: DELETE FROM target USING source WHERE join_condition [AND when_condition]
 	var sb strings.Builder
 
@@ -573,7 +596,7 @@ func (h *MergeProcessor) executeMatchedDelete(ctx context.Context, stmt *MergeSt
 		sb.WriteString(when.Condition)
 	}
 
-	execResult, err := h.executor.executeRaw(ctx, sb.String())
+	execResult, err := h.executor.executeRawWithContext(ctx, executionContext, sb.String())
 	if err != nil {
 		return 0, err
 	}
@@ -582,7 +605,7 @@ func (h *MergeProcessor) executeMatchedDelete(ctx context.Context, stmt *MergeSt
 }
 
 // executeNotMatchedInsert executes INSERT for WHEN NOT MATCHED THEN INSERT.
-func (h *MergeProcessor) executeNotMatchedInsert(ctx context.Context, stmt *MergeStatement, when *WhenClause) (int64, error) {
+func (h *MergeProcessor) executeNotMatchedInsert(ctx context.Context, executionContext ExecutionContext, stmt *MergeStatement, when *WhenClause) (int64, error) {
 	// Build: INSERT INTO target (cols) SELECT vals FROM source WHERE NOT EXISTS (...)
 	var sb strings.Builder
 
@@ -622,7 +645,7 @@ func (h *MergeProcessor) executeNotMatchedInsert(ctx context.Context, stmt *Merg
 		sb.WriteString(when.Condition)
 	}
 
-	execResult, err := h.executor.executeRaw(ctx, sb.String())
+	execResult, err := h.executor.executeRawWithContext(ctx, executionContext, sb.String())
 	if err != nil {
 		return 0, err
 	}

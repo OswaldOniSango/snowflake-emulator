@@ -14,8 +14,8 @@ func setupStreamTest(t *testing.T) (*Executor, context.Context) {
 	if err != nil {
 		t.Fatalf("CreateDatabase() error = %v", err)
 	}
-	if _, err := repo.CreateSchema(ctx, database.ID, "PUBLIC", ""); err != nil {
-		t.Fatalf("CreateSchema() error = %v", err)
+	if _, err := repo.GetSchemaByName(ctx, database.ID, "PUBLIC"); err != nil {
+		t.Fatalf("GetSchemaByName() error = %v", err)
 	}
 	if _, err := executor.Execute(ctx, "CREATE TABLE STREAM_DB.PUBLIC_EVENTS (ID INTEGER, MESSAGE VARCHAR)"); err != nil {
 		t.Fatalf("CREATE TABLE error = %v", err)
@@ -167,8 +167,8 @@ func TestStreamUsesExecutionContextForShortNames(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateDatabase() error = %v", err)
 	}
-	if _, err := repo.CreateSchema(ctx, database.ID, "PUBLIC", ""); err != nil {
-		t.Fatalf("CreateSchema() error = %v", err)
+	if _, err := repo.GetSchemaByName(ctx, database.ID, "PUBLIC"); err != nil {
+		t.Fatalf("GetSchemaByName() error = %v", err)
 	}
 	executionContext := ExecutionContext{Database: "LEARNING_DB", Schema: "PUBLIC"}
 

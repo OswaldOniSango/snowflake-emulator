@@ -70,9 +70,9 @@ func setupTestServer(t *testing.T) (*httptest.Server, *session.Manager, *metadat
 		t.Fatalf("failed to create database: %v", err)
 	}
 
-	schema, err := repo.CreateSchema(ctx, database.ID, "PUBLIC", "Public schema")
+	schema, err := repo.GetSchemaByName(ctx, database.ID, "PUBLIC")
 	if err != nil {
-		t.Fatalf("failed to create schema: %v", err)
+		t.Fatalf("failed to get default schema: %v", err)
 	}
 
 	// Create test table
@@ -759,9 +759,9 @@ func TestIntegration_CopyInto(t *testing.T) {
 		t.Fatalf("failed to create database: %v", err)
 	}
 
-	schema, err := repo.CreateSchema(ctx, database.ID, "PUBLIC", "")
+	schema, err := repo.GetSchemaByName(ctx, database.ID, "PUBLIC")
 	if err != nil {
-		t.Fatalf("failed to create schema: %v", err)
+		t.Fatalf("failed to get default schema: %v", err)
 	}
 
 	// Create temp directory for stages

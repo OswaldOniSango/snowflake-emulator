@@ -10,6 +10,7 @@ import (
 	_ "github.com/duckdb/duckdb-go/v2"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
+	"github.com/nnnkkk7/snowflake-emulator/pkg/config"
 	"github.com/nnnkkk7/snowflake-emulator/pkg/connection"
 )
 
@@ -480,5 +481,44 @@ func TestRepository_GetQueryHistory_Limit(t *testing.T) {
 
 	if len(history) != 5 {
 		t.Errorf("expected 5 entries with default limit, got %d", len(history))
+	}
+}
+
+func TestEnsureDefaultNamespace(t *testing.T) {
+	repo := setupTestRepository(t)
+
+	ctx := context.Background()
+
+	// A fresh emulator has no namespace: the documented quickstart DSN would
+	// fail execution-context validation without this.
+	if err := repo.EnsureDefaultNamespace(ctx); err != nil {
+		t.Fatalf("EnsureDefaultNamespace() error = %v", err)
+	}
+
+	database, err := repo.GetDatabaseByName(ctx, config.DefaultDatabase)
+	if err != nil {
+		t.Fatalf("default database %s missing: %v", config.DefaultDatabase, err)
+	}
+	if _, err := repo.GetSchemaByName(ctx, database.ID, config.DefaultSchema); err != nil {
+		t.Fatalf("default schema %s missing: %v", config.DefaultSchema, err)
+	}
+
+	// Idempotent: a restart against a persistent DB_PATH calls this again.
+	if err := repo.EnsureDefaultNamespace(ctx); err != nil {
+		t.Fatalf("second EnsureDefaultNamespace() error = %v", err)
+	}
+
+	databases, err := repo.ListDatabases(ctx)
+	if err != nil {
+		t.Fatalf("ListDatabases() error = %v", err)
+	}
+	var count int
+	for _, db := range databases {
+		if db.Name == config.DefaultDatabase {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("found %d instances of %s, want exactly 1", count, config.DefaultDatabase)
 	}
 }

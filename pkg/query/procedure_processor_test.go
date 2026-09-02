@@ -15,8 +15,8 @@ func TestProcedureLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateDatabase() error = %v", err)
 	}
-	if _, err := repo.CreateSchema(ctx, database.ID, "PUBLIC", ""); err != nil {
-		t.Fatalf("CreateSchema() error = %v", err)
+	if _, err := repo.GetSchemaByName(ctx, database.ID, "PUBLIC"); err != nil {
+		t.Fatalf("GetSchemaByName() error = %v", err)
 	}
 
 	createSQL := `CREATE PROCEDURE LESSON_DB.PUBLIC.GREET(NAME VARCHAR)
@@ -63,8 +63,8 @@ func TestProcedureExecutesMultipleStatements(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateDatabase() error = %v", err)
 	}
-	if _, err := repo.CreateSchema(ctx, database.ID, "PUBLIC", ""); err != nil {
-		t.Fatalf("CreateSchema() error = %v", err)
+	if _, err := repo.GetSchemaByName(ctx, database.ID, "PUBLIC"); err != nil {
+		t.Fatalf("GetSchemaByName() error = %v", err)
 	}
 	if _, err := executor.Execute(ctx, "CREATE TABLE procedure_log (message VARCHAR)"); err != nil {
 		t.Fatalf("CREATE TABLE error = %v", err)
@@ -101,8 +101,8 @@ func TestProcedureCreateAndCallWithTwoArguments(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateDatabase() error = %v", err)
 	}
-	if _, err := repo.CreateSchema(ctx, database.ID, "PUBLIC", ""); err != nil {
-		t.Fatalf("CreateSchema() error = %v", err)
+	if _, err := repo.GetSchemaByName(ctx, database.ID, "PUBLIC"); err != nil {
+		t.Fatalf("GetSchemaByName() error = %v", err)
 	}
 
 	createSQL := `CREATE PROCEDURE MATH_DB.PUBLIC.ADD_NUMBERS(A INTEGER, B INTEGER)
@@ -137,8 +137,8 @@ func TestProcedureSupportsDeclareAssignmentCaseAndIf(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateDatabase() error = %v", err)
 	}
-	if _, err := repo.CreateSchema(ctx, database.ID, "PUBLIC", ""); err != nil {
-		t.Fatalf("CreateSchema() error = %v", err)
+	if _, err := repo.GetSchemaByName(ctx, database.ID, "PUBLIC"); err != nil {
+		t.Fatalf("GetSchemaByName() error = %v", err)
 	}
 	executionContext := ExecutionContext{Database: "SCRIPTING_DB", Schema: "PUBLIC"}
 	for _, statement := range []string{
@@ -235,8 +235,8 @@ func TestProcedureSupportsDynamicTemporaryAndTransientTables(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateDatabase() error = %v", err)
 	}
-	if _, err := repo.CreateSchema(ctx, database.ID, "PUBLIC", ""); err != nil {
-		t.Fatalf("CreateSchema() error = %v", err)
+	if _, err := repo.GetSchemaByName(ctx, database.ID, "PUBLIC"); err != nil {
+		t.Fatalf("GetSchemaByName() error = %v", err)
 	}
 	executionContext := ExecutionContext{Database: "DYNAMIC_PROCEDURE_DB", Schema: "PUBLIC"}
 
@@ -296,8 +296,8 @@ func TestProcedureCleansTemporaryTablesOnExit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateDatabase() error = %v", err)
 	}
-	if _, err := repo.CreateSchema(ctx, database.ID, "PUBLIC", ""); err != nil {
-		t.Fatalf("CreateSchema() error = %v", err)
+	if _, err := repo.GetSchemaByName(ctx, database.ID, "PUBLIC"); err != nil {
+		t.Fatalf("GetSchemaByName() error = %v", err)
 	}
 	executionContext := ExecutionContext{Database: "TEMP_CLEANUP_DB", Schema: "PUBLIC"}
 
@@ -383,8 +383,8 @@ func TestProcedureExceptionWhenOther(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateDatabase() error = %v", err)
 	}
-	if _, err := repo.CreateSchema(ctx, database.ID, "PUBLIC", ""); err != nil {
-		t.Fatalf("CreateSchema() error = %v", err)
+	if _, err := repo.GetSchemaByName(ctx, database.ID, "PUBLIC"); err != nil {
+		t.Fatalf("GetSchemaByName() error = %v", err)
 	}
 	executionContext := ExecutionContext{Database: "EXCEPTION_DB", Schema: "PUBLIC"}
 	for _, statement := range []string{
@@ -462,8 +462,8 @@ func TestCreateProcedureRejectsMalformedBodyAndUnsupportedLanguage(t *testing.T)
 	if err != nil {
 		t.Fatalf("CreateDatabase() error = %v", err)
 	}
-	if _, err := repo.CreateSchema(ctx, database.ID, "PUBLIC", ""); err != nil {
-		t.Fatalf("CreateSchema() error = %v", err)
+	if _, err := repo.GetSchemaByName(ctx, database.ID, "PUBLIC"); err != nil {
+		t.Fatalf("GetSchemaByName() error = %v", err)
 	}
 
 	tests := []struct {

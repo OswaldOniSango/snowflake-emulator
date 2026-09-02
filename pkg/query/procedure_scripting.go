@@ -6,6 +6,9 @@ import (
 	"unicode"
 )
 
+// keywordEnd terminates every block the scripting parser understands.
+const keywordEnd = "END"
+
 type procedureScript struct {
 	Declarations     []procedureDeclaration
 	Statements       []procedureStatement
@@ -22,14 +25,17 @@ type procedureStatement interface {
 	isProcedureStatement()
 }
 
-type procedureSQLStatement struct{ SQL string }
-type procedureAssignmentStatement struct{ Name, Expression string }
-type procedureReturnStatement struct{ Expression string }
-type procedureIfStatement struct {
-	Condition  string
-	ThenBranch []procedureStatement
-	ElseBranch []procedureStatement
-}
+type (
+	procedureSQLStatement        struct{ SQL string }
+	procedureAssignmentStatement struct{ Name, Expression string }
+	procedureReturnStatement     struct{ Expression string }
+	procedureIfStatement         struct {
+		Condition  string
+		ThenBranch []procedureStatement
+		ElseBranch []procedureStatement
+	}
+)
+
 type procedureCaseBranch struct {
 	Value      string
 	Statements []procedureStatement
@@ -65,7 +71,7 @@ func parseProcedureScript(body string) (*procedureScript, error) {
 	if !p.consumeKeyword("BEGIN") {
 		return nil, fmt.Errorf("procedure body must contain BEGIN")
 	}
-	statements, terminator, err := p.parseStatements("EXCEPTION", "END")
+	statements, terminator, err := p.parseStatements("EXCEPTION", keywordEnd)
 	if err != nil {
 		return nil, err
 	}
@@ -76,15 +82,15 @@ func parseProcedureScript(body string) (*procedureScript, error) {
 			return nil, fmt.Errorf("EXCEPTION handler must use WHEN OTHER THEN")
 		}
 		script.ExceptionHandler = make([]procedureStatement, 0)
-		script.ExceptionHandler, terminator, err = p.parseStatements("END")
+		script.ExceptionHandler, terminator, err = p.parseStatements(keywordEnd)
 		if err != nil {
 			return nil, err
 		}
 	}
-	if terminator != "END" {
+	if terminator != keywordEnd {
 		return nil, fmt.Errorf("procedure body is missing END")
 	}
-	p.consumeKeyword("END")
+	p.consumeKeyword(keywordEnd)
 	p.consumeSemicolon()
 	p.skipSpaceAndComments()
 	if !p.eof() {
@@ -196,19 +202,19 @@ func (p *procedureScriptParser) parseIf() (procedureStatement, error) {
 		return nil, fmt.Errorf("invalid IF: %w", err)
 	}
 	p.consumeKeyword("THEN")
-	thenBranch, terminator, err := p.parseStatements("ELSE", "END")
+	thenBranch, terminator, err := p.parseStatements("ELSE", keywordEnd)
 	if err != nil {
 		return nil, err
 	}
 	var elseBranch []procedureStatement
 	if terminator == "ELSE" {
 		p.consumeKeyword("ELSE")
-		elseBranch, terminator, err = p.parseStatements("END")
+		elseBranch, terminator, err = p.parseStatements(keywordEnd)
 		if err != nil {
 			return nil, err
 		}
 	}
-	if terminator != "END" || !p.consumeKeyword("END") || !p.consumeKeyword("IF") {
+	if terminator != keywordEnd || !p.consumeKeyword(keywordEnd) || !p.consumeKeyword("IF") {
 		return nil, fmt.Errorf("IF statement is missing END IF")
 	}
 	p.consumeSemicolon()
@@ -227,7 +233,7 @@ func (p *procedureScriptParser) parseCase() (procedureStatement, error) {
 			return nil, fmt.Errorf("invalid CASE WHEN: %w", err)
 		}
 		p.consumeKeyword("THEN")
-		statements, terminator, err := p.parseStatements("WHEN", "ELSE", "END")
+		statements, terminator, err := p.parseStatements("WHEN", "ELSE", keywordEnd)
 		if err != nil {
 			return nil, err
 		}
@@ -237,12 +243,12 @@ func (p *procedureScriptParser) parseCase() (procedureStatement, error) {
 		}
 	}
 	if p.consumeKeyword("ELSE") {
-		caseStatement.ElseBranch, _, err = p.parseStatements("END")
+		caseStatement.ElseBranch, _, err = p.parseStatements(keywordEnd)
 		if err != nil {
 			return nil, err
 		}
 	}
-	if !p.consumeKeyword("END") || !p.consumeKeyword("CASE") {
+	if !p.consumeKeyword(keywordEnd) || !p.consumeKeyword("CASE") {
 		return nil, fmt.Errorf("CASE statement is missing END CASE")
 	}
 	p.consumeSemicolon()
@@ -297,11 +303,12 @@ func (p *procedureScriptParser) readUntilKeyword(keyword string) (string, error)
 			continue
 		}
 		if !inQuote {
-			if current == '(' {
+			switch {
+			case current == '(':
 				depth++
-			} else if current == ')' {
+			case current == ')':
 				depth--
-			} else if depth == 0 && p.peekKeyword(keyword) {
+			case depth == 0 && p.peekKeyword(keyword):
 				return p.input[start:p.pos], nil
 			}
 		}

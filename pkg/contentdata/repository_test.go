@@ -40,9 +40,9 @@ func setupTestRepository(t *testing.T) *Repository {
 		t.Fatalf("failed to create database: %v", err)
 	}
 
-	_, err = metaRepo.CreateSchema(ctx, database.ID, "PUBLIC", "")
+	_, err = metaRepo.GetSchemaByName(ctx, database.ID, "PUBLIC")
 	if err != nil {
-		t.Fatalf("failed to create schema: %v", err)
+		t.Fatalf("failed to get default schema: %v", err)
 	}
 
 	return contentRepo

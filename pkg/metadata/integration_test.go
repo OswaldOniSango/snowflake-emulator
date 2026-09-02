@@ -44,9 +44,9 @@ func TestIntegration_CompleteWorkflow(t *testing.T) { //nolint:gocyclo // Integr
 	}
 
 	// Step 2: Create schema
-	schema, err := repo.CreateSchema(ctx, database.ID, "PUBLIC", "Public schema")
+	schema, err := repo.GetSchemaByName(ctx, database.ID, "PUBLIC")
 	if err != nil {
-		t.Fatalf("CreateSchema() error = %v", err)
+		t.Fatalf("GetSchemaByName() error = %v", err)
 	}
 
 	if schema.Name != "PUBLIC" {
@@ -211,10 +211,11 @@ func TestIntegration_MultipleSchemas(t *testing.T) {
 		t.Fatalf("CreateDatabase() error = %v", err)
 	}
 
-	// Create multiple schemas
+	// PUBLIC arrives with the database; the rest are created here. The
+	// expected listing therefore covers all three.
 	schemaNames := []string{"PUBLIC", "STAGING", "ANALYTICS"}
 
-	for _, name := range schemaNames {
+	for _, name := range schemaNames[1:] {
 		_, err := repo.CreateSchema(ctx, database.ID, name, "")
 		if err != nil {
 			t.Fatalf("CreateSchema(%s) error = %v", name, err)
@@ -273,9 +274,9 @@ func TestIntegration_MultipleTables(t *testing.T) { //nolint:gocyclo // Integrat
 		t.Fatalf("CreateDatabase() error = %v", err)
 	}
 
-	schema, err := repo.CreateSchema(ctx, database.ID, "PUBLIC", "")
+	schema, err := repo.GetSchemaByName(ctx, database.ID, "PUBLIC")
 	if err != nil {
-		t.Fatalf("CreateSchema() error = %v", err)
+		t.Fatalf("GetSchemaByName() error = %v", err)
 	}
 
 	// Create multiple tables
@@ -415,12 +416,12 @@ func TestIntegration_DatabaseIsolation(t *testing.T) { //nolint:gocyclo // Integ
 	}
 
 	// Create schemas with same name in both databases
-	schema1, err := repo.CreateSchema(ctx, db1.ID, "PUBLIC", "")
+	schema1, err := repo.GetSchemaByName(ctx, db1.ID, "PUBLIC")
 	if err != nil {
-		t.Fatalf("CreateSchema(DB1.PUBLIC) error = %v", err)
+		t.Fatalf("GetSchemaByName(DB1.PUBLIC) error = %v", err)
 	}
 
-	schema2, err := repo.CreateSchema(ctx, db2.ID, "PUBLIC", "")
+	schema2, err := repo.GetSchemaByName(ctx, db2.ID, "PUBLIC")
 	if err != nil {
 		t.Fatalf("CreateSchema(DB2.PUBLIC) error = %v", err)
 	}

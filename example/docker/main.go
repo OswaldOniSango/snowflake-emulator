@@ -51,9 +51,15 @@ type StatementResponse struct {
 	ResultSetMetaData ResultSetMetaData `json:"resultSetMetaData"`
 	Data              [][]any           `json:"data"`
 	Code              string            `json:"code"`
+	SQLState          string            `json:"sqlState"`
 	Message           string            `json:"message"`
 	StatementHandle   string            `json:"statementHandle"`
 }
+
+// sqlStateSuccess is the SQLSTATE a successful statement reports. The emulator
+// answers 200 even for a failed statement and reports the failure in the body,
+// so the HTTP status alone says nothing about whether the SQL ran.
+const sqlStateSuccess = "00000"
 
 // ResultSetMetaData contains metadata about the result set
 type ResultSetMetaData struct {
@@ -209,7 +215,11 @@ func executeStatement(sql, database, schema string) (*StatementResponse, error) 
 	}
 
 	if resp.StatusCode >= 400 {
-		return &result, fmt.Errorf("statement failed: %s", result.Message)
+		return &result, fmt.Errorf("statement failed with HTTP %d: %s", resp.StatusCode, result.Message)
+	}
+
+	if result.SQLState != "" && result.SQLState != sqlStateSuccess {
+		return &result, fmt.Errorf("statement failed (SQLSTATE %s): %s", result.SQLState, result.Message)
 	}
 
 	return &result, nil

@@ -50,6 +50,13 @@ func main() {
 		return
 	}
 
+	// The documented quickstart DSN connects to TEST_DB/PUBLIC, and execution
+	// contexts are validated against the catalog, so the namespace must exist.
+	if err := repo.EnsureDefaultNamespace(context.Background()); err != nil {
+		log.Printf("Failed to create default namespace: %v", err)
+		return
+	}
+
 	sessionMgr := session.NewManager(24 * time.Hour)
 	stmtMgr := query.NewStatementManager(1 * time.Hour)
 

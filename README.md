@@ -8,7 +8,7 @@ The Go gopher was designed by the awesome [Renee French](https://reneefrench.blo
 
 A lightweight, open-source Snowflake emulator built with Go and DuckDB, designed for local development and testing.
 
-[![CI](https://github.com/nnnkkk7/snowflake-emulator/workflows/CI/badge.svg)](https://github.com/nnnkkk7/snowflake-emulator/actions)
+[![CI](https://github.com/OswaldOniSango/snowflake-emulator/actions/workflows/ci.yaml/badge.svg)](https://github.com/OswaldOniSango/snowflake-emulator/actions/workflows/ci.yaml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Go Reference](https://pkg.go.dev/badge/github.com/nnnkkk7/snowflake-emulator.svg)](https://pkg.go.dev/github.com/nnnkkk7/snowflake-emulator)
 [![GitHub Stars](https://img.shields.io/github/stars/nnnkkk7/snowflake-emulator?style=social)](https://github.com/nnnkkk7/snowflake-emulator)

@@ -12,6 +12,10 @@ import (
 	"github.com/google/uuid"
 )
 
+// sqlStateInternalError is the SQLSTATE the interpreter reports for a failure
+// with no more specific mapping.
+const sqlStateInternalError = "XX000"
+
 var procedureTemporaryTablePattern = regexp.MustCompile(`(?i)^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:TEMP|TEMPORARY)\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?\s+([A-Za-z_][A-Za-z0-9_$]*)`)
 
 type procedureInterpreter struct {
@@ -75,7 +79,7 @@ func (i *procedureInterpreter) execute(ctx context.Context, script *procedureScr
 			return nil, err
 		}
 		i.variables["SQLCODE"] = int64(-1)
-		i.variables["SQLSTATE"] = "XX000"
+		i.variables["SQLSTATE"] = sqlStateInternalError
 		i.variables["SQLERRM"] = err.Error()
 		execution, err = i.executeStatements(ctx, script.ExceptionHandler)
 		if err != nil {
@@ -408,7 +412,7 @@ func readProcedureVariableName(input string, start int) (string, int) {
 func procedureSQLLiteral(value any) string {
 	switch value := value.(type) {
 	case nil:
-		return "NULL"
+		return ValueNull
 	case string:
 		return "'" + strings.ReplaceAll(value, "'", "''") + "'"
 	case []byte:

@@ -103,7 +103,7 @@ func (p *StreamProcessor) Show(ctx context.Context, _ string) (*Result, error) {
 		source := stream.SourceDatabase + "." + stream.SourceSchema + "." + stream.SourceTable
 		rows = append(rows, []interface{}{stream.CreatedAt, stream.Name, source, stream.StreamType, stream.Offset})
 	}
-	columns := []string{"created_on", "name", "table_name", "type", "offset"}
+	columns := []string{columnCreatedOn, columnName, "table_name", "type", "offset"}
 	return &Result{Columns: columns, ColumnTypes: textColumnMetadata(columns), Rows: rows}, nil
 }
 
@@ -113,10 +113,10 @@ func (p *StreamProcessor) RewriteReferences(ctx context.Context, executionContex
 	return rewritten, err
 }
 
-// RewriteReferencesForConsumption freezes each referenced stream at its
+// rewriteReferencesForConsumption freezes each referenced stream at its
 // current high-water mark so a successful DML statement can advance to the
 // exact set of rows it consumed.
-func (p *StreamProcessor) RewriteReferencesForConsumption(ctx context.Context, executionContext ExecutionContext, sql string) (string, []streamConsumption, error) {
+func (p *StreamProcessor) rewriteReferencesForConsumption(ctx context.Context, executionContext ExecutionContext, sql string) (string, []streamConsumption, error) {
 	return p.rewriteReferences(ctx, executionContext, sql, true)
 }
 
@@ -172,7 +172,7 @@ func (p *StreamProcessor) rewriteReferences(ctx context.Context, executionContex
 	return result, consumptions, nil
 }
 
-func (p *StreamProcessor) AdvanceOffsets(ctx context.Context, consumptions []streamConsumption) error {
+func (p *StreamProcessor) advanceOffsets(ctx context.Context, consumptions []streamConsumption) error {
 	for _, consumption := range consumptions {
 		if consumption.offset <= consumption.stream.Offset {
 			continue
@@ -190,10 +190,6 @@ func (p *StreamProcessor) resolveSchema(ctx context.Context, databaseName, schem
 		return nil, err
 	}
 	return p.repo.GetSchemaByName(ctx, database.ID, schemaName)
-}
-
-func parseQualifiedObjectName(name, objectType string) (string, string, string, error) {
-	return resolveQualifiedObjectName(name, objectType, ExecutionContext{})
 }
 
 func resolveQualifiedObjectName(name, objectType string, executionContext ExecutionContext) (string, string, string, error) {

@@ -34,8 +34,8 @@ func TestExecutorValidatesAllExecutionContextFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateDatabase() error = %v", err)
 	}
-	if _, err := repo.CreateSchema(ctx, database.ID, "PUBLIC", ""); err != nil {
-		t.Fatalf("CreateSchema() error = %v", err)
+	if _, err := repo.GetSchemaByName(ctx, database.ID, "PUBLIC"); err != nil {
+		t.Fatalf("GetSchemaByName() error = %v", err)
 	}
 
 	warehouseManager := warehouse.NewManager()
@@ -93,5 +93,80 @@ func TestExecutorRejectsMissingSchemaContext(t *testing.T) {
 	}
 	if count != 0 {
 		t.Fatalf("missing-schema context created %d physical tables, want 0", count)
+	}
+}
+
+// TestRewriteContextualTableReferences_StatementForms covers the statement
+// shapes whose table references must resolve against the execution context.
+func TestRewriteContextualTableReferences_StatementForms(t *testing.T) {
+	executionContext := ExecutionContext{Database: "TEST_DB", Schema: "PUBLIC"}
+
+	tests := []struct {
+		name string
+		sql  string
+		want string
+	}{
+		{
+			name: "describe table",
+			sql:  "DESCRIBE TABLE users",
+			want: "DESCRIBE TABLE TEST_DB.PUBLIC_USERS",
+		},
+		{
+			name: "desc table shorthand",
+			sql:  "DESC TABLE users",
+			want: "DESC TABLE TEST_DB.PUBLIC_USERS",
+		},
+		{
+			name: "truncate table",
+			sql:  "TRUNCATE TABLE users",
+			want: "TRUNCATE TABLE TEST_DB.PUBLIC_USERS",
+		},
+		{
+			name: "merge resolves both tables",
+			sql:  "MERGE INTO target t USING source s ON t.id = s.id",
+			want: "MERGE INTO TEST_DB.PUBLIC_TARGET t USING TEST_DB.PUBLIC_SOURCE s ON t.id = s.id",
+		},
+		{
+			// The UPDATE pattern used to capture SET as though it named a table,
+			// producing "UPDATE TEST_DB.PUBLIC_SET name = ...".
+			name: "merge update set is not treated as a table",
+			sql:  "MERGE INTO target t USING source s ON t.id = s.id WHEN MATCHED THEN UPDATE SET name = s.name",
+			want: "MERGE INTO TEST_DB.PUBLIC_TARGET t USING TEST_DB.PUBLIC_SOURCE s ON t.id = s.id WHEN MATCHED THEN UPDATE SET name = s.name",
+		},
+		{
+			// A JOIN's USING (col) list is a column list, not a table reference.
+			name: "join using column list is left alone",
+			sql:  "SELECT * FROM orders JOIN users USING (id)",
+			want: "SELECT * FROM TEST_DB.PUBLIC_ORDERS JOIN TEST_DB.PUBLIC_USERS USING (id)",
+		},
+		{
+			name: "already qualified names are left alone",
+			sql:  "SELECT * FROM OTHER_DB.PUBLIC_USERS",
+			want: "SELECT * FROM OTHER_DB.PUBLIC_USERS",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := rewriteContextualTableReferences(tt.sql, executionContext); got != tt.want {
+				t.Errorf("got  %q\nwant %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestRewriteContextualTableReferences_WithoutContext pins that an incomplete
+// namespace leaves the statement untouched.
+func TestRewriteContextualTableReferences_WithoutContext(t *testing.T) {
+	sql := "SELECT * FROM users"
+
+	for _, executionContext := range []ExecutionContext{
+		{},
+		{Database: "TEST_DB"},
+		{Schema: "PUBLIC"},
+	} {
+		if got := rewriteContextualTableReferences(sql, executionContext); got != sql {
+			t.Errorf("context %+v rewrote to %q, want it unchanged", executionContext, got)
+		}
 	}
 }

@@ -13,9 +13,9 @@ func TestRepository_ProcedureLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateDatabase() error = %v", err)
 	}
-	schema, err := repo.CreateSchema(ctx, database.ID, "PUBLIC", "")
+	schema, err := repo.GetSchemaByName(ctx, database.ID, "PUBLIC")
 	if err != nil {
-		t.Fatalf("CreateSchema() error = %v", err)
+		t.Fatalf("GetSchemaByName() error = %v", err)
 	}
 
 	procedure, err := repo.CreateProcedure(ctx, schema.ID, "HELLO", `[{"name":"NAME","type":"VARCHAR"}]`, "VARCHAR", "SQL", "RETURN :NAME", "", false)

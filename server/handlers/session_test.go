@@ -48,9 +48,9 @@ func setupTestHandler(t *testing.T) *SessionHandler {
 		t.Fatalf("failed to create database: %v", err)
 	}
 
-	_, err = repo.CreateSchema(ctx, database.ID, "PUBLIC", "")
+	_, err = repo.GetSchemaByName(ctx, database.ID, "PUBLIC")
 	if err != nil {
-		t.Fatalf("failed to create schema: %v", err)
+		t.Fatalf("failed to get default schema: %v", err)
 	}
 
 	return NewSessionHandler(sessionMgr, repo)
