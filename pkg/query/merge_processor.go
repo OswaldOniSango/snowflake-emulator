@@ -105,8 +105,6 @@ func NewMergeProcessor(executor *Executor) *MergeProcessor {
 }
 
 // ParseMergeStatement parses a MERGE INTO SQL statement.
-//
-//nolint:gocyclo // parsing logic inherently has many branches
 func (h *MergeProcessor) ParseMergeStatement(sql string) (*MergeStatement, error) {
 	sql = strings.TrimSpace(sql)
 
@@ -205,8 +203,6 @@ func (h *MergeProcessor) parseWhenClauses(sql string) ([]WhenClause, error) {
 }
 
 // parseWhenClause parses a single WHEN clause.
-//
-//nolint:gocyclo // parsing logic inherently has many branches
 func (h *MergeProcessor) parseWhenClause(section, upperSection string) (WhenClause, error) {
 	clause := WhenClause{}
 

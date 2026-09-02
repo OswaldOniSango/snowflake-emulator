@@ -91,10 +91,10 @@ func (r *Repository) ListProcedures(ctx context.Context, schemaID string) ([]*Pr
 	query := `SELECT id, schema_id, name, arguments, return_type, language, body, comment, created_at, owner FROM _metadata_procedures`
 	var args []any
 	if schemaID != "" {
-		query += ` WHERE schema_id = ?`
+		query += sqlWhereSchemaID
 		args = append(args, schemaID)
 	}
-	query += ` ORDER BY name`
+	query += sqlOrderByName
 
 	rows, err := r.mgr.Query(ctx, query, args...)
 	if err != nil {

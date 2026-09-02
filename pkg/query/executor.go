@@ -280,8 +280,6 @@ func (e *Executor) replaceQuestionMarkPlaceholders(sql string, bindings map[stri
 }
 
 // formatBindingValue formats a binding value for SQL substitution.
-//
-//nolint:gocyclo // switch statement for type handling inherently has many branches
 func formatBindingValue(b *QueryBindingValue) (string, error) {
 	if b == nil {
 		return ValueNull, nil
@@ -448,7 +446,7 @@ func (e *Executor) executeRaw(ctx context.Context, sql string) (*ExecResult, err
 }
 
 func (e *Executor) executeRawWithContext(ctx context.Context, executionContext ExecutionContext, sql string) (*ExecResult, error) {
-	rewrittenSQL, consumptions, err := e.streamProcessor.RewriteReferencesForConsumption(ctx, executionContext, sql)
+	rewrittenSQL, consumptions, err := e.streamProcessor.rewriteReferencesForConsumption(ctx, executionContext, sql)
 	if err != nil {
 		return nil, err
 	}
@@ -474,7 +472,7 @@ func (e *Executor) executeRawWithContext(ctx context.Context, executionContext E
 	if err != nil {
 		return nil, fmt.Errorf("failed to get rows affected: %w", err)
 	}
-	if err := e.streamProcessor.AdvanceOffsets(ctx, consumptions); err != nil {
+	if err := e.streamProcessor.advanceOffsets(ctx, consumptions); err != nil {
 		return nil, err
 	}
 

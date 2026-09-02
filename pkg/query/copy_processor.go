@@ -212,8 +212,6 @@ func (h *CopyProcessor) parseFileFormatOptions(opts *FileFormatOptions, optStr s
 }
 
 // ExecuteCopyInto executes a COPY INTO statement.
-//
-//nolint:gocyclo // complex file loading logic with multiple format handlers
 func (h *CopyProcessor) ExecuteCopyInto(ctx context.Context, stmt *CopyStatement, defaultSchemaID string) (*CopyResult, error) {
 	result := &CopyResult{}
 
@@ -296,8 +294,6 @@ func (h *CopyProcessor) ExecuteCopyInto(ctx context.Context, stmt *CopyStatement
 }
 
 // loadCSVFile loads a CSV file into the target table.
-//
-//nolint:gocyclo // CSV parsing logic with multiple format options
 func (h *CopyProcessor) loadCSVFile(ctx context.Context, stmt *CopyStatement, schemaID, fileName string) (int64, error) {
 	// Get file reader
 	reader, err := h.stageMgr.GetFile(ctx, schemaID, stmt.StageName, fileName)

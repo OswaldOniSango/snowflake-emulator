@@ -84,10 +84,10 @@ func (r *Repository) ListStreams(ctx context.Context, schemaID string) ([]*Strea
 	query := `SELECT id, schema_id, name, source_database, source_schema, source_table, stream_type, stream_offset, created_at, owner FROM _metadata_streams`
 	var args []any
 	if schemaID != "" {
-		query += ` WHERE schema_id = ?`
+		query += sqlWhereSchemaID
 		args = append(args, schemaID)
 	}
-	query += ` ORDER BY name`
+	query += sqlOrderByName
 
 	rows, err := r.mgr.Query(ctx, query, args...)
 	if err != nil {

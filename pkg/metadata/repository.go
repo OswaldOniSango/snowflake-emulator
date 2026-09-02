@@ -13,6 +13,12 @@ import (
 	"github.com/nnnkkk7/snowflake-emulator/pkg/connection"
 )
 
+// SQL fragments shared by the object repositories.
+const (
+	sqlWhereSchemaID = " WHERE schema_id = ?"
+	sqlOrderByName   = " ORDER BY name"
+)
+
 // Repository manages Snowflake metadata (databases, schemas, tables) in DuckDB.
 // Metadata is stored in special tables prefixed with _metadata_.
 type Repository struct {

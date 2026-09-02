@@ -67,7 +67,7 @@ func rewriteContextualTableReferences(sql string, executionContext ExecutionCont
 
 // rewriteTablesWithContext validates the logical Snowflake namespace before
 // mapping short table names to physical DuckDB names.
-func (e *Executor) rewriteTablesWithContext(ctx context.Context, executionContext ExecutionContext, sql string) (string, error) {
+func (e *Executor) rewriteTablesWithContext(_ context.Context, executionContext ExecutionContext, sql string) (string, error) {
 	rewritten := rewriteContextualTableReferences(sql, executionContext)
 	return rewritten, nil
 }
