@@ -143,7 +143,7 @@ func (e *Executor) QueryWithContext(ctx context.Context, executionContext Execut
 	// Execute query
 	rows, err := e.mgr.Query(ctx, translatedSQL)
 	if err != nil {
-		return nil, fmt.Errorf("query execution error: %w", err)
+		return nil, fmt.Errorf("query execution error: %w", physicalNameError(err, executionContext))
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -465,7 +465,7 @@ func (e *Executor) executeRawWithContext(ctx context.Context, executionContext E
 	// Execute statement
 	result, err := e.mgr.Exec(ctx, translatedSQL)
 	if err != nil {
-		return nil, fmt.Errorf("execution error: %w", err)
+		return nil, fmt.Errorf("execution error: %w", physicalNameError(err, executionContext))
 	}
 
 	rowsAffected, err := result.RowsAffected()
