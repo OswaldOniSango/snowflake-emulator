@@ -241,3 +241,85 @@ export async function listSchemaObjects(
   );
   return body.objects ?? [];
 }
+
+/** An emulated compute warehouse. */
+export interface Warehouse {
+  name: string;
+  state: string;
+  size: string;
+  type?: string;
+  auto_suspend?: number;
+  auto_resume?: boolean;
+  created_on?: string;
+}
+
+/** One row of the statement history. */
+export interface HistoryEntry {
+  statementHandle: string;
+  status: string;
+  statement: string;
+  database?: string;
+  schema?: string;
+  createdOn: number;
+  completedOn?: number;
+  durationMs?: number;
+  numRows: number;
+  code?: string;
+  message?: string;
+}
+
+export interface History {
+  statements: HistoryEntry[];
+  /** How long the emulator keeps a statement, as a Go duration. */
+  retainedFor: string;
+}
+
+export function listWarehouses(fetchFn: typeof fetch = fetch): Promise<Warehouse[]> {
+  return getJSON<Warehouse[]>("/api/v2/warehouses", fetchFn);
+}
+
+async function warehouseAction(
+  name: string,
+  action: string,
+  fetchFn: typeof fetch,
+): Promise<void> {
+  const response = await fetchFn(`/api/v2/warehouses/${encodeURIComponent(name)}${action}`, {
+    method: action === "" ? "DELETE" : "POST",
+  });
+  if (!response.ok) {
+    const body = (await response.json().catch(() => ({}))) as { message?: string };
+    throw new StatementError("warehouse", "", body.message ?? `HTTP ${response.status}`, "");
+  }
+}
+
+export function resumeWarehouse(name: string, fetchFn: typeof fetch = fetch): Promise<void> {
+  return warehouseAction(name, ":resume", fetchFn);
+}
+
+export function suspendWarehouse(name: string, fetchFn: typeof fetch = fetch): Promise<void> {
+  return warehouseAction(name, ":suspend", fetchFn);
+}
+
+export function dropWarehouse(name: string, fetchFn: typeof fetch = fetch): Promise<void> {
+  return warehouseAction(name, "", fetchFn);
+}
+
+export async function createWarehouse(
+  name: string,
+  size: string,
+  fetchFn: typeof fetch = fetch,
+): Promise<void> {
+  const response = await fetchFn("/api/v2/warehouses", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, size }),
+  });
+  if (!response.ok) {
+    const body = (await response.json().catch(() => ({}))) as { message?: string };
+    throw new StatementError("warehouse", "", body.message ?? `HTTP ${response.status}`, "");
+  }
+}
+
+export function listHistory(fetchFn: typeof fetch = fetch): Promise<History> {
+  return getJSON<History>("/api/v2/statements", fetchFn);
+}

@@ -575,3 +575,117 @@ func withURLParams(r *http.Request, params map[string]string) *http.Request {
 	}
 	return r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, routeContext))
 }
+
+// statusSuccess is the status a finished statement reports.
+const statusSuccess = "success"
+
+func TestRestAPIv2Handler_ListStatements(t *testing.T) {
+	handler, router := setupRestAPIv2Handler(t)
+
+	submit := func(statement string) {
+		t.Helper()
+		body := `{"statement":` + strconv.Quote(statement) + `,"database":"TEST_DB","schema":"PUBLIC"}`
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v2/statements", strings.NewReader(body)))
+	}
+
+	submit("CREATE TABLE history_probe (id INTEGER)")
+	submit("INSERT INTO history_probe VALUES (1)")
+	submit("SELECT * FROM history_probe")
+	submit("SELECT * FROM does_not_exist")
+
+	rec := httptest.NewRecorder()
+	handler.ListStatements(rec, httptest.NewRequest(http.MethodGet, "/api/v2/statements", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var resp types.ListStatementsResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+
+	if len(resp.Statements) != 4 {
+		t.Fatalf("got %d statements, want 4", len(resp.Statements))
+	}
+	if resp.RetainedFor == "" {
+		t.Error("the response should say how long statements are kept")
+	}
+
+	t.Run("newest first", func(t *testing.T) {
+		if !strings.Contains(resp.Statements[0].Statement, "does_not_exist") {
+			t.Errorf("first entry = %q, want the most recent statement", resp.Statements[0].Statement)
+		}
+	})
+
+	t.Run("a failure carries its code", func(t *testing.T) {
+		failed := resp.Statements[0]
+		if failed.Status != "failed" {
+			t.Errorf("status = %q, want failed", failed.Status)
+		}
+		if failed.Code == "" || failed.Message == "" {
+			t.Error("a failed statement should carry its code and message")
+		}
+	})
+
+	t.Run("DDL and DML are reported as finished", func(t *testing.T) {
+		// They carry no result set, so nothing used to mark them complete and
+		// every one of them read as still running.
+		for _, entry := range resp.Statements {
+			if strings.HasPrefix(entry.Statement, "CREATE") || strings.HasPrefix(entry.Statement, "INSERT") {
+				if entry.Status != statusSuccess {
+					t.Errorf("%q reported %q, want success", entry.Statement, entry.Status)
+				}
+				if entry.CompletedOn == 0 {
+					t.Errorf("%q carries no completion time", entry.Statement)
+				}
+			}
+		}
+	})
+}
+
+func TestRestAPIv2Handler_ListStatementsLimit(t *testing.T) {
+	handler, router := setupRestAPIv2Handler(t)
+
+	for i := 0; i < 3; i++ {
+		rec := httptest.NewRecorder()
+		body := `{"statement":"SELECT ` + strconv.Itoa(i) + `"}`
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v2/statements", strings.NewReader(body)))
+	}
+
+	tests := []struct {
+		name       string
+		query      string
+		wantStatus int
+		wantCount  int
+	}{
+		{name: "limits the listing", query: "?limit=2", wantStatus: http.StatusOK, wantCount: 2},
+		{name: "zero means no limit", query: "?limit=0", wantStatus: http.StatusOK, wantCount: 3},
+		{name: "no limit given", query: "", wantStatus: http.StatusOK, wantCount: 3},
+		{name: "rejects a non-number", query: "?limit=abc", wantStatus: http.StatusBadRequest},
+		{name: "rejects a negative", query: "?limit=-1", wantStatus: http.StatusBadRequest},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			handler.ListStatements(rec, httptest.NewRequest(http.MethodGet, "/api/v2/statements"+tt.query, nil))
+
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d", rec.Code, tt.wantStatus)
+			}
+			if tt.wantStatus != http.StatusOK {
+				return
+			}
+
+			var resp types.ListStatementsResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+				t.Fatalf("decoding response: %v", err)
+			}
+			if len(resp.Statements) != tt.wantCount {
+				t.Errorf("got %d statements, want %d", len(resp.Statements), tt.wantCount)
+			}
+		})
+	}
+}

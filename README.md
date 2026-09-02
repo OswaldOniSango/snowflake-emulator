@@ -379,6 +379,7 @@ go run ./example/gosnowflake
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/api/v2/statements` | POST | Submit SQL statement |
+| `/api/v2/statements` | GET | Recent statement history (`?limit=N`) |
 | `/api/v2/statements/{handle}` | GET | Get statement status/result |
 | `/api/v2/statements/{handle}/cancel` | POST | Cancel statement |
 | `/api/v2/translate` | POST | Show the DuckDB SQL a statement translates to, without running it |

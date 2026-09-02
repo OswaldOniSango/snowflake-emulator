@@ -66,9 +66,11 @@ func TestRouterPrecedence(t *testing.T) {
 			wantStatus: http.StatusMethodNotAllowed,
 		},
 		{
-			name:       "GET on a POST-only statements route stays a 405",
+			// /statements now answers GET as well, so the 405 case moves to a
+			// route that is still POST-only.
+			name:       "GET on a POST-only cancel route stays a 405",
 			method:     http.MethodGet,
-			path:       "/api/v2/statements",
+			path:       "/api/v2/statements/abc/cancel",
 			wantStatus: http.StatusMethodNotAllowed,
 		},
 		{

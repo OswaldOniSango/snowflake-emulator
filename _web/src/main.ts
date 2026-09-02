@@ -5,6 +5,8 @@ import { createExplorer } from "./explorer";
 import { renderGrid, renderNotice } from "./grid";
 import { checkHealth } from "./health";
 import { createContextPicker } from "./context-picker";
+import { createHistoryView } from "./history";
+import { createWarehousesView } from "./warehouses";
 import { splitStatements, statementAt } from "./statements";
 import { renderTranslation } from "./translation";
 import {
@@ -36,13 +38,18 @@ const MARK = `
 const SHELL = `
 <header class="topbar">
   <div class="brand">${MARK}<b>Mallard</b><span>local</span></div>
+  <nav class="nav" data-role="nav">
+    <button data-view="worksheets" aria-current="page">Worksheets</button>
+    <button data-view="warehouses">Warehouses</button>
+    <button data-view="history">History</button>
+  </nav>
   <div class="spacer"></div>
   <div class="conn" data-state="pending" role="status">
     <span class="dot"></span><span data-role="health">Checking emulator…</span>
   </div>
 </header>
 
-<main class="workspace">
+<main class="workspace" data-view-pane="worksheets">
   <aside class="sidebar" data-role="sidebar"></aside>
 
   <div class="center">
@@ -70,7 +77,10 @@ const SHELL = `
 
     <section class="dock" data-role="dock" aria-live="polite"></section>
   </div>
-</main>`;
+</main>
+
+<div class="view-pane" data-view-pane="warehouses" hidden></div>
+<div class="view-pane" data-view-pane="history" hidden></div>`;
 
 function pick<T extends HTMLElement>(root: ParentNode, role: string): T {
   const node = root.querySelector<T>(`[data-role="${role}"]`);
@@ -401,6 +411,76 @@ function main(): void {
     add.addEventListener("click", addWorksheet);
     tabstrip.append(add);
   }
+
+  // The secondary views cost a request each, so they are built the first time
+  // they are opened rather than on load.
+  const views = new Map<string, { refresh: () => Promise<void> }>();
+
+  function showView(name: string): void {
+    root!.querySelectorAll<HTMLElement>("[data-view-pane]").forEach((pane) => {
+      pane.hidden = pane.dataset["viewPane"] !== name;
+    });
+    root!.querySelectorAll<HTMLElement>("[data-view]").forEach((button) => {
+      if (button.dataset["view"] === name) {
+        button.setAttribute("aria-current", "page");
+      } else {
+        button.removeAttribute("aria-current");
+      }
+    });
+
+    if (name === "worksheets") {
+      return;
+    }
+
+    const pane = root!.querySelector<HTMLElement>(`[data-view-pane="${name}"]`);
+    if (!pane) {
+      return;
+    }
+
+    const existing = views.get(name);
+    if (existing) {
+      void existing.refresh();
+      return;
+    }
+
+    views.set(
+      name,
+      name === "warehouses"
+        ? createWarehousesView(pane)
+        : createHistoryView({
+            parent: pane,
+            onOpen: (entry) => {
+              openInWorksheet(entry.statement, {
+                database: entry.database || active().context.database,
+                schema: entry.schema || active().context.schema,
+              });
+              showView("worksheets");
+            },
+          }),
+    );
+  }
+
+  /** Reopens a statement from the history in a worksheet of its own. */
+  function openInWorksheet(sql: string, context: ExecutionContext): void {
+    const worksheet = newWorksheet(nextWorksheetName(workspace.worksheets), context, sql);
+    workspace.worksheets.push(worksheet);
+    workspace.activeId = worksheet.id;
+    editor.setValue(sql);
+    contextPicker.set(context);
+    resetOutput();
+    persist();
+    renderTabs();
+    updateRunAll();
+    showTab("results");
+    editor.focus();
+  }
+
+  pick(root, "nav").addEventListener("click", (event) => {
+    const button = (event.target as HTMLElement).closest<HTMLElement>("[data-view]");
+    if (button?.dataset["view"]) {
+      showView(button.dataset["view"]);
+    }
+  });
 
   runButton.addEventListener("click", () => void run());
   runAllButton.addEventListener("click", () => void runAll());

@@ -251,3 +251,31 @@ type ListSchemaObjectsResponse struct {
 	Schema   string         `json:"schema"`
 	Objects  []SchemaObject `json:"objects"`
 }
+
+// StatementHistoryEntry is one row of the statement history.
+type StatementHistoryEntry struct {
+	Handle      string `json:"statementHandle"`
+	Status      string `json:"status"`
+	Statement   string `json:"statement"`
+	Database    string `json:"database,omitempty"`
+	Schema      string `json:"schema,omitempty"`
+	Warehouse   string `json:"warehouse,omitempty"`
+	CreatedOn   int64  `json:"createdOn"`
+	CompletedOn int64  `json:"completedOn,omitempty"`
+
+	// DurationMs is set once a statement has finished.
+	DurationMs int64 `json:"durationMs,omitempty"`
+	NumRows    int   `json:"numRows"`
+
+	Code    string `json:"code,omitempty"`
+	Message string `json:"message,omitempty"`
+}
+
+// ListStatementsResponse is the statement history.
+type ListStatementsResponse struct {
+	Statements []StatementHistoryEntry `json:"statements"`
+
+	// RetainedFor says how long a statement is kept, so a reader can tell an
+	// empty history from a short one.
+	RetainedFor string `json:"retainedFor"`
+}

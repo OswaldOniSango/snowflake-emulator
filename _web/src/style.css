@@ -52,6 +52,12 @@
   box-sizing: border-box;
 }
 
+/* Views are switched with the hidden attribute, and several of them set their
+   own display, which would otherwise win over the browser's [hidden] rule. */
+[hidden] {
+  display: none !important;
+}
+
 body {
   margin: 0;
   background: var(--ground);
@@ -870,4 +876,219 @@ table.grid .rn {
 
 .toolbar {
   border-bottom: 1px solid var(--line);
+}
+
+/* --- top navigation --- */
+
+.nav {
+  display: flex;
+  gap: 2px;
+  padding-left: 4px;
+}
+
+.nav button {
+  padding: 5px 11px;
+  border-radius: 6px;
+  color: var(--ink-2);
+  font-weight: 500;
+  font-size: 12.5px;
+}
+
+.nav button:hover {
+  background: var(--panel-2);
+  color: var(--ink);
+}
+
+.nav button[aria-current="page"] {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* --- secondary views --- */
+
+.view-pane {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.view {
+  padding: 22px 26px;
+}
+
+.view-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 18px;
+  max-width: 1100px;
+}
+
+.view-head h1 {
+  margin: 0 0 3px;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  text-wrap: balance;
+}
+
+.view-head p {
+  margin: 0;
+  color: var(--ink-3);
+  font-size: 12.5px;
+  max-width: 62ch;
+}
+
+.ghost {
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 5px 11px;
+  color: var(--ink-2);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.ghost:hover {
+  border-color: var(--accent-line);
+  color: var(--accent);
+}
+
+.ghost.danger:hover {
+  border-color: var(--crit);
+  color: var(--crit);
+}
+
+/* --- warehouses --- */
+
+.wh-create {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: none;
+}
+
+.wh-create input,
+.wh-create select {
+  background: var(--sunk);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 5px 8px;
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  outline: none;
+}
+
+.wh-create input {
+  width: 150px;
+}
+
+.wh-create input:focus,
+.wh-create select:focus {
+  border-color: var(--accent-line);
+}
+
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 12px;
+  max-width: 1100px;
+}
+
+.wh {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 11px;
+}
+
+.wh-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.wh-top b {
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.wh-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.wh-stats div {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.wh-stats .lab {
+  font-size: 9.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  font-weight: 600;
+}
+
+.wh-stats .val {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.wh-act {
+  display: flex;
+  gap: 7px;
+}
+
+/* --- history --- */
+
+.tablewrap {
+  max-width: 1100px;
+  overflow: auto;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 11px;
+}
+
+.history-row {
+  cursor: pointer;
+}
+
+.history-row:hover td {
+  background: var(--sunk);
+}
+
+.history-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.hist-sql {
+  max-width: 380px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hist-code {
+  margin-left: 7px;
+  font-size: 10.5px;
+  color: var(--ink-3);
+}
+
+.view .notice {
+  max-width: 1100px;
 }

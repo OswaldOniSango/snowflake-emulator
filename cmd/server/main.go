@@ -149,6 +149,7 @@ func newRouter(
 
 		// Statement endpoints
 		r.Post("/statements", restAPIHandler.SubmitStatement)
+		r.Get("/statements", restAPIHandler.ListStatements)
 		r.Get("/statements/{handle}", restAPIHandler.GetStatement)
 		r.Post("/statements/{handle}/cancel", restAPIHandler.CancelStatement)
 
