@@ -1,25 +1,24 @@
 import "./style.css";
 import { runStatement, StatementError, translateStatement } from "./api";
-import { createEditor } from "./editor";
+import { createEditor, type Editor } from "./editor";
 import { createExplorer } from "./explorer";
 import { renderGrid, renderNotice } from "./grid";
-import { renderTranslation } from "./translation";
 import { checkHealth } from "./health";
-
-// The execution context is fixed until the context selectors land. It matches
-// the namespace the emulator provisions at startup.
-const CONTEXT = { database: "TEST_DB", schema: "PUBLIC" };
-
-// No leading comment: the emulator classifies statements with HasPrefix after a
-// plain TrimSpace, so a comment before SELECT routes it down the DML path and
-// the result set is silently dropped.
-const INITIAL_SQL = `SELECT
-    IFF(1 > 0, 'yes', 'no')      AS iff_translates,
-    NVL(NULL, 'fallback')        AS nvl_translates,
-    DATEADD(day, 30, CURRENT_DATE) AS dateadd_translates;`;
+import { createContextPicker } from "./context-picker";
+import { splitStatements, statementAt } from "./statements";
+import { renderTranslation } from "./translation";
+import {
+  loadWorkspace,
+  nextWorksheetName,
+  newWorksheet,
+  saveWorkspace,
+  type ExecutionContext,
+  type Workspace,
+  type Worksheet,
+} from "./workspace";
 
 // Static, author-controlled markup. Everything derived from data is built with
-// createElement and textContent — see grid.ts.
+// createElement and textContent — see grid.ts and explorer.ts.
 const MARK = `
 <svg viewBox="0 0 24 24" aria-hidden="true">
   <defs>
@@ -37,9 +36,6 @@ const MARK = `
 const SHELL = `
 <header class="topbar">
   <div class="brand">${MARK}<b>Mallard</b><span>local</span></div>
-  <div class="context" title="Fixed until the context selectors land">
-    <span class="lab">Context</span><b data-role="context"></b>
-  </div>
   <div class="spacer"></div>
   <div class="conn" data-state="pending" role="status">
     <span class="dot"></span><span data-role="health">Checking emulator…</span>
@@ -50,22 +46,29 @@ const SHELL = `
   <aside class="sidebar" data-role="sidebar"></aside>
 
   <div class="center">
-  <section class="editor" data-role="editor"></section>
+    <div class="tabstrip" data-role="tabs" role="tablist" aria-label="Open worksheets"></div>
 
-  <div class="toolbar">
-    <button class="run" data-role="run">Run <kbd data-role="shortcut"></kbd></button>
-    <div class="status">
-      <span class="pill idle" data-role="pill">Idle</span>
-      <span data-role="meta">no statement submitted</span>
+    <div class="ctxbar">
+      <div data-role="context"></div>
+      <button class="run" data-role="run">Run <kbd data-role="shortcut"></kbd></button>
+      <button class="ghost" data-role="run-all" hidden></button>
     </div>
-  </div>
 
-  <div class="dock-head" role="tablist" aria-label="Statement output">
-    <button class="dtab" data-tab="results" aria-selected="true" role="tab">Results</button>
-    <button class="dtab" data-tab="translation" aria-selected="false" role="tab">Translated SQL</button>
-  </div>
+    <section class="editor" data-role="editor"></section>
 
-  <section class="dock" data-role="dock" aria-live="polite"></section>
+    <div class="toolbar">
+      <div class="status">
+        <span class="pill idle" data-role="pill">Idle</span>
+        <span data-role="meta">no statement submitted</span>
+      </div>
+    </div>
+
+    <div class="dock-head" role="tablist" aria-label="Statement output">
+      <button class="dtab" data-tab="results" aria-selected="true" role="tab">Results</button>
+      <button class="dtab" data-tab="translation" aria-selected="false" role="tab">Translated SQL</button>
+    </div>
+
+    <section class="dock" data-role="dock" aria-live="polite"></section>
   </div>
 </main>`;
 
@@ -85,69 +88,151 @@ function main(): void {
   root.innerHTML = SHELL;
 
   const dock = pick(root, "dock");
+  const tabstrip = pick(root, "tabs");
   const runButton = pick<HTMLButtonElement>(root, "run");
+  const runAllButton = pick<HTMLButtonElement>(root, "run-all");
   const pill = pick(root, "pill");
   const meta = pick(root, "meta");
 
-  pick(root, "context").textContent = `${CONTEXT.database}.${CONTEXT.schema}`;
-  pick(root, "shortcut").textContent = isApplePlatform() ? "⌘↵" : "Ctrl+↵";
-
-  let running = false;
+  const workspace: Workspace = loadWorkspace();
   let activeTab: "results" | "translation" = "results";
   let resultsPane: HTMLElement = renderNotice("info", "Run a statement to see results here");
-  // The cached panel is keyed by the statement it describes: editing the
-  // buffer must not leave a translation of something else on screen.
   let translationPane: HTMLElement | null = null;
   let translatedStatement = "";
+  let running = false;
 
-  const editor = createEditor({
+  pick(root, "shortcut").textContent = isApplePlatform() ? "⌘↵" : "Ctrl+↵";
+
+  const editor: Editor = createEditor({
     parent: pick(root, "editor"),
-    initialValue: INITIAL_SQL,
+    initialValue: active().sql,
     onRun: () => void run(),
+    onChange: (value) => {
+      active().sql = value;
+      persist();
+      updateRunAll();
+    },
   });
 
-  async function run(): Promise<void> {
-    if (running) {
-      return;
+  const contextPicker = createContextPicker({
+    parent: pick(root, "context"),
+    initial: active().context,
+    onChange: (context) => {
+      active().context = context;
+      persist();
+      // The translation depends on the namespace, so it is no longer current.
+      translationPane = null;
+      if (activeTab === "translation") {
+        showTab("translation");
+      }
+    },
+  });
+
+  createExplorer({
+    parent: pick(root, "sidebar"),
+    context: () => active().context,
+    onInsert: (name) => editor.insert(name),
+  });
+
+  function active(): Worksheet {
+    const worksheet = workspace.worksheets.find((w) => w.id === workspace.activeId);
+    if (!worksheet) {
+      throw new Error("the active worksheet is missing from the workspace");
     }
-    const statement = editor.statementToRun();
-    if (!statement) {
-      setStatus("idle", "Idle", "nothing to run");
+    return worksheet;
+  }
+
+  function persist(): void {
+    saveWorkspace(workspace);
+  }
+
+  /** What Run will submit: the selection, or the statement around the cursor. */
+  function statementToRun(): string {
+    const selected = editor.selection();
+    if (selected) {
+      return selected;
+    }
+    return statementAt(editor.value(), editor.cursorOffset())?.text ?? "";
+  }
+
+  function updateRunAll(): void {
+    const count = splitStatements(editor.value()).length;
+    runAllButton.hidden = count < 2;
+    runAllButton.textContent = `Run all ${count}`;
+  }
+
+  async function run(): Promise<void> {
+    await execute([statementToRun()].filter(Boolean));
+  }
+
+  async function runAll(): Promise<void> {
+    await execute(splitStatements(editor.value()).map((statement) => statement.text));
+  }
+
+  /**
+   * Submits statements one at a time, because the API takes one per request.
+   * A failure stops the run: the statements after it were written expecting the
+   * earlier ones to have happened.
+   */
+  async function execute(statements: string[]): Promise<void> {
+    if (running || statements.length === 0) {
+      if (statements.length === 0) {
+        setStatus("idle", "Idle", "nothing to run");
+      }
       return;
     }
 
     running = true;
     runButton.disabled = true;
-    setStatus("run", "Running", "submitting statement");
+    runAllButton.disabled = true;
+    setStatus("run", "Running", statements.length === 1 ? "submitting statement" : `1 of ${statements.length}`);
+
+    const context = active().context;
+    let elapsed = 0;
 
     try {
-      const result = await runStatement(statement, CONTEXT);
-      resultsPane =
-        result.rowsAffected !== null
-          ? renderNotice(
-              "info",
-              `${result.rowsAffected} ${result.rowsAffected === 1 ? "row" : "rows"} affected`,
-            )
-          : result.rows.length === 0
-            ? renderNotice("info", "Statement returned no rows")
-            : renderGrid(result);
-      setStatus("ok", "Succeeded", describe(result.rows.length, result.rowsAffected, result.elapsedMs));
+      for (const [index, statement] of statements.entries()) {
+        if (statements.length > 1) {
+          setStatus("run", "Running", `${index + 1} of ${statements.length}`);
+        }
+
+        const result = await runStatement(statement, context);
+        elapsed += result.elapsedMs;
+
+        resultsPane =
+          result.rowsAffected !== null
+            ? renderNotice(
+                "info",
+                `${result.rowsAffected} ${result.rowsAffected === 1 ? "row" : "rows"} affected`,
+              )
+            : result.rows.length === 0
+              ? renderNotice("info", "Statement returned no rows")
+              : renderGrid(result);
+
+        setStatus(
+          "ok",
+          "Succeeded",
+          summary(statements.length, index + 1, result.rows.length, result.rowsAffected, elapsed),
+        );
+      }
     } catch (cause) {
       const error = asStatementError(cause);
-      resultsPane = renderNotice("error", summarise(error.message), error.message);
+      resultsPane = renderNotice("error", firstLine(error.message), error.message);
       setStatus("err", "Failed", `${error.code} · SQLSTATE ${error.sqlState}`);
     } finally {
       running = false;
       runButton.disabled = false;
+      runAllButton.disabled = false;
       showTab("results");
     }
   }
 
-  /**
-   * Renders the active tab. The translation is fetched the first time it is
-   * asked for rather than on every run, so previewing costs nothing until
-   * somebody looks.
-   */
+  function setStatus(state: string, label: string, detail: string): void {
+    pill.className = `pill ${state}`;
+    pill.textContent = label;
+    meta.textContent = detail;
+  }
+
   function showTab(tab: "results" | "translation"): void {
     activeTab = tab;
     root!.querySelectorAll<HTMLElement>(".dtab").forEach((button) => {
@@ -159,19 +244,18 @@ function main(): void {
       return;
     }
 
-    const statement = editor.statementToRun();
+    const statement = statementToRun();
     if (!statement) {
       dock.replaceChildren(renderNotice("info", "Write a statement to see how it translates"));
       return;
     }
-
     if (translationPane && statement === translatedStatement) {
       dock.replaceChildren(translationPane);
       return;
     }
 
     dock.replaceChildren(renderNotice("info", "Translating…"));
-    void translateStatement(statement, CONTEXT)
+    void translateStatement(statement, active().context)
       .then((translation) => {
         translationPane = renderTranslation(translation);
         translatedStatement = statement;
@@ -182,46 +266,172 @@ function main(): void {
       .catch((cause: unknown) => {
         const error = asStatementError(cause);
         if (activeTab === "translation") {
-          dock.replaceChildren(renderNotice("error", summarise(error.message), error.message));
+          dock.replaceChildren(renderNotice("error", firstLine(error.message), error.message));
         }
       });
   }
 
-  function setStatus(state: string, label: string, detail: string): void {
-    pill.className = `pill ${state}`;
-    pill.textContent = label;
-    meta.textContent = detail;
+  // --- worksheets ---
+
+  /** Output belongs to a worksheet, so moving to another one clears it. */
+  function resetOutput(): void {
+    translationPane = null;
+    translatedStatement = "";
+    resultsPane = renderNotice("info", "Run a statement to see results here");
+    setStatus("idle", "Idle", "no statement submitted");
+  }
+
+  function switchTo(id: string): void {
+    if (id === workspace.activeId) {
+      return;
+    }
+    workspace.activeId = id;
+    editor.setValue(active().sql);
+    contextPicker.set(active().context);
+    resetOutput();
+    persist();
+    renderTabs();
+    updateRunAll();
+    showTab("results");
+    editor.focus();
+  }
+
+  function addWorksheet(): void {
+    const worksheet = newWorksheet(nextWorksheetName(workspace.worksheets), active().context);
+    workspace.worksheets.push(worksheet);
+    workspace.activeId = worksheet.id;
+    editor.setValue("");
+    contextPicker.set(worksheet.context);
+    resetOutput();
+    persist();
+    renderTabs();
+    updateRunAll();
+    showTab("results");
+    editor.focus();
+  }
+
+  function closeWorksheet(id: string): void {
+    const index = workspace.worksheets.findIndex((worksheet) => worksheet.id === id);
+    if (index < 0) {
+      return;
+    }
+
+    workspace.worksheets.splice(index, 1);
+    if (workspace.worksheets.length === 0) {
+      // Closing the last one leaves an empty worksheet rather than no console.
+      const replacement = newWorksheet("Worksheet 1");
+      workspace.worksheets.push(replacement);
+      workspace.activeId = replacement.id;
+    } else if (workspace.activeId === id) {
+      const neighbour = workspace.worksheets[Math.max(0, index - 1)] as Worksheet;
+      workspace.activeId = neighbour.id;
+    }
+
+    editor.setValue(active().sql);
+    contextPicker.set(active().context);
+    resetOutput();
+    persist();
+    renderTabs();
+    updateRunAll();
+    showTab("results");
+  }
+
+  function renameWorksheet(worksheet: Worksheet, tab: HTMLElement): void {
+    const input = document.createElement("input");
+    input.className = "tab-rename";
+    input.value = worksheet.name;
+    input.setAttribute("aria-label", "Worksheet name");
+
+    const commit = (): void => {
+      const name = input.value.trim();
+      if (name) {
+        worksheet.name = name;
+        persist();
+      }
+      renderTabs();
+    };
+
+    input.addEventListener("blur", commit);
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        commit();
+      } else if (event.key === "Escape") {
+        renderTabs();
+      }
+    });
+
+    tab.replaceChildren(input);
+    input.focus();
+    input.select();
+  }
+
+  function renderTabs(): void {
+    tabstrip.replaceChildren();
+
+    for (const worksheet of workspace.worksheets) {
+      const tab = document.createElement("div");
+      tab.className = "wtab";
+      tab.setAttribute("role", "tab");
+      tab.setAttribute("aria-selected", String(worksheet.id === workspace.activeId));
+
+      const name = document.createElement("button");
+      name.className = "wtab-name";
+      name.textContent = worksheet.name;
+      name.title = "Double-click to rename";
+      name.addEventListener("click", () => switchTo(worksheet.id));
+      name.addEventListener("dblclick", () => renameWorksheet(worksheet, tab));
+
+      const close = document.createElement("button");
+      close.className = "wtab-close";
+      close.textContent = "×";
+      close.setAttribute("aria-label", `Close ${worksheet.name}`);
+      close.addEventListener("click", (event) => {
+        event.stopPropagation();
+        closeWorksheet(worksheet.id);
+      });
+
+      tab.append(name, close);
+      tabstrip.append(tab);
+    }
+
+    const add = document.createElement("button");
+    add.className = "newtab";
+    add.textContent = "+";
+    add.setAttribute("aria-label", "New worksheet");
+    add.addEventListener("click", addWorksheet);
+    tabstrip.append(add);
   }
 
   runButton.addEventListener("click", () => void run());
+  runAllButton.addEventListener("click", () => void runAll());
   root.querySelectorAll<HTMLElement>(".dtab").forEach((button) => {
     button.addEventListener("click", () => {
-      const tab = button.dataset["tab"];
-      showTab(tab === "translation" ? "translation" : "results");
+      showTab(button.dataset["tab"] === "translation" ? "translation" : "results");
     });
   });
 
-  createExplorer({
-    parent: pick(root, "sidebar"),
-    context: CONTEXT,
-    onInsert: (name) => editor.insert(name),
-  });
-
+  renderTabs();
+  updateRunAll();
   showTab("results");
   editor.focus();
-
   void showHealth(root);
 }
 
-function describe(rowCount: number, rowsAffected: number | null, elapsedMs: number): string {
-  if (rowsAffected !== null) {
-    return `${elapsedMs} ms`;
-  }
-  return `${rowCount} ${rowCount === 1 ? "row" : "rows"} · ${elapsedMs} ms`;
+function summary(
+  total: number,
+  done: number,
+  rowCount: number,
+  rowsAffected: number | null,
+  elapsedMs: number,
+): string {
+  const rows =
+    rowsAffected !== null ? "" : `${rowCount} ${rowCount === 1 ? "row" : "rows"} · `;
+  const of = total > 1 ? `${done} of ${total} · ` : "";
+  return `${of}${rows}${elapsedMs} ms`;
 }
 
 /** The emulator's messages carry the failing SQL; the first line is the gist. */
-function summarise(message: string): string {
+function firstLine(message: string): string {
   return message.split("\n")[0] ?? "Statement failed";
 }
 
@@ -248,5 +458,7 @@ async function showHealth(root: ParentNode): Promise<void> {
 function isApplePlatform(): boolean {
   return /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
 }
+
+export type { ExecutionContext };
 
 main();
