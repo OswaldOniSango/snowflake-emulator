@@ -103,6 +103,58 @@ DB_PATH=/path/to/database.db ./snowflake-emulator
 PORT=9090 ./snowflake-emulator
 ```
 
+## Web Console
+
+The emulator serves a browser console at `http://localhost:8080/`. It is a static
+bundle compiled into the binary, so Docker images and releases need no extra
+assets and no separate process.
+
+> **Note**: The console is an original interface for this emulator. It is not
+> affiliated with or endorsed by Snowflake Inc.
+
+<details>
+<summary><b>Developing the console</b></summary>
+
+The frontend is a TypeScript + Vite project in `_web/`. The leading underscore is
+deliberate: it hides `node_modules` from the Go toolchain, which would otherwise
+compile Go files that some npm packages ship. Vite writes its output to
+`server/ui/dist`, which `server/ui` embeds with `go:embed`.
+
+```bash
+# Install dependencies (Node version comes from _web/.nvmrc)
+make ui-install
+
+# Hot-reloading dev server on :5173, proxying /api and /health to :8080
+make ui-dev
+
+# Produce the bundle the Go binary embeds
+make ui-build
+```
+
+Run `make ui-dev` alongside `make run` for frontend work: the Vite proxy forwards
+API calls to the emulator, so development is same-origin too and needs no CORS.
+
+`make build` builds the console before compiling. For a Node-free Go build, the
+placeholder in `server/ui/dist` keeps `go:embed` satisfied:
+
+```bash
+CGO_ENABLED=1 go build -o snowflake-emulator ./cmd/server
+```
+
+That binary starts normally and serves the full REST API; only the console
+answers with a build hint until you run `make ui-build`.
+
+| Target | Description |
+|--------|-------------|
+| `make ui-install` | Install frontend dependencies |
+| `make ui-dev` | Vite dev server with hot reload |
+| `make ui-build` | Build the bundle into `server/ui/dist` |
+| `make ui-test` | Frontend unit tests |
+| `make ui-lint` | Frontend linting |
+| `make ui-typecheck` | Frontend type checking |
+
+</details>
+
 ### Using with gosnowflake Driver
 
 ```go

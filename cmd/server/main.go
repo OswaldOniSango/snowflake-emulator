@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"log"
 	"net/http"
 	"os"
@@ -18,7 +19,10 @@ import (
 	"github.com/nnnkkk7/snowflake-emulator/pkg/session"
 	"github.com/nnnkkk7/snowflake-emulator/pkg/stage"
 	"github.com/nnnkkk7/snowflake-emulator/pkg/warehouse"
+	"github.com/nnnkkk7/snowflake-emulator/server/apierror"
 	"github.com/nnnkkk7/snowflake-emulator/server/handlers"
+	"github.com/nnnkkk7/snowflake-emulator/server/types"
+	"github.com/nnnkkk7/snowflake-emulator/server/ui"
 )
 
 func main() {
@@ -87,6 +91,40 @@ func main() {
 	taskScheduler.Start(context.Background())
 	defer taskScheduler.Stop()
 
+	uiHandler, err := ui.Handler()
+	if err != nil {
+		// A broken console must not take the API down with it.
+		log.Printf("Web console unavailable: %v", err)
+		uiHandler = nil
+	} else if !ui.IsBuilt() {
+		log.Printf("Web console not built; run 'make ui-build' to enable it")
+	}
+
+	r := newRouter(sessionHandler, queryHandler, restAPIHandler, uiHandler)
+
+	server := &http.Server{
+		Addr:         ":" + port,
+		Handler:      r,
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 30 * time.Second,
+		IdleTimeout:  120 * time.Second,
+	}
+
+	log.Printf("Starting Snowflake Emulator on port %s", port) //nolint:gosec // G706: port is from env var at startup, not attacker-controlled
+	if err := server.ListenAndServe(); err != nil {
+		log.Fatalf("Server failed: %v", err) //nolint:gocritic // exitAfterDefer: intentional - OS cleans up on exit
+	}
+}
+
+// newRouter wires every route. It is separated from main so that the precedence
+// between the API and the web console — which must never shadow each other —
+// can be covered by tests. A nil uiHandler leaves the console unmounted.
+func newRouter(
+	sessionHandler *handlers.SessionHandler,
+	queryHandler *handlers.QueryHandler,
+	restAPIHandler *handlers.RestAPIv2Handler,
+	uiHandler http.Handler,
+) *chi.Mux {
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
@@ -105,6 +143,10 @@ func main() {
 
 	// REST API v2 endpoints
 	r.Route("/api/v2", func(r chi.Router) {
+		// Without this the subrouter inherits the console's catch-all and
+		// answers unknown API paths with HTML instead of an API error.
+		r.NotFound(apiNotFound)
+
 		// Statement endpoints
 		r.Post("/statements", restAPIHandler.SubmitStatement)
 		r.Get("/statements/{handle}", restAPIHandler.GetStatement)
@@ -153,16 +195,27 @@ func main() {
 		}
 	})
 
-	server := &http.Server{
-		Addr:         ":" + port,
-		Handler:      r,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 30 * time.Second,
-		IdleTimeout:  120 * time.Second,
+	// The console answers only paths no route claimed. Registering it as the
+	// NotFound handler rather than a "/*" route is deliberate: a catch-all
+	// route also swallows method mismatches, which would turn HEAD /health
+	// into a 200 page of HTML instead of a 405.
+	if uiHandler != nil {
+		r.NotFound(uiHandler.ServeHTTP)
 	}
 
-	log.Printf("Starting Snowflake Emulator on port %s", port) //nolint:gosec // G706: port is from env var at startup, not attacker-controlled
-	if err := server.ListenAndServe(); err != nil {
-		log.Fatalf("Server failed: %v", err) //nolint:gocritic // exitAfterDefer: intentional - OS cleans up on exit
+	return r
+}
+
+// apiNotFound answers unknown /api/v2 paths in the API's own error shape.
+func apiNotFound(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusNotFound)
+	resp := types.StatementResponse{
+		Code:     apierror.CodeInvalidParameter,
+		SQLState: types.SQLState42000,
+		Message:  "Unknown API endpoint: " + r.URL.Path,
+	}
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		log.Printf("Failed to write API 404 response: %v", err)
 	}
 }

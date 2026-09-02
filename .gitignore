@@ -26,6 +26,11 @@ vendor/
 go.work
 go.work.sum
 
+# DuckDB database files created by running the emulator locally
+*.db
+*.db.wal
+*.duckdb
+
 # env file
 .env
 
@@ -37,3 +42,16 @@ go.work.sum
 .DS_Store
 
 CLAUDE.md
+
+# Web console.
+# The npm project lives in _web/: the leading underscore hides node_modules from
+# the Go toolchain, which otherwise compiles Go files shipped inside npm packages.
+_web/node_modules/
+
+# Vite's own output directory; scripts/publish-dist.mjs copies it into the Go package
+_web/dist/
+
+# Vite output, embedded by server/ui. The placeholder stays tracked so that
+# go:embed compiles in a clone where nobody has run the frontend build.
+server/ui/dist/*
+!server/ui/dist/.gitkeep
