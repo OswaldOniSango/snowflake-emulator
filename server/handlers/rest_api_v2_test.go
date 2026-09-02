@@ -7,12 +7,14 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	_ "github.com/duckdb/duckdb-go/v2"
 	"github.com/go-chi/chi/v5"
+	"github.com/google/go-cmp/cmp"
 	"github.com/nnnkkk7/snowflake-emulator/pkg/connection"
 	"github.com/nnnkkk7/snowflake-emulator/pkg/metadata"
 	"github.com/nnnkkk7/snowflake-emulator/pkg/query"
@@ -486,4 +488,90 @@ func TestTranslateStatementDoesNotExecute(t *testing.T) {
 	if resp.SQLState != types.SQLState00000 {
 		t.Errorf("the table is gone, so translate executed the DROP: %s", resp.Message)
 	}
+}
+
+func TestRestAPIv2Handler_ListSchemaObjects(t *testing.T) {
+	handler, router := setupRestAPIv2Handler(t)
+
+	run := func(statement string) {
+		t.Helper()
+		body := `{"statement":` + strconv.Quote(statement) + `,"database":"TEST_DB","schema":"PUBLIC"}`
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v2/statements", strings.NewReader(body)))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: status %d, body %s", statement, rec.Code, rec.Body.String())
+		}
+	}
+
+	// Created with SQL, which is exactly what _metadata_tables does not record.
+	run("CREATE TABLE users (id INTEGER)")
+	run("CREATE TABLE orders_staging (id INTEGER)")
+	run("CREATE STREAM users_stream ON TABLE users")
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v2/databases/TEST_DB/schemas/PUBLIC/objects", nil)
+	handler.ListSchemaObjects(rec, withURLParams(req, map[string]string{"database": "TEST_DB", "schema": "PUBLIC"}))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (body %s)", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var resp types.ListSchemaObjectsResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+
+	byKind := map[string][]string{}
+	for _, object := range resp.Objects {
+		byKind[object.Kind] = append(byKind[object.Kind], object.Name)
+	}
+
+	if diff := cmp.Diff([]string{"ORDERS_STAGING", "USERS"}, byKind["table"]); diff != "" {
+		t.Errorf("tables mismatch (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff([]string{"USERS_STREAM"}, byKind["stream"]); diff != "" {
+		t.Errorf("streams mismatch (-want +got):\n%s", diff)
+	}
+
+	for _, object := range resp.Objects {
+		if strings.HasPrefix(object.Name, "_METADATA") {
+			t.Errorf("internal table %q leaked into the listing", object.Name)
+		}
+		if strings.Contains(object.Name, "PUBLIC_") {
+			t.Errorf("physical name %q leaked into the listing", object.Name)
+		}
+	}
+}
+
+func TestRestAPIv2Handler_ListSchemaObjectsNotFound(t *testing.T) {
+	handler, _ := setupRestAPIv2Handler(t)
+
+	tests := []struct {
+		name   string
+		params map[string]string
+	}{
+		{name: "unknown database", params: map[string]string{"database": "NOPE", "schema": "PUBLIC"}},
+		{name: "unknown schema", params: map[string]string{"database": "TEST_DB", "schema": "NOPE"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/objects", nil)
+			handler.ListSchemaObjects(rec, withURLParams(req, tt.params))
+
+			if rec.Code != http.StatusNotFound {
+				t.Errorf("status = %d, want %d", rec.Code, http.StatusNotFound)
+			}
+		})
+	}
+}
+
+// withURLParams attaches chi's route parameters to a request built by hand.
+func withURLParams(r *http.Request, params map[string]string) *http.Request {
+	routeContext := chi.NewRouteContext()
+	for key, value := range params {
+		routeContext.URLParams.Add(key, value)
+	}
+	return r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, routeContext))
 }

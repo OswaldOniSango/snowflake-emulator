@@ -1040,3 +1040,85 @@ func (h *RestAPIv2Handler) TranslateStatement(w http.ResponseWriter, r *http.Req
 		log.Printf("Failed to write translate response: %v", err)
 	}
 }
+
+// ListSchemaObjects handles GET /api/v2/databases/{database}/schemas/{schema}/objects.
+//
+// It answers with everything a schema contains in one call, so an object
+// explorer can expand a schema without issuing five requests. Tables come from
+// DuckDB rather than the catalog: _metadata_tables only records tables created
+// through the REST API, so a table created with SQL would otherwise be absent.
+func (h *RestAPIv2Handler) ListSchemaObjects(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	databaseName := chi.URLParam(r, "database")
+	schemaName := chi.URLParam(r, "schema")
+
+	database, err := h.repo.GetDatabaseByName(ctx, databaseName)
+	if err != nil {
+		h.sendError(w, http.StatusNotFound, "Database not found: "+databaseName, types.SQLState42000)
+		return
+	}
+
+	schema, err := h.repo.GetSchemaByName(ctx, database.ID, schemaName)
+	if err != nil {
+		h.sendError(w, http.StatusNotFound, "Schema not found: "+schemaName, types.SQLState42000)
+		return
+	}
+
+	objects := make([]types.SchemaObject, 0)
+
+	tables, err := h.repo.ListPhysicalTables(ctx, database.Name, schema.Name)
+	if err != nil {
+		h.sendError(w, http.StatusInternalServerError, err.Error(), types.SQLState42000)
+		return
+	}
+	for _, name := range tables {
+		objects = append(objects, types.SchemaObject{Name: name, Kind: "table"})
+	}
+
+	if streams, err := h.repo.ListStreams(ctx, schema.ID); err == nil {
+		for _, stream := range streams {
+			objects = append(objects, types.SchemaObject{
+				Name:   stream.Name,
+				Kind:   "stream",
+				Detail: "on " + stream.SourceTable,
+			})
+		}
+	}
+
+	if procedures, err := h.repo.ListProcedures(ctx, schema.ID); err == nil {
+		for _, procedure := range procedures {
+			objects = append(objects, types.SchemaObject{
+				Name:   procedure.Name,
+				Kind:   "procedure",
+				Detail: procedure.ReturnType,
+			})
+		}
+	}
+
+	if tasks, err := h.repo.ListTasks(ctx, schema.ID); err == nil {
+		for _, task := range tasks {
+			objects = append(objects, types.SchemaObject{
+				Name:   task.Name,
+				Kind:   "task",
+				Detail: task.State,
+			})
+		}
+	}
+
+	if stages, err := h.repo.ListStages(ctx, schema.ID); err == nil {
+		for _, stage := range stages {
+			objects = append(objects, types.SchemaObject{Name: stage.Name, Kind: "stage"})
+		}
+	}
+
+	resp := types.ListSchemaObjectsResponse{
+		Database: database.Name,
+		Schema:   schema.Name,
+		Objects:  objects,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		log.Printf("Failed to write schema objects response: %v", err)
+	}
+}

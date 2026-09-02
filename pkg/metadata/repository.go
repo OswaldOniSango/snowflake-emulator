@@ -1502,3 +1502,45 @@ func (r *Repository) ClearQueryHistory(ctx context.Context, olderThan time.Time)
 
 	return result.RowsAffected()
 }
+
+// ListPhysicalTables returns the tables a schema actually contains, named the
+// way the user wrote them.
+//
+// _metadata_tables only records tables created through the REST API: a table
+// created with SQL exists in DuckDB and nowhere in the catalog, so ListTables
+// cannot see it. DuckDB is therefore the authority here. Its own naming is the
+// emulator's physical convention — the Snowflake database is a DuckDB schema,
+// and the table is prefixed with its Snowflake schema — so the prefix is
+// stripped before the names are handed back.
+func (r *Repository) ListPhysicalTables(ctx context.Context, database, schema string) ([]string, error) {
+	if database == "" || schema == "" {
+		return nil, fmt.Errorf("database and schema are required")
+	}
+
+	normalizedDatabase := strings.ToUpper(database)
+	prefix := strings.ToUpper(schema) + "_"
+
+	const query = `SELECT table_name FROM duckdb_tables()
+	               WHERE schema_name = ? AND starts_with(table_name, ?)
+	               ORDER BY table_name`
+
+	rows, err := r.mgr.Query(ctx, query, normalizedDatabase, prefix)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list tables: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	tables := make([]string, 0)
+	for rows.Next() {
+		var physical string
+		if err := rows.Scan(&physical); err != nil {
+			return nil, fmt.Errorf("failed to scan table name: %w", err)
+		}
+		tables = append(tables, strings.TrimPrefix(physical, prefix))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to read table names: %w", err)
+	}
+
+	return tables, nil
+}

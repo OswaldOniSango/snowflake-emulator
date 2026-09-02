@@ -71,6 +71,8 @@ export interface EditorOptions {
 export interface Editor {
   /** The selected text when there is one, otherwise the whole buffer. */
   statementToRun(): string;
+  /** Replaces the selection with text, or inserts it at the cursor. */
+  insert(text: string): void;
   focus(): void;
 }
 
@@ -114,6 +116,14 @@ export function createEditor(options: EditorOptions): Editor {
       const { from, to } = view.state.selection.main;
       const selected = from === to ? "" : view.state.sliceDoc(from, to);
       return (selected || view.state.doc.toString()).trim();
+    },
+    insert(text: string) {
+      const { from, to } = view.state.selection.main;
+      view.dispatch({
+        changes: { from, to, insert: text },
+        selection: { anchor: from + text.length },
+      });
+      view.focus();
     },
     focus() {
       view.focus();

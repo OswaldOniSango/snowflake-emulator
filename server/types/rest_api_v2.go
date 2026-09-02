@@ -231,3 +231,23 @@ type TranslateResponse struct {
 	// Note explains why an incomplete preview is incomplete.
 	Note string `json:"note,omitempty"`
 }
+
+// SchemaObject is one entry in a schema's contents.
+type SchemaObject struct {
+	Name string `json:"name"`
+
+	// Kind is "table", "stream", "procedure", "task" or "stage".
+	Kind string `json:"kind"`
+
+	// Detail is a short, human-readable qualifier: a stream's source table, a
+	// procedure's arguments, a task's state.
+	Detail string `json:"detail,omitempty"`
+}
+
+// ListSchemaObjectsResponse lists everything a schema contains, in one call so
+// that a tree can expand a schema without fanning out.
+type ListSchemaObjectsResponse struct {
+	Database string         `json:"database"`
+	Schema   string         `json:"schema"`
+	Objects  []SchemaObject `json:"objects"`
+}

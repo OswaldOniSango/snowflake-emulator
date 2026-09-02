@@ -185,3 +185,59 @@ export async function translateStatement(
     ...(body.note ? { note: body.note } : {}),
   };
 }
+
+/** A database in the catalog. */
+export interface Database {
+  name: string;
+}
+
+/** A schema inside a database. */
+export interface Schema {
+  name: string;
+}
+
+/** One entry in a schema's contents. */
+export interface SchemaObject {
+  name: string;
+  /** "table", "stream", "procedure", "task" or "stage". */
+  kind: string;
+  detail?: string;
+}
+
+async function getJSON<T>(path: string, fetchFn: typeof fetch): Promise<T> {
+  const response = await fetchFn(path);
+  if (!response.ok) {
+    const body = (await response.json().catch(() => ({}))) as { message?: string };
+    throw new StatementError(
+      "catalog",
+      "",
+      body.message ?? `Request to ${path} failed with HTTP ${response.status}.`,
+      "",
+    );
+  }
+  return (await response.json()) as T;
+}
+
+export function listDatabases(fetchFn: typeof fetch = fetch): Promise<Database[]> {
+  return getJSON<Database[]>("/api/v2/databases", fetchFn);
+}
+
+export function listSchemas(database: string, fetchFn: typeof fetch = fetch): Promise<Schema[]> {
+  return getJSON<Schema[]>(`/api/v2/databases/${encodeURIComponent(database)}/schemas`, fetchFn);
+}
+
+/**
+ * Lists everything a schema contains. Tables come from DuckDB rather than the
+ * catalog, so tables created with SQL are included.
+ */
+export async function listSchemaObjects(
+  database: string,
+  schema: string,
+  fetchFn: typeof fetch = fetch,
+): Promise<SchemaObject[]> {
+  const body = await getJSON<{ objects?: SchemaObject[] }>(
+    `/api/v2/databases/${encodeURIComponent(database)}/schemas/${encodeURIComponent(schema)}/objects`,
+    fetchFn,
+  );
+  return body.objects ?? [];
+}

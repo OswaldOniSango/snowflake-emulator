@@ -542,3 +542,196 @@ table.grid .rn {
     grid-template-columns: 1fr;
   }
 }
+
+/* --- object explorer --- */
+
+.workspace {
+  display: grid;
+  grid-template-columns: 250px 1fr;
+}
+
+.center {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--panel);
+  border-right: 1px solid var(--line);
+}
+
+.explorer {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+
+.explorer-head {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px 9px;
+  flex: none;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.eyebrow {
+  font-size: 9.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  font-weight: 600;
+}
+
+.filter {
+  display: flex;
+  background: var(--sunk);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 5px 8px;
+}
+
+.filter input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  outline: none;
+}
+
+.filter input::placeholder {
+  color: var(--ink-3);
+}
+
+.tree {
+  flex: 1;
+  overflow: auto;
+  padding: 6px 6px 18px;
+}
+
+.node {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 4px 6px;
+  border-radius: 6px;
+  text-align: left;
+  color: var(--ink-2);
+}
+
+.node:hover {
+  background: var(--panel-2);
+  color: var(--ink);
+}
+
+.node .tw {
+  width: 11px;
+  flex: none;
+  color: var(--ink-3);
+  font-size: 8px;
+  text-align: center;
+  transition: transform 0.15s ease;
+}
+
+.node[aria-expanded="true"] .tw {
+  transform: rotate(90deg);
+}
+
+.node .nm {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12.5px;
+}
+
+.node .kind {
+  margin-left: auto;
+  padding-left: 8px;
+  font-size: 9.5px;
+  color: var(--ink-3);
+  white-space: nowrap;
+  flex: none;
+}
+
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 2px;
+  flex: none;
+  background: var(--ink-3);
+}
+
+/* Object kinds keep the palette's roles: databases take the secondary accent,
+   schemas the primary one, and the rest are distinguished without competing. */
+.dot.kind-database {
+  background: var(--speculum);
+}
+
+.dot.kind-schema {
+  background: var(--accent);
+}
+
+.dot.kind-table {
+  background: var(--ink-3);
+}
+
+.dot.kind-stream,
+.dot.kind-stage {
+  background: var(--warn);
+}
+
+.dot.kind-procedure,
+.dot.kind-task {
+  background: var(--crit);
+}
+
+.lvl1 {
+  padding-left: 20px;
+}
+
+.lvl2 {
+  padding-left: 34px;
+}
+
+.group-label {
+  padding: 8px 8px 3px 34px;
+  font-size: 9.5px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  font-weight: 600;
+}
+
+.tree-note {
+  padding: 5px 8px;
+  font-size: 12px;
+  color: var(--ink-3);
+}
+
+.tree-note.lvl1 {
+  padding-left: 26px;
+}
+
+.tree-note.lvl2 {
+  padding-left: 40px;
+}
+
+@media (max-width: 760px) {
+  .workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar {
+    display: none;
+  }
+}
