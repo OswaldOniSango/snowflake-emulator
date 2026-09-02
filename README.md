@@ -381,6 +381,7 @@ go run ./example/gosnowflake
 | `/api/v2/statements` | POST | Submit SQL statement |
 | `/api/v2/statements/{handle}` | GET | Get statement status/result |
 | `/api/v2/statements/{handle}/cancel` | POST | Cancel statement |
+| `/api/v2/translate` | POST | Show the DuckDB SQL a statement translates to, without running it |
 | `/api/v2/databases` | GET, POST | List/Create databases |
 | `/api/v2/databases/{db}` | GET, PUT, DELETE | Get/Alter/Drop database |
 | `/api/v2/databases/{db}/schemas` | GET, POST | List/Create schemas |

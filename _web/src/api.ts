@@ -139,3 +139,49 @@ function readRowsAffected(columns: Column[], rows: Cell[][]): number | null {
   const value = rows[0]?.[0];
   return typeof value === "number" ? value : null;
 }
+
+/** What a statement becomes on its way to DuckDB. */
+export interface Translation {
+  statement: string;
+  translated: string;
+  /** The component that executes it: "translator", "copy_processor", … */
+  handledBy: string;
+  /** False when a processor builds the final SQL elsewhere. */
+  complete: boolean;
+  note?: string;
+}
+
+/**
+ * Asks what a statement translates to without running it. This is the view no
+ * Snowflake console can offer, because nothing is being translated there.
+ */
+export async function translateStatement(
+  statement: string,
+  context: { database: string; schema: string },
+  fetchFn: typeof fetch = fetch,
+): Promise<Translation> {
+  const response = await fetchFn("/api/v2/translate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ statement, ...context }),
+  });
+
+  const body = (await response.json()) as Partial<Translation> & { message?: string };
+
+  if (!response.ok) {
+    throw new StatementError(
+      "translate",
+      "",
+      body.message ?? `Translation failed with HTTP ${response.status}.`,
+      "",
+    );
+  }
+
+  return {
+    statement: body.statement ?? statement,
+    translated: body.translated ?? "",
+    handledBy: body.handledBy ?? "translator",
+    complete: body.complete ?? true,
+    ...(body.note ? { note: body.note } : {}),
+  };
+}

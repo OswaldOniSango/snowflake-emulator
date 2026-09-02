@@ -206,3 +206,28 @@ const (
 	ResponseCodeStatementPending  = "333334" // Statement still running
 	ResponseCodeStatementCanceled = "000604" // Statement canceled
 )
+
+// TranslateRequest represents POST /api/v2/translate request body.
+type TranslateRequest struct {
+	Statement string `json:"statement"`
+	Database  string `json:"database,omitempty"` // Execution context for short object names
+	Schema    string `json:"schema,omitempty"`
+}
+
+// TranslateResponse shows what a statement becomes on its way to DuckDB,
+// without executing it.
+type TranslateResponse struct {
+	Statement  string `json:"statement"`
+	Translated string `json:"translated"`
+
+	// HandledBy names the component that executes the statement. Several
+	// statement kinds are routed to processors before the translator sees
+	// them, and their final SQL is built elsewhere.
+	HandledBy string `json:"handledBy"`
+
+	// Complete reports whether Translated is the SQL DuckDB actually receives.
+	Complete bool `json:"complete"`
+
+	// Note explains why an incomplete preview is incomplete.
+	Note string `json:"note,omitempty"`
+}

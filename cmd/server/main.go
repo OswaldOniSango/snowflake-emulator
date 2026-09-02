@@ -152,6 +152,9 @@ func newRouter(
 		r.Get("/statements/{handle}", restAPIHandler.GetStatement)
 		r.Post("/statements/{handle}/cancel", restAPIHandler.CancelStatement)
 
+		// Shows what a statement becomes on its way to DuckDB, without running it
+		r.Post("/translate", restAPIHandler.TranslateStatement)
+
 		// Database endpoints
 		r.Get("/databases", restAPIHandler.ListDatabases)
 		r.Post("/databases", restAPIHandler.CreateDatabase)
