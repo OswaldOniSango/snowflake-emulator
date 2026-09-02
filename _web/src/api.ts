@@ -1,0 +1,141 @@
+// Typed client for the emulator's REST API v2.
+//
+// Shapes here describe what the emulator actually returns, which is narrower
+// than server/types/rest_api_v2.go declares: rowType carries only name, type
+// and nullable — never precision, scale, length or byteLength.
+
+/** SQLSTATE reported by a statement that succeeded. */
+const SQL_STATE_SUCCESS = "00000";
+
+/** A column in a result set. */
+export interface Column {
+  name: string;
+  type: string;
+  nullable: boolean;
+}
+
+/**
+ * A cell value. DECIMAL columns arrive as a DuckDB struct rather than a
+ * number, and are typed TEXT in rowType, so the raw shape has to survive as
+ * far as the formatter.
+ */
+export type Cell = string | number | boolean | null | DecimalValue;
+
+/** DuckDB's DECIMAL representation: Value scaled down by 10^Scale. */
+export interface DecimalValue {
+  Width: number;
+  Scale: number;
+  Value: number;
+}
+
+export function isDecimalValue(value: unknown): value is DecimalValue {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "Value" in value &&
+    "Scale" in value &&
+    typeof (value as DecimalValue).Value === "number" &&
+    typeof (value as DecimalValue).Scale === "number"
+  );
+}
+
+export interface Statement {
+  columns: Column[];
+  rows: Cell[][];
+  handle: string;
+  /** Milliseconds measured client-side; the API reports no duration. */
+  elapsedMs: number;
+  /**
+   * Set for DDL and DML, which the emulator answers with a single column
+   * named "number of rows affected" rather than a result set.
+   */
+  rowsAffected: number | null;
+}
+
+/** A statement the emulator rejected. Carries no result set. */
+export class StatementError extends Error {
+  constructor(
+    readonly code: string,
+    readonly sqlState: string,
+    message: string,
+    readonly handle: string,
+  ) {
+    super(message);
+    this.name = "StatementError";
+  }
+}
+
+interface RawResponse {
+  resultSetMetaData?: { numRows: number; format: string; rowType: Column[] };
+  data?: Cell[][];
+  code?: string;
+  sqlState?: string;
+  message?: string;
+  statementHandle?: string;
+}
+
+const ROWS_AFFECTED_COLUMN = "number of rows affected";
+
+/**
+ * Submits a statement. The emulator answers HTTP 200 even for a failure and
+ * reports it in the body, so the status alone says nothing about whether the
+ * SQL ran — sqlState is what decides.
+ */
+export async function runStatement(
+  statement: string,
+  context: { database: string; schema: string },
+  fetchFn: typeof fetch = fetch,
+): Promise<Statement> {
+  const startedAt = performance.now();
+
+  const response = await fetchFn("/api/v2/statements", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ statement, ...context }),
+  });
+
+  const body = (await response.json()) as RawResponse;
+  const elapsedMs = Math.round(performance.now() - startedAt);
+  const handle = body.statementHandle ?? "";
+
+  if (body.sqlState && body.sqlState !== SQL_STATE_SUCCESS) {
+    throw new StatementError(
+      body.code ?? "unknown",
+      body.sqlState,
+      body.message ?? "Statement failed with no message.",
+      handle,
+    );
+  }
+
+  if (!response.ok) {
+    throw new StatementError(
+      body.code ?? String(response.status),
+      body.sqlState ?? "",
+      body.message ?? `Request failed with HTTP ${response.status}.`,
+      handle,
+    );
+  }
+
+  const columns = body.resultSetMetaData?.rowType ?? [];
+  const rows = body.data ?? [];
+
+  return {
+    columns,
+    rows,
+    handle,
+    elapsedMs,
+    rowsAffected: readRowsAffected(columns, rows),
+  };
+}
+
+/**
+ * DDL and DML come back as a one-column, one-row result set holding the count.
+ * Reporting that as a grid would be noise, so it is lifted out here.
+ */
+function readRowsAffected(columns: Column[], rows: Cell[][]): number | null {
+  if (columns.length !== 1 || columns[0]?.name !== ROWS_AFFECTED_COLUMN) {
+    return null;
+  }
+  const value = rows[0]?.[0];
+  return typeof value === "number" ? value : null;
+}
