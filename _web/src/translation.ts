@@ -1,4 +1,4 @@
-import type { Translation } from "./api";
+import type { Rewrite, Translation } from "./api";
 import { formatSQL } from "./sql-format";
 
 /** Names the processors report themselves by, in words a reader recognises. */
@@ -42,6 +42,10 @@ export function renderTranslation(translation: Translation): HTMLElement {
   );
   pane.append(columns);
 
+  if (translation.rewrites.length > 0) {
+    pane.append(rewriteTable(translation.rewrites));
+  }
+
   if (translation.complete && translation.statement.trim() === translation.translated.trim()) {
     pane.append(
       note("Nothing to translate — this statement reaches DuckDB unchanged."),
@@ -49,6 +53,50 @@ export function renderTranslation(translation: Translation): HTMLElement {
   }
 
   return pane;
+}
+
+/**
+ * Lists the substitutions rather than leaving them to be spotted. Two blocks of
+ * SQL side by side show that something changed; this says what.
+ */
+function rewriteTable(rewrites: Rewrite[]): HTMLElement {
+  const wrapper = document.createElement("div");
+  wrapper.className = "rewrites";
+
+  const table = document.createElement("table");
+
+  const head = document.createElement("thead");
+  const headRow = document.createElement("tr");
+  for (const label of ["What you wrote", "What runs", "Why"]) {
+    const th = document.createElement("th");
+    th.textContent = label;
+    headRow.append(th);
+  }
+  head.append(headRow);
+
+  const body = document.createElement("tbody");
+  for (const rewrite of rewrites) {
+    const row = document.createElement("tr");
+    row.append(cell(rewrite.from, "from"), cell(rewrite.to, "to"), cell(reason(rewrite.kind), "why"));
+    body.append(row);
+  }
+
+  table.append(head, body);
+  wrapper.append(table);
+  return wrapper;
+}
+
+function cell(text: string, className: string): HTMLElement {
+  const td = document.createElement("td");
+  td.className = className;
+  td.textContent = text;
+  return td;
+}
+
+function reason(kind: string): string {
+  return kind === "object"
+    ? "Resolved against the worksheet's database and schema"
+    : "DuckDB has no such function";
 }
 
 function sqlColumn(title: string, subtitle: string, sql: string): HTMLElement {

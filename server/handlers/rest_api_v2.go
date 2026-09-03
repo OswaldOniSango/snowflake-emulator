@@ -1048,12 +1048,21 @@ func (h *RestAPIv2Handler) TranslateStatement(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	rewrites := make([]types.TranslationRewrite, 0, len(preview.FunctionRewrites)+len(preview.ObjectRewrites))
+	for _, rewrite := range preview.FunctionRewrites {
+		rewrites = append(rewrites, types.TranslationRewrite{From: rewrite.From, To: rewrite.To, Kind: "function"})
+	}
+	for _, rewrite := range preview.ObjectRewrites {
+		rewrites = append(rewrites, types.TranslationRewrite{From: rewrite.From, To: rewrite.To, Kind: "object"})
+	}
+
 	resp := types.TranslateResponse{
 		Statement:  preview.Statement,
 		Translated: preview.Translated,
 		HandledBy:  string(preview.HandledBy),
 		Complete:   preview.Complete,
 		Note:       preview.Note,
+		Rewrites:   rewrites,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
