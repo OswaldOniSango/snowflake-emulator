@@ -157,3 +157,33 @@ function safeStorage(): Storage | null {
 function newId(): string {
   return `w${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 }
+
+/**
+ * Moves one worksheet next to another, for dragging a tab along the strip.
+ *
+ * Returns a new list; a drag that lands on the tab it started from, or on an
+ * id the workspace does not hold, leaves the order untouched. Removing before
+ * inserting is what makes "after the last tab" reachable — computing the
+ * target index first would be off by one once the dragged tab is spliced out.
+ */
+export function reorderWorksheets(
+  worksheets: Worksheet[],
+  draggedId: string,
+  targetId: string,
+  place: "before" | "after",
+): Worksheet[] {
+  if (draggedId === targetId) {
+    return worksheets;
+  }
+
+  const from = worksheets.findIndex((worksheet) => worksheet.id === draggedId);
+  const dragged = worksheets[from];
+  if (!dragged || !worksheets.some((worksheet) => worksheet.id === targetId)) {
+    return worksheets;
+  }
+
+  const rest = worksheets.filter((worksheet) => worksheet.id !== draggedId);
+  const target = rest.findIndex((worksheet) => worksheet.id === targetId);
+  rest.splice(place === "before" ? target : target + 1, 0, dragged);
+  return rest;
+}
