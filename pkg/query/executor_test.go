@@ -690,3 +690,66 @@ func TestTransactionClassifier(t *testing.T) {
 		})
 	}
 }
+
+// TestExecutor_RowLimit pins the cap that keeps one statement from building a
+// result no client can render. Before it, a query over a large table
+// materialized every row and shipped it in a single response.
+func TestExecutor_RowLimit(t *testing.T) {
+	executor, _ := setupTestExecutor(t)
+	ctx := context.Background()
+
+	tests := []struct {
+		name      string
+		limit     int
+		wantRows  int
+		wantTotal int
+	}{
+		{name: "the default caps a large result", limit: 0, wantRows: defaultRowLimit, wantTotal: 5000},
+		{name: "a smaller limit is honoured", limit: 10, wantRows: 10, wantTotal: 5000},
+		{name: "a larger limit returns everything", limit: 9000, wantRows: 5000, wantTotal: 5000},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := executor.QueryWithContext(
+				ctx,
+				ExecutionContext{RowLimit: tt.limit},
+				"SELECT i FROM range(5000) t(i)",
+			)
+			if err != nil {
+				t.Fatalf("QueryWithContext() error = %v", err)
+			}
+
+			if len(result.Rows) != tt.wantRows {
+				t.Errorf("len(Rows) = %d, want %d", len(result.Rows), tt.wantRows)
+			}
+			// The count is what the statement produced, not what came back.
+			if result.TotalRows != tt.wantTotal {
+				t.Errorf("TotalRows = %d, want %d", result.TotalRows, tt.wantTotal)
+			}
+			if got := result.Truncated(); got != (tt.wantRows < tt.wantTotal) {
+				t.Errorf("Truncated() = %v, want %v", got, tt.wantRows < tt.wantTotal)
+			}
+		})
+	}
+}
+
+func TestExecutor_RowLimitLeavesSmallResultsAlone(t *testing.T) {
+	executor, _ := setupTestExecutor(t)
+
+	result, err := executor.QueryWithContext(
+		context.Background(),
+		ExecutionContext{},
+		"SELECT i FROM range(3) t(i)",
+	)
+	if err != nil {
+		t.Fatalf("QueryWithContext() error = %v", err)
+	}
+
+	if len(result.Rows) != 3 || result.TotalRows != 3 {
+		t.Errorf("got %d rows of %d, want 3 of 3", len(result.Rows), result.TotalRows)
+	}
+	if result.Truncated() {
+		t.Error("a result under the limit must not report as truncated")
+	}
+}
