@@ -141,7 +141,7 @@ assets and no separate process.
 | **Translated SQL** | Shows the DuckDB SQL a statement becomes, beside what you wrote, without running it. Statements handled by a processor (COPY, MERGE, procedures) say so rather than showing a partial translation as though it were the whole story. |
 | **Object explorer** | Databases, schemas, tables, streams, procedures, tasks and stages. Clicking an object writes its name into the editor. |
 | **Warehouses** | Create, resume, suspend and drop. Compute is emulated: a suspended warehouse changes what the API reports, not where statements run. |
-| **History** | Recent statements with their status, duration and handle. Click one to reopen it in a new worksheet. Statements are held in memory and are lost on restart. |
+| **History** | Recent statements with their status, duration and handle. Click one to reopen it in a new worksheet. Statements are kept for seven days, and survive a restart when the emulator is run against a database file (`DB_PATH`); with the default in-memory database they go when the process does. |
 
 > **Note**: The console is an original interface for this emulator. It is not
 > affiliated with or endorsed by Snowflake Inc.

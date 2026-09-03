@@ -4,10 +4,10 @@ import { renderNotice } from "./grid";
 /**
  * The statement history.
  *
- * The emulator keeps statements in memory for a fixed period, so this is a
- * recent history rather than a complete one — and it starts empty after a
- * restart. The retention the API reports is shown, so an empty table reads as
- * "nothing recent" instead of "something is broken".
+ * The emulator keeps statements for a fixed period, so this is a recent
+ * history rather than a complete one, and it survives a restart only when the
+ * emulator was given a database file. Both are shown, so an empty table reads
+ * as "nothing recent" instead of "something is broken".
  */
 
 export interface HistoryOptions {
@@ -31,7 +31,7 @@ export function createHistoryView(options: HistoryOptions): { refresh: () => Pro
           ? renderNotice(
               "info",
               "No statements yet",
-              `The emulator keeps statements for ${humanise(history.retainedFor)} and forgets them on restart.`,
+              emptyDetail(history.retainedFor, history.persistent ?? false),
             )
           : table(history.statements),
       );
@@ -174,6 +174,18 @@ function time(epochMs: number): string {
 }
 
 /** Turns a Go duration such as "1h0m0s" into something readable. */
+/**
+ * Why the history might be empty. A reader who has just restarted the emulator
+ * needs to know whether their statements were kept or thrown away, and that
+ * depends on whether it was started against a database file.
+ */
+export function emptyDetail(retainedFor: string, persistent: boolean): string {
+  const kept = `The emulator keeps statements for ${humanise(retainedFor)}`;
+  return persistent
+    ? `${kept}.`
+    : `${kept}, and forgets them on restart because it is running with an in-memory database. Start it with DB_PATH set to a file to keep them.`;
+}
+
 export function humanise(duration: string): string {
   const match = /^(?:(\d+)h)?(?:(\d+)m)?(?:([\d.]+)s)?$/.exec(duration.trim());
   if (!match) {
@@ -183,7 +195,19 @@ export function humanise(duration: string): string {
   const [, hours, minutes, seconds] = match;
   const parts: string[] = [];
   if (hours && hours !== "0") {
-    parts.push(`${hours} ${hours === "1" ? "hour" : "hours"}`);
+    // Go writes a week as 168h. Past a couple of days nobody counts in hours,
+    // so whole days are said as days and the remainder keeps its hours.
+    const total = Number(hours);
+    const days = Math.floor(total / 24);
+    const rest = total % 24;
+    if (days >= 2) {
+      parts.push(`${days} days`);
+      if (rest > 0) {
+        parts.push(`${rest} ${rest === 1 ? "hour" : "hours"}`);
+      }
+    } else {
+      parts.push(`${hours} ${hours === "1" ? "hour" : "hours"}`);
+    }
   }
   if (minutes && minutes !== "0") {
     parts.push(`${minutes} minutes`);

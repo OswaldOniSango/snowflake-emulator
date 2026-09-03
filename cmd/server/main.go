@@ -64,6 +64,10 @@ func main() {
 	sessionMgr := session.NewManager(24 * time.Hour)
 	stmtMgr := query.NewStatementManager(1 * time.Hour)
 
+	// Statements are recorded so the console's history outlives the manager's
+	// own short TTL, and survives a restart when DB_PATH names a file.
+	stmtMgr.SetHistoryStore(repo, query.DefaultHistoryRetention, dbPath != ":memory:")
+
 	executor := query.NewExecutor(connMgr, repo)
 
 	// Initialize stage manager for COPY INTO support
