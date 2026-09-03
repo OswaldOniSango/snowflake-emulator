@@ -1,3 +1,4 @@
+import { autocompletion, type CompletionSource } from "@codemirror/autocomplete";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { sql, StandardSQL } from "@codemirror/lang-sql";
@@ -42,6 +43,20 @@ const theme = EditorView.theme({
   },
   ".cm-cursor": { borderLeftColor: "var(--accent)" },
   ".cm-scroller": { overflow: "auto", lineHeight: "1.6" },
+  ".cm-tooltip-autocomplete": {
+    backgroundColor: "var(--panel-2)",
+    border: "1px solid var(--line)",
+    borderRadius: "6px",
+    fontFamily: "var(--mono)",
+    fontSize: "12px",
+  },
+  ".cm-tooltip-autocomplete > ul > li": { padding: "3px 8px", color: "var(--ink-2)" },
+  ".cm-tooltip-autocomplete > ul > li[aria-selected]": {
+    backgroundColor: "var(--accent-soft)",
+    color: "var(--ink)",
+  },
+  ".cm-completionDetail": { color: "var(--ink-3)", fontStyle: "normal", marginLeft: "1em" },
+  ".cm-completionMatchedText": { color: "var(--accent)", textDecoration: "none" },
 });
 
 /**
@@ -68,6 +83,12 @@ export interface EditorOptions {
   onRun: () => void;
   /** Invoked when the buffer changes, so the worksheet can be persisted. */
   onChange?: (value: string) => void;
+  /**
+   * Supplies suggestions. Passed in rather than built here because what is
+   * worth suggesting depends on the worksheet's namespace, which the editor
+   * knows nothing about. Omitted, the editor simply does not complete.
+   */
+  completions?: CompletionSource;
 }
 
 export interface Editor {
@@ -110,6 +131,12 @@ export function createEditor(options: EditorOptions): Editor {
         highlightActiveLineGutter(),
         history(),
         sql({ dialect: StandardSQL, upperCaseKeywords: true }),
+        // Only the given source runs: the SQL language's own completion knows
+        // the dialect's keywords but nothing of the emulator's catalog, and
+        // offering both would duplicate every keyword.
+        ...(options.completions
+          ? [autocompletion({ override: [options.completions], icons: false })]
+          : []),
         syntaxHighlighting(highlighting),
         runKeymap,
         keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
