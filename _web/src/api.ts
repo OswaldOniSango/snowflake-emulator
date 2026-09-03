@@ -270,6 +270,43 @@ export interface SchemaObject {
   detail?: string;
 }
 
+/** One file stored in a named internal stage. */
+export interface StageFile {
+  name: string;
+  size: number;
+  last_modified: string;
+}
+
+/** Uploads one local file to a named internal stage. */
+export async function uploadStageFile(
+  database: string,
+  schema: string,
+  stage: string,
+  file: Blob,
+  fileName: string,
+  fetchFn: typeof fetch = fetch,
+): Promise<StageFile> {
+  const form = new FormData();
+  form.append("file", file, fileName);
+  const path = `/api/v2/databases/${encodeURIComponent(database)}/schemas/${encodeURIComponent(schema)}/stages/${encodeURIComponent(stage)}/files`;
+  const response = await fetchFn(path, { method: "POST", body: form });
+  const body = (await response.json().catch(() => ({}))) as Partial<StageFile> & {
+    message?: string;
+  };
+  if (!response.ok) {
+    throw new StatementError(
+      "stage-upload",
+      "",
+      body.message ?? `Upload failed with HTTP ${response.status}.`,
+      "",
+    );
+  }
+  if (!body.name || typeof body.size !== "number" || !body.last_modified) {
+    throw new StatementError("stage-upload", "", "The upload response is incomplete.", "");
+  }
+  return { name: body.name, size: body.size, last_modified: body.last_modified };
+}
+
 async function getJSON<T>(path: string, fetchFn: typeof fetch): Promise<T> {
   const response = await fetchFn(path);
   if (!response.ok) {

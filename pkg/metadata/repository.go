@@ -1171,9 +1171,15 @@ func (r *Repository) GetStageByName(ctx context.Context, schemaID, name string) 
 // ListStages returns all stages in a schema.
 func (r *Repository) ListStages(ctx context.Context, schemaID string) ([]*Stage, error) {
 	query := `SELECT id, schema_id, name, stage_type, url, comment, created_at, owner
-	          FROM _metadata_stages WHERE schema_id = ? ORDER BY name`
+	          FROM _metadata_stages`
+	args := []interface{}{}
+	if schemaID != "" {
+		query += sqlWhereSchemaID
+		args = append(args, schemaID)
+	}
+	query += sqlOrderByName
 
-	rows, err := r.mgr.DB().QueryContext(ctx, query, schemaID)
+	rows, err := r.mgr.DB().QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list stages: %w", err)
 	}

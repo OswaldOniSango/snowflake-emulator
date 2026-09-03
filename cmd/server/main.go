@@ -80,17 +80,16 @@ func main() {
 	// Initialize processors and wire to executor.
 	// Due to circular dependency (processors need executor, executor needs processors),
 	// we create processors first, then configure executor with them.
-	copyProcessor := query.NewCopyProcessor(stageMgr, repo, executor)
 	mergeProcessor := query.NewMergeProcessor(executor)
 	executor.Configure(
-		query.WithCopyProcessor(copyProcessor),
+		query.WithStageManager(stageMgr),
 		query.WithMergeProcessor(mergeProcessor),
 	)
 	warehouseMgr := warehouse.NewManager()
 
 	sessionHandler := handlers.NewSessionHandler(sessionMgr, repo)
 	queryHandler := handlers.NewQueryHandler(executor, sessionMgr)
-	restAPIHandler := handlers.NewRestAPIv2HandlerWithWarehouse(executor, stmtMgr, repo, warehouseMgr)
+	restAPIHandler := handlers.NewRestAPIv2HandlerWithServices(executor, stmtMgr, repo, warehouseMgr, stageMgr)
 	taskScheduler := query.NewTaskScheduler(repo, executor, time.Second)
 	taskScheduler.Start(context.Background())
 	defer taskScheduler.Stop()
@@ -182,6 +181,13 @@ func newRouter(
 		r.Get("/databases/{database}/schemas/{schema}/tables/{table}", restAPIHandler.GetTable)
 		r.Put("/databases/{database}/schemas/{schema}/tables/{table}", restAPIHandler.AlterTable)
 		r.Delete("/databases/{database}/schemas/{schema}/tables/{table}", restAPIHandler.DeleteTable)
+
+		// Named internal stage endpoints
+		r.Get("/databases/{database}/schemas/{schema}/stages", restAPIHandler.ListStages)
+		r.Post("/databases/{database}/schemas/{schema}/stages", restAPIHandler.CreateStage)
+		r.Delete("/databases/{database}/schemas/{schema}/stages/{stage}", restAPIHandler.DeleteStage)
+		r.Get("/databases/{database}/schemas/{schema}/stages/{stage}/files", restAPIHandler.ListStageFiles)
+		r.Post("/databases/{database}/schemas/{schema}/stages/{stage}/files", restAPIHandler.UploadStageFile)
 
 		// Warehouse endpoints
 		r.Get("/warehouses", restAPIHandler.ListWarehouses)

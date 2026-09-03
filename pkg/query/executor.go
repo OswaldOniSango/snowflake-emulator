@@ -12,6 +12,7 @@ import (
 
 	"github.com/nnnkkk7/snowflake-emulator/pkg/connection"
 	"github.com/nnnkkk7/snowflake-emulator/pkg/metadata"
+	"github.com/nnnkkk7/snowflake-emulator/pkg/stage"
 )
 
 // Binding validation regexes to prevent SQL injection
@@ -42,6 +43,7 @@ type Executor struct {
 	procedureProcessor *ProcedureProcessor
 	streamProcessor    *StreamProcessor
 	taskProcessor      *TaskProcessor
+	stageProcessor     *StageProcessor
 	warehouseValidator func(context.Context, string) error
 }
 
@@ -52,6 +54,14 @@ type ExecutorOption func(*Executor)
 func WithCopyProcessor(processor *CopyProcessor) ExecutorOption {
 	return func(e *Executor) {
 		e.copyProcessor = processor
+	}
+}
+
+// WithStageManager configures named internal stages and COPY INTO file access.
+func WithStageManager(manager *stage.Manager) ExecutorOption {
+	return func(e *Executor) {
+		e.stageProcessor = NewStageProcessor(manager, e.repo)
+		e.copyProcessor = NewCopyProcessor(manager, e.repo, e)
 	}
 }
 
@@ -105,6 +115,9 @@ func (e *Executor) withPinnedConnection(ctx context.Context, fn func(*Executor) 
 		if e.copyProcessor != nil {
 			pinned.copyProcessor = NewCopyProcessor(e.copyProcessor.stageMgr, e.repo, pinned)
 		}
+		if e.stageProcessor != nil {
+			pinned.stageProcessor = NewStageProcessor(e.stageProcessor.manager, e.repo)
+		}
 		return fn(pinned)
 	})
 }
@@ -120,17 +133,8 @@ func (e *Executor) QueryWithContext(ctx context.Context, executionContext Execut
 		return nil, err
 	}
 	classifier := NewClassifier()
-	if classifier.IsCall(sql) {
-		return e.procedureProcessor.Call(ctx, executionContext, sql)
-	}
-	if classifier.IsShowProcedures(sql) {
-		return e.procedureProcessor.Show(ctx, sql)
-	}
-	if classifier.IsShowStreams(sql) {
-		return e.streamProcessor.Show(ctx, sql)
-	}
-	if classifier.IsShowTasks(sql) {
-		return e.taskProcessor.Show(ctx)
+	if result, handled, err := e.queryWithProcessor(ctx, executionContext, sql, classifier); handled {
+		return result, err
 	}
 	rewrittenSQL, err := e.streamProcessor.RewriteReferences(ctx, executionContext, sql)
 	if err != nil {
@@ -211,6 +215,40 @@ func (e *Executor) QueryWithContext(ctx context.Context, executionContext Execut
 		Rows:        resultRows,
 		TotalRows:   totalRows,
 	}, nil
+}
+
+func (e *Executor) queryWithProcessor(ctx context.Context, executionContext ExecutionContext, sql string, classifier *Classifier) (*Result, bool, error) {
+	if classifier.IsCall(sql) {
+		result, err := e.procedureProcessor.Call(ctx, executionContext, sql)
+		return result, true, err
+	}
+	if classifier.IsShowProcedures(sql) {
+		result, err := e.procedureProcessor.Show(ctx, sql)
+		return result, true, err
+	}
+	if classifier.IsShowStreams(sql) {
+		result, err := e.streamProcessor.Show(ctx, sql)
+		return result, true, err
+	}
+	if classifier.IsShowTasks(sql) {
+		result, err := e.taskProcessor.Show(ctx)
+		return result, true, err
+	}
+	if classifier.IsShowStages(sql) {
+		if e.stageProcessor == nil {
+			return nil, true, fmt.Errorf("stage processor not configured")
+		}
+		result, err := e.stageProcessor.Show(ctx)
+		return result, true, err
+	}
+	if classifier.IsListStage(sql) {
+		if e.stageProcessor == nil {
+			return nil, true, fmt.Errorf("stage processor not configured")
+		}
+		result, err := e.stageProcessor.List(ctx, executionContext, sql)
+		return result, true, err
+	}
+	return nil, false, nil
 }
 
 // QueryWithBindings executes a SELECT query with parameter bindings and returns results.
@@ -429,6 +467,9 @@ func (e *Executor) ExecuteWithContext(ctx context.Context, executionContext Exec
 	if classifier.IsDropSchema(sql) {
 		return e.executeDropSchema(ctx, executionContext, sql)
 	}
+	if result, handled, err := e.executeStageStatement(ctx, executionContext, sql, classifier); handled {
+		return result, err
+	}
 
 	// For CREATE TABLE, we need to register it in metadata
 	if classifier.IsCreateTable(sql) {
@@ -457,7 +498,7 @@ func (e *Executor) ExecuteWithContext(ctx context.Context, executionContext Exec
 
 	// Handle COPY INTO statements
 	if IsCopy(sql) {
-		return e.executeCopy(ctx, sql)
+		return e.executeCopy(ctx, executionContext, sql)
 	}
 
 	// Handle MERGE INTO statements
@@ -584,7 +625,7 @@ func (e *Executor) executeTransaction(ctx context.Context, sql string) (*ExecRes
 }
 
 // executeCopy handles COPY INTO statements.
-func (e *Executor) executeCopy(ctx context.Context, sql string) (*ExecResult, error) {
+func (e *Executor) executeCopy(ctx context.Context, executionContext ExecutionContext, sql string) (*ExecResult, error) {
 	if e.copyProcessor == nil {
 		return nil, fmt.Errorf("COPY processor not configured")
 	}
@@ -595,24 +636,48 @@ func (e *Executor) executeCopy(ctx context.Context, sql string) (*ExecResult, er
 		return nil, fmt.Errorf("failed to parse COPY statement: %w", err)
 	}
 
-	// Resolve schema ID from target database/schema names if provided
-	var schemaID string
-	if stmt.TargetDatabase != "" && stmt.TargetSchema != "" {
-		// Look up database by name
-		db, err := e.repo.GetDatabaseByName(ctx, stmt.TargetDatabase)
-		if err != nil {
-			return nil, fmt.Errorf("database %s not found: %w", stmt.TargetDatabase, err)
-		}
-		// Look up schema by name
-		schema, err := e.repo.GetSchemaByName(ctx, db.ID, stmt.TargetSchema)
-		if err != nil {
-			return nil, fmt.Errorf("schema %s not found in database %s: %w", stmt.TargetSchema, stmt.TargetDatabase, err)
-		}
-		schemaID = schema.ID
+	if stmt.TargetDatabase == "" {
+		stmt.TargetDatabase = strings.ToUpper(executionContext.Database)
+	}
+	if stmt.TargetSchema == "" {
+		stmt.TargetSchema = strings.ToUpper(executionContext.Schema)
+	}
+	if stmt.TargetDatabase == "" || stmt.TargetSchema == "" {
+		return nil, fmt.Errorf("COPY INTO requires database and schema context for target table %s", stmt.TargetTable)
 	}
 
+	db, err := e.repo.GetDatabaseByName(ctx, stmt.TargetDatabase)
+	if err != nil {
+		return nil, fmt.Errorf("database %s not found: %w", stmt.TargetDatabase, err)
+	}
+	if _, err := e.repo.GetSchemaByName(ctx, db.ID, stmt.TargetSchema); err != nil {
+		return nil, fmt.Errorf("schema %s not found in database %s: %w", stmt.TargetSchema, stmt.TargetDatabase, err)
+	}
+
+	stageContext := executionContext
+	if stageContext.Database == "" {
+		stageContext.Database = stmt.TargetDatabase
+	}
+	if stageContext.Schema == "" {
+		stageContext.Schema = stmt.TargetSchema
+	}
+	stageDatabase, stageSchema, stageName, err := resolveQualifiedObjectName(stmt.StageName, "stage", stageContext)
+	if err != nil {
+		return nil, err
+	}
+	stageDB, err := e.repo.GetDatabaseByName(ctx, stageDatabase)
+	if err != nil {
+		return nil, err
+	}
+	stageSchemaMetadata, err := e.repo.GetSchemaByName(ctx, stageDB.ID, stageSchema)
+	if err != nil {
+		return nil, err
+	}
+	stmt.StageName = stageName
+	stmt.StageSchemaID = stageSchemaMetadata.ID
+
 	// Execute COPY INTO with resolved schema context
-	result, err := e.copyProcessor.ExecuteCopyInto(ctx, stmt, schemaID)
+	result, err := e.copyProcessor.ExecuteCopyInto(ctx, stmt, stageSchemaMetadata.ID)
 	if err != nil {
 		return nil, fmt.Errorf("COPY INTO failed: %w", err)
 	}
@@ -620,6 +685,21 @@ func (e *Executor) executeCopy(ctx context.Context, sql string) (*ExecResult, er
 	return &ExecResult{
 		RowsAffected: result.RowsLoaded,
 	}, nil
+}
+
+func (e *Executor) executeStageStatement(ctx context.Context, executionContext ExecutionContext, sql string, classifier *Classifier) (*ExecResult, bool, error) {
+	if !classifier.IsCreateStage(sql) && !classifier.IsDropStage(sql) {
+		return nil, false, nil
+	}
+	if e.stageProcessor == nil {
+		return nil, true, fmt.Errorf("stage processor not configured")
+	}
+	if classifier.IsCreateStage(sql) {
+		result, err := e.stageProcessor.Create(ctx, executionContext, sql)
+		return result, true, err
+	}
+	result, err := e.stageProcessor.Drop(ctx, executionContext, sql)
+	return result, true, err
 }
 
 // executeMerge handles MERGE INTO statements. The execution context travels

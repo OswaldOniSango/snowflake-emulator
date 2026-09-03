@@ -93,6 +93,12 @@ func TestManager_CreateStage(t *testing.T) {
 			stageType: "INTERNAL",
 			wantErr:   true,
 		},
+		{
+			name:      "DirectoryTraversalName",
+			stageName: "../../outside",
+			stageType: "INTERNAL",
+			wantErr:   true,
+		},
 	}
 
 	for _, tc := range testCases {

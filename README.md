@@ -431,6 +431,9 @@ go run ./example/gosnowflake
 | `/api/v2/databases/{db}/schemas/{schema}/objects` | GET | List everything a schema contains (tables, streams, procedures, tasks, stages) |
 | `/api/v2/databases/{db}/schemas/{schema}/tables` | GET, POST | List/Create tables |
 | `/api/v2/databases/{db}/schemas/{schema}/tables/{table}` | GET, PUT, DELETE | Get/Alter/Drop table |
+| `/api/v2/databases/{db}/schemas/{schema}/stages` | GET, POST | List/Create named internal stages |
+| `/api/v2/databases/{db}/schemas/{schema}/stages/{stage}` | DELETE | Drop an internal stage and its files |
+| `/api/v2/databases/{db}/schemas/{schema}/stages/{stage}/files` | GET, POST | List files or upload one multipart `file` (maximum 64 MiB) |
 | `/api/v2/warehouses` | GET, POST | List/Create warehouses |
 | `/api/v2/warehouses/{wh}` | GET, DELETE | Get/Drop warehouse |
 | `/api/v2/warehouses/{wh}:resume` | POST | Resume warehouse |
@@ -451,8 +454,9 @@ The emulator supports standard SQL operations with automatic Snowflake-to-DuckDB
 | **DDL** | `CREATE TABLE`, `DROP TABLE`, `ALTER TABLE` | Schema management |
 | **DDL** | `CREATE DATABASE`, `DROP DATABASE` | Database management |
 | **DDL** | `CREATE SCHEMA`, `DROP SCHEMA` | Schema namespace management |
+| **DDL** | `CREATE [OR REPLACE] STAGE`, `DROP STAGE` | Named internal stages |
 | **Transaction** | `BEGIN`, `COMMIT`, `ROLLBACK` | Transaction control |
-| **Data Loading** | `COPY INTO` | Bulk data loading from internal stages (CSV, JSON) |
+| **Data Loading** | `LIST @stage`, `COPY INTO` | Upload and load CSV or JSON files from named internal stages |
 | **Upsert** | `MERGE INTO` | Conditional insert/update/delete operations |
 | **Procedures** | `CREATE [OR REPLACE] PROCEDURE`, `CALL`, `SHOW PROCEDURES`, `DROP PROCEDURE` | `LANGUAGE SQL` procedures with variables, assignments, dynamic `IDENTIFIER`, `CASE`, `IF/ELSE`, top-level `EXCEPTION`, and `RETURN` |
 | **Streams** | `CREATE [OR REPLACE] STREAM`, `SHOW STREAMS`, `DROP STREAM`, `SELECT FROM stream` | Append-only insert tracking |
@@ -465,6 +469,47 @@ Temporary tables remain connection-scoped and are not stored in the global
 catalog.
 
 </details>
+
+## Loading a CSV from an Internal Stage
+
+Create a destination table and a named internal stage in the worksheet's
+database and schema:
+
+```sql
+CREATE TABLE users (id INTEGER, name VARCHAR);
+CREATE STAGE users_stage;
+```
+
+Refresh the object explorer, expand **Stages**, and use the upload arrow next to
+`USERS_STAGE` to choose a local CSV file. The same upload is available through
+the REST API:
+
+```bash
+curl -X POST \
+  -F "file=@users.csv" \
+  http://localhost:8080/api/v2/databases/TEST_DB/schemas/PUBLIC/stages/USERS_STAGE/files
+```
+
+Inspect and load the file:
+
+```sql
+LIST @users_stage;
+
+COPY INTO users
+FROM @users_stage
+FILE_FORMAT = (
+  TYPE = CSV
+  SKIP_HEADER = 1
+);
+
+SELECT * FROM users;
+```
+
+This is a learning-oriented subset of Snowflake named internal stages. Upload
+uses the emulator's HTTP/UI interface rather than Snowflake's `PUT` command.
+External stages, named file-format objects, compressed files, and Snowflake load
+history are not implemented. Running the same `COPY INTO` again loads the file
+again unless the first command used `PURGE = TRUE`.
 
 <details>
 <summary><b>Supported SQL Functions</b></summary>
