@@ -6,6 +6,8 @@ import {
   newWorksheet,
   saveWorkspace,
   type Workspace,
+  reorderWorksheets,
+  type Worksheet,
 } from "./workspace";
 
 /** A stand-in for localStorage that can also be told to fail. */
@@ -152,3 +154,57 @@ function defaultish(): Workspace {
   const worksheet = newWorksheet("W");
   return { worksheets: [worksheet], activeId: worksheet.id };
 }
+
+describe("reorderWorksheets", () => {
+  const sheets = (...names: string[]) => names.map((name) => newWorksheet(name));
+  const names = (list: Worksheet[]) => list.map((worksheet) => worksheet.name);
+
+  it("drops a tab before another", () => {
+    const list = sheets("A", "B", "C");
+    const moved = reorderWorksheets(list, list[2]!.id, list[0]!.id, "before");
+    expect(names(moved)).toEqual(["C", "A", "B"]);
+  });
+
+  it("drops a tab after another", () => {
+    const list = sheets("A", "B", "C");
+    const moved = reorderWorksheets(list, list[0]!.id, list[1]!.id, "after");
+    expect(names(moved)).toEqual(["B", "A", "C"]);
+  });
+
+  it("can move a tab to the very end", () => {
+    const list = sheets("A", "B", "C");
+    const moved = reorderWorksheets(list, list[0]!.id, list[2]!.id, "after");
+    expect(names(moved)).toEqual(["B", "C", "A"]);
+  });
+
+  it("can move a tab to the very front", () => {
+    const list = sheets("A", "B", "C");
+    const moved = reorderWorksheets(list, list[2]!.id, list[0]!.id, "before");
+    expect(names(moved)).toEqual(["C", "A", "B"]);
+  });
+
+  it("moving a neighbour one place back is not a no-op", () => {
+    // Removing before inserting is what makes this land correctly; computing
+    // the index up front would leave B where it started.
+    const list = sheets("A", "B", "C");
+    const moved = reorderWorksheets(list, list[1]!.id, list[2]!.id, "after");
+    expect(names(moved)).toEqual(["A", "C", "B"]);
+  });
+
+  it("returns the same list when a tab is dropped on itself", () => {
+    const list = sheets("A", "B");
+    expect(reorderWorksheets(list, list[0]!.id, list[0]!.id, "before")).toBe(list);
+  });
+
+  it("returns the same list for an id the workspace does not hold", () => {
+    const list = sheets("A", "B");
+    expect(reorderWorksheets(list, "missing", list[0]!.id, "before")).toBe(list);
+    expect(reorderWorksheets(list, list[0]!.id, "missing", "before")).toBe(list);
+  });
+
+  it("leaves the original list untouched", () => {
+    const list = sheets("A", "B", "C");
+    reorderWorksheets(list, list[0]!.id, list[2]!.id, "after");
+    expect(names(list)).toEqual(["A", "B", "C"]);
+  });
+});

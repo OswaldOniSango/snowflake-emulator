@@ -83,27 +83,73 @@ interface RawResponse {
 
 const ROWS_AFFECTED_COLUMN = "number of rows affected";
 
+/** The code the emulator returns while a statement is still running. */
+const CODE_PENDING = "333334";
+
+/** The code a statement stopped before it finished comes back with. */
+export const CODE_CANCELED = "000604";
+
+/** How often a running statement is asked whether it has finished. */
+const POLL_INTERVAL_MS = 150;
+
+/** Asks the emulator to stop a statement. Failing to cancel is not an error
+ * worth surfacing: the statement may simply have finished first. */
+export async function cancelStatement(handle: string, fetchFn: typeof fetch = fetch): Promise<void> {
+  await fetchFn(`/api/v2/statements/${encodeURIComponent(handle)}/cancel`, { method: "POST" });
+}
+
 /**
- * Submits a statement. The emulator answers HTTP 200 even for a failure and
- * reports it in the body, so the status alone says nothing about whether the
- * SQL ran — sqlState is what decides.
+ * Submits a statement and waits for it.
+ *
+ * The statement is submitted asynchronously and then polled, so that a slow
+ * one can be cancelled: a synchronous submission holds one connection open
+ * with no handle to cancel until it answers. `onHandle` is called as soon as
+ * the emulator accepts the statement, which is what the Cancel button needs.
+ *
+ * The emulator answers HTTP 200 even for a failure and reports it in the body,
+ * so the status alone says nothing about whether the SQL ran — sqlState is
+ * what decides.
  */
 export async function runStatement(
   statement: string,
   context: { database: string; schema: string },
   fetchFn: typeof fetch = fetch,
+  onHandle?: (handle: string) => void,
 ): Promise<Statement> {
   const startedAt = performance.now();
 
-  const response = await fetchFn("/api/v2/statements", {
+  let response = await fetchFn("/api/v2/statements", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ statement, ...context }),
+    body: JSON.stringify({ statement, ...context, async: true }),
   });
 
-  const body = (await response.json()) as RawResponse;
-  const elapsedMs = Math.round(performance.now() - startedAt);
+  let body = (await response.json()) as RawResponse;
   const handle = body.statementHandle ?? "";
+  if (handle) {
+    onHandle?.(handle);
+  }
+
+  // Poll until it stops reporting itself as pending. A handle-less response is
+  // a rejection — an empty statement, say — and is dealt with below.
+  while (handle && body.code === CODE_PENDING) {
+    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+    response = await fetchFn(`/api/v2/statements/${encodeURIComponent(handle)}`);
+    body = (await response.json()) as RawResponse;
+  }
+
+  const elapsedMs = Math.round(performance.now() - startedAt);
+
+  // A canceled statement reports the success SQL state, so it has to be
+  // recognised by its code or it would read as an empty result.
+  if (body.code === CODE_CANCELED) {
+    throw new StatementError(
+      CODE_CANCELED,
+      body.sqlState ?? "",
+      body.message ?? "Statement canceled.",
+      handle,
+    );
+  }
 
   if (body.sqlState && body.sqlState !== SQL_STATE_SUCCESS) {
     throw new StatementError(
@@ -292,6 +338,11 @@ export interface History {
   statements: HistoryEntry[];
   /** How long the emulator keeps a statement, as a Go duration. */
   retainedFor: string;
+  /**
+   * Whether the history survives a restart. It does only when the emulator was
+   * given a database file rather than the default in-memory one.
+   */
+  persistent?: boolean;
 }
 
 export function listWarehouses(fetchFn: typeof fetch = fetch): Promise<Warehouse[]> {

@@ -67,18 +67,8 @@ func (h *RestAPIv2Handler) SubmitStatement(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Create statement record
 	stmt := h.stmtMgr.CreateStatement(req.Statement, req.Database, req.Schema, req.Warehouse)
-	h.stmtMgr.UpdateStatus(stmt.Handle, query.StatementStatusRunning)
 
-	// Execute the statement synchronously
-	ctx := r.Context()
-
-	// Classify the SQL statement to determine routing
-	classification := query.ClassifySQL(req.Statement)
-
-	// Convert bindings from types.BindingValue to query.QueryBindingValue
-	bindings := convertBindings(req.Bindings)
 	executionContext := query.ExecutionContext{
 		Database:  req.Database,
 		Schema:    req.Schema,
@@ -86,32 +76,114 @@ func (h *RestAPIv2Handler) SubmitStatement(w http.ResponseWriter, r *http.Reques
 		Role:      req.Role,
 		RowLimit:  req.RowLimit,
 	}
+	bindings := convertBindings(req.Bindings)
+
+	if req.Async || r.URL.Query().Get("async") == "true" {
+		h.submitAsync(w, stmt, req.Statement, executionContext, bindings)
+		return
+	}
+
+	// A synchronous statement is still cancellable: the cancel function is
+	// registered so POST .../cancel on another connection can interrupt it.
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+	h.stmtMgr.SetCancelFunc(stmt.Handle, cancel)
+	h.stmtMgr.UpdateStatus(stmt.Handle, query.StatementStatusRunning)
+
+	resp := h.runStatement(ctx, stmt, req.Statement, executionContext, bindings)
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// submitAsync accepts a statement and answers with its handle straight away,
+// leaving it to run in the background.
+//
+// The work deliberately does not use the request's context: that is canceled
+// the moment this response is written, which would kill every asynchronous
+// statement on submission. Cancellation comes from the handle instead.
+func (h *RestAPIv2Handler) submitAsync(
+	w http.ResponseWriter,
+	stmt *query.Statement,
+	statement string,
+	executionContext query.ExecutionContext,
+	bindings map[string]*query.BindingValue,
+) {
+	ctx, cancel := context.WithCancel(context.Background())
+	h.stmtMgr.SetCancelFunc(stmt.Handle, cancel)
+	h.stmtMgr.UpdateStatus(stmt.Handle, query.StatementStatusRunning)
+
+	go func() {
+		defer cancel()
+		h.runStatement(ctx, stmt, statement, executionContext, bindings)
+	}()
+
+	resp := types.StatementResponse{
+		StatementHandle:    stmt.Handle,
+		Code:               types.ResponseCodeStatementPending,
+		SQLState:           types.SQLState00000,
+		StatementStatusURL: "/api/v2/statements/" + stmt.Handle,
+		Message:            "Statement accepted; poll the status URL for the result.",
+		CreatedOn:          stmt.CreatedOn.UnixMilli(),
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	// 202 says the statement was taken but not finished. The synchronous path
+	// keeps answering 200, so an existing client sees no change.
+	w.WriteHeader(http.StatusAccepted)
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// runStatement executes one statement and records how it ended, returning the
+// response a synchronous caller would get. The asynchronous path discards that
+// response and lets the caller fetch it by handle.
+func (h *RestAPIv2Handler) runStatement(
+	ctx context.Context,
+	stmt *query.Statement,
+	statement string,
+	executionContext query.ExecutionContext,
+	bindings map[string]*query.BindingValue,
+) types.StatementResponse {
+	classification := query.ClassifySQL(statement)
 
 	var result *query.Result
 	var execResult *query.ExecResult
 	var err error
 
 	if classification.IsQuery {
-		// Handle SELECT, SHOW, DESCRIBE, EXPLAIN
+		// SELECT, SHOW, DESCRIBE, EXPLAIN
 		if len(bindings) > 0 {
-			result, err = h.executor.QueryWithBindingsAndContext(ctx, executionContext, req.Statement, bindings)
+			result, err = h.executor.QueryWithBindingsAndContext(ctx, executionContext, statement, bindings)
 		} else {
-			result, err = h.executor.QueryWithContext(ctx, executionContext, req.Statement)
+			result, err = h.executor.QueryWithContext(ctx, executionContext, statement)
 		}
 	} else {
-		// Handle DDL (CREATE, DROP, ALTER) and DML (INSERT, UPDATE, DELETE)
+		// DDL (CREATE, DROP, ALTER) and DML (INSERT, UPDATE, DELETE)
 		if len(bindings) > 0 {
-			execResult, err = h.executor.ExecuteWithBindingsAndContext(ctx, executionContext, req.Statement, bindings)
+			execResult, err = h.executor.ExecuteWithBindingsAndContext(ctx, executionContext, statement, bindings)
 		} else {
-			execResult, err = h.executor.ExecuteWithContext(ctx, executionContext, req.Statement)
+			execResult, err = h.executor.ExecuteWithContext(ctx, executionContext, statement)
 		}
 	}
 
 	if err != nil {
-		sfErr := apierror.NewSnowflakeError(apierror.CodeSQLExecutionError, err.Error())
-		h.stmtMgr.SetError(stmt.Handle, sfErr)
+		// A canceled statement is already marked canceled, and reporting the
+		// interruption as a SQL failure would overwrite that.
+		if current, ok := h.stmtMgr.GetStatement(stmt.Handle); ok &&
+			current.Status == query.StatementStatusCanceled {
+			return types.StatementResponse{
+				StatementHandle:    stmt.Handle,
+				Code:               types.ResponseCodeStatementCanceled,
+				SQLState:           types.SQLState00000,
+				StatementStatusURL: "/api/v2/statements/" + stmt.Handle,
+				Message:            "Statement canceled",
+				CreatedOn:          stmt.CreatedOn.UnixMilli(),
+			}
+		}
 
-		resp := types.StatementResponse{
+		h.stmtMgr.SetError(stmt.Handle, apierror.NewSnowflakeError(apierror.CodeSQLExecutionError, err.Error()))
+		return types.StatementResponse{
 			StatementHandle:    stmt.Handle,
 			Code:               apierror.CodeSQLExecutionError,
 			SQLState:           types.SQLState42000,
@@ -119,30 +191,19 @@ func (h *RestAPIv2Handler) SubmitStatement(w http.ResponseWriter, r *http.Reques
 			Message:            err.Error(),
 			CreatedOn:          stmt.CreatedOn.UnixMilli(),
 		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode(resp)
-		return
 	}
 
-	// Build response based on statement type
-	var resp types.StatementResponse
 	if classification.IsQuery {
-		// Store result for queries
 		h.stmtMgr.SetResult(stmt.Handle, result)
-		resp = h.buildStatementResponse(stmt, result)
-	} else {
-		// DDL and DML carry no result set, so there is nothing to store — but
-		// the statement still has to be marked finished. Without this it stays
-		// "running" for as long as it is retained, and every INSERT in the
-		// history reads as though it never completed.
-		h.stmtMgr.UpdateStatus(stmt.Handle, query.StatementStatusSuccess)
-		resp = h.buildExecResponse(stmt, execResult)
+		return h.buildStatementResponse(stmt, result)
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(resp)
+	// DDL and DML carry no result set, so there is nothing to store — but the
+	// statement still has to be marked finished. Without this it stays
+	// "running" for as long as it is retained, and every INSERT in the history
+	// reads as though it never completed.
+	h.stmtMgr.UpdateStatus(stmt.Handle, query.StatementStatusSuccess)
+	return h.buildExecResponse(stmt, execResult)
 }
 
 // GetStatement handles GET /api/v2/statements/{handle}.
@@ -167,6 +228,25 @@ func (h *RestAPIv2Handler) GetStatement(w http.ResponseWriter, r *http.Request) 
 			CreatedOn:          stmt.CreatedOn.UnixMilli(),
 		}
 	case query.StatementStatusSuccess:
+		// A DDL or DML statement succeeds without a result set. Polling one by
+		// handle is ordinary now that statements can run asynchronously, so
+		// this answers with the success rather than dereferencing a nil.
+		if stmt.Result == nil {
+			resp = types.StatementResponse{
+				StatementHandle:    stmt.Handle,
+				Code:               types.ResponseCodeSuccess,
+				SQLState:           types.SQLState00000,
+				StatementStatusURL: "/api/v2/statements/" + stmt.Handle,
+				CreatedOn:          stmt.CreatedOn.UnixMilli(),
+				ResultSetMetaData: &types.ResultSetMetaData{
+					NumRows: 0,
+					Format:  "jsonv2",
+					RowType: []types.RowTypeField{},
+				},
+				Data: [][]interface{}{},
+			}
+			break
+		}
 		resp = h.buildStatementResponse(stmt, stmt.Result)
 	case query.StatementStatusFailed:
 		resp = types.StatementResponse{
@@ -1158,10 +1238,10 @@ const defaultHistoryLimit = 200
 
 // ListStatements handles GET /api/v2/statements.
 //
-// Statements live in memory for the manager's TTL, so this is a recent history
-// rather than a complete one: anything older, and everything from before a
-// restart, is gone. The response says so rather than leaving a reader to guess
-// why a statement they remember is missing.
+// Statements are kept for a fixed period, so this is a recent history rather
+// than a complete one, and it survives a restart only when the emulator was
+// given a database file. The response reports both, rather than leaving a
+// reader to guess why a statement they remember is missing.
 func (h *RestAPIv2Handler) ListStatements(w http.ResponseWriter, r *http.Request) {
 	limit := defaultHistoryLimit
 	if raw := r.URL.Query().Get("limit"); raw != "" {
@@ -1173,7 +1253,7 @@ func (h *RestAPIv2Handler) ListStatements(w http.ResponseWriter, r *http.Request
 		limit = parsed
 	}
 
-	summaries := h.stmtMgr.ListStatements(limit)
+	summaries := h.stmtMgr.ListStatementsWithContext(r.Context(), limit)
 	entries := make([]types.StatementHistoryEntry, 0, len(summaries))
 
 	for i := range summaries {
@@ -1200,6 +1280,7 @@ func (h *RestAPIv2Handler) ListStatements(w http.ResponseWriter, r *http.Request
 	resp := types.ListStatementsResponse{
 		Statements:  entries,
 		RetainedFor: h.stmtMgr.RetentionPeriod().String(),
+		Persistent:  h.stmtMgr.HistoryIsPersistent(),
 	}
 
 	w.Header().Set("Content-Type", "application/json")
