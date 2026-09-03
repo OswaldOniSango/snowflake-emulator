@@ -65,6 +65,55 @@ func setupRestAPIv2Handler(t *testing.T) (*RestAPIv2Handler, *chi.Mux) {
 	return handler, r
 }
 
+func TestRestAPIv2Handler_WarehouseSizeRoundTrip(t *testing.T) {
+	handler, _ := setupRestAPIv2Handler(t)
+	router := chi.NewRouter()
+	router.Post("/api/v2/warehouses", handler.CreateWarehouse)
+	router.Get("/api/v2/warehouses/{warehouse}", handler.GetWarehouse)
+
+	tests := []struct {
+		name    string
+		payload string
+		want    string
+	}{
+		{name: "Snowflake request field", payload: `{"name":"SNOWFLAKE_WH","warehouse_size":"Small"}`, want: "SMALL"},
+		{name: "web response field", payload: `{"name":"WEB_WH","size":"Medium"}`, want: "MEDIUM"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, "/api/v2/warehouses", strings.NewReader(tt.payload))
+			request.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, request)
+			if response.Code != http.StatusCreated {
+				t.Fatalf("POST status = %d, body = %s", response.Code, response.Body.String())
+			}
+
+			var created types.WarehouseResponse
+			if err := json.Unmarshal(response.Body.Bytes(), &created); err != nil {
+				t.Fatalf("decode POST response: %v", err)
+			}
+			if created.Size != tt.want {
+				t.Fatalf("POST size = %q, want %q", created.Size, tt.want)
+			}
+
+			request = httptest.NewRequest(http.MethodGet, "/api/v2/warehouses/"+created.Name, nil)
+			response = httptest.NewRecorder()
+			router.ServeHTTP(response, request)
+			if response.Code != http.StatusOK {
+				t.Fatalf("GET status = %d, body = %s", response.Code, response.Body.String())
+			}
+			var fetched types.WarehouseResponse
+			if err := json.Unmarshal(response.Body.Bytes(), &fetched); err != nil {
+				t.Fatalf("decode GET response: %v", err)
+			}
+			if fetched.Size != tt.want {
+				t.Fatalf("GET size = %q, want %q", fetched.Size, tt.want)
+			}
+		})
+	}
+}
+
 func TestRestAPIv2Handler_SubmitStatement_Sync(t *testing.T) {
 	_, router := setupRestAPIv2Handler(t)
 
