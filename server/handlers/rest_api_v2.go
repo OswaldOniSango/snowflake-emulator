@@ -1023,7 +1023,7 @@ func (h *RestAPIv2Handler) TranslateStatement(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	preview, err := query.PreviewTranslation(req.Statement, query.ExecutionContext{
+	preview, err := h.executor.PreviewTranslationWithContext(r.Context(), req.Statement, query.ExecutionContext{
 		Database: req.Database,
 		Schema:   req.Schema,
 	})
