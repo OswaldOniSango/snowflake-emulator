@@ -137,7 +137,7 @@ assets and no separate process.
 
 | | |
 |---|---|
-| **Worksheets** | Tabbed SQL editor with syntax highlighting. `Cmd`/`Ctrl` + `Enter` runs the statement under the cursor, or the selection. Multiple statements in one buffer are split correctly — including procedure bodies between `$$`, which are full of semicolons. Worksheets, their names and their execution context are kept in the browser. |
+| **Worksheets** | Tabbed SQL editor with syntax highlighting. `Cmd`/`Ctrl` + `Enter` runs the statement under the cursor, or the selection. Multiple statements in one buffer are split correctly — including procedure bodies between `$$`, which are full of semicolons. Worksheets, their names and their execution context are kept in the browser, and tabs can be dragged into any order. A running statement can be canceled, and results exported as CSV or JSON. |
 | **Translated SQL** | Shows the DuckDB SQL a statement becomes, beside what you wrote, without running it. Statements handled by a processor (COPY, MERGE, procedures) say so rather than showing a partial translation as though it were the whole story. |
 | **Object explorer** | Databases, schemas, tables, streams, procedures, tasks and stages. Clicking an object writes its name into the editor. |
 | **Warehouses** | Create, resume, suspend and drop. Compute is emulated: a suspended warehouse changes what the API reports, not where statements run. |
@@ -419,7 +419,7 @@ go run ./example/gosnowflake
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/v2/statements` | POST | Submit SQL statement (`rowLimit` caps returned rows; `resultSetMetaData.numRows` always reports the true total) |
+| `/api/v2/statements` | POST | Submit SQL statement (`rowLimit` caps returned rows; `resultSetMetaData.numRows` always reports the true total). Add `"async": true`, or `?async=true`, to get a handle back at once and poll the status URL — a statement submitted that way can be canceled while it runs |
 | `/api/v2/statements` | GET | Recent statement history (`?limit=N`) |
 | `/api/v2/statements/{handle}` | GET | Get statement status/result |
 | `/api/v2/statements/{handle}/cancel` | POST | Cancel statement |

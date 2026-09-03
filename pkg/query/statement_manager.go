@@ -168,6 +168,12 @@ func (sm *StatementManager) UpdateStatus(handle string, status StatementStatus) 
 	if !ok {
 		return false
 	}
+	if stmt.Status == StatementStatusCanceled {
+		// Cancellation is final. A statement whose work finished anyway, or
+		// which was canceled between starting and being marked running, must
+		// not be reported as though it had never been stopped.
+		return false
+	}
 
 	stmt.Status = status
 	if status == StatementStatusSuccess || status == StatementStatusFailed || status == StatementStatusCanceled {
@@ -186,7 +192,7 @@ func (sm *StatementManager) UpdateStatus(handle string, status StatementStatus) 
 func (sm *StatementManager) SetResult(handle string, result *Result) bool {
 	sm.mu.Lock()
 	stmt, ok := sm.statements[handle]
-	if !ok {
+	if !ok || stmt.Status == StatementStatusCanceled {
 		sm.mu.Unlock()
 		return false
 	}
@@ -206,7 +212,7 @@ func (sm *StatementManager) SetResult(handle string, result *Result) bool {
 func (sm *StatementManager) SetError(handle string, err *apierror.SnowflakeError) bool {
 	sm.mu.Lock()
 	stmt, ok := sm.statements[handle]
-	if !ok {
+	if !ok || stmt.Status == StatementStatusCanceled {
 		sm.mu.Unlock()
 		return false
 	}

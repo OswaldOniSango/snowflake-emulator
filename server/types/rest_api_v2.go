@@ -21,6 +21,12 @@ type SubmitStatementRequest struct {
 	// which exists so that a query over a large table cannot build a response
 	// no client can render.
 	RowLimit int `json:"rowLimit,omitempty"`
+
+	// Async returns a handle as soon as the statement is accepted, rather than
+	// holding the response open until it finishes. The caller then polls
+	// GET /api/v2/statements/{handle}, and can cancel it in the meantime.
+	// It can also be asked for with ?async=true, as Snowflake's API does.
+	Async bool `json:"async,omitempty"`
 }
 
 // BindingValue represents a parameter binding value.

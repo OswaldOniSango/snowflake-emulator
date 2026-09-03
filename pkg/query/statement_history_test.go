@@ -284,3 +284,45 @@ func TestAnInMemoryHistoryIsNotPersistent(t *testing.T) {
 		t.Errorf("retention should still be the store's, got %v", manager.RetentionPeriod())
 	}
 }
+
+// Cancellation has to be the last word: the work may finish anyway, and a
+// statement the reader stopped must not come back as though it had succeeded.
+func TestCancellationIsFinal(t *testing.T) {
+	manager := NewStatementManager(time.Hour)
+	stmt := manager.CreateStatement("SELECT 1", "TEST_DB", "PUBLIC", "")
+	manager.UpdateStatus(stmt.Handle, StatementStatusRunning)
+	if err := manager.CancelStatement(stmt.Handle); err != nil {
+		t.Fatalf("CancelStatement failed: %v", err)
+	}
+
+	if manager.SetResult(stmt.Handle, &Result{Rows: [][]interface{}{{1}}}) {
+		t.Error("a result arriving after cancellation should be refused")
+	}
+	if manager.UpdateStatus(stmt.Handle, StatementStatusSuccess) {
+		t.Error("a canceled statement should not be moved to success")
+	}
+	if manager.SetError(stmt.Handle, &apierror.SnowflakeError{Code: "x", Message: "y"}) {
+		t.Error("the interruption should not be recorded over the cancellation")
+	}
+
+	got, _ := manager.GetStatement(stmt.Handle)
+	if got.Status != StatementStatusCanceled {
+		t.Errorf("status = %q, want canceled", got.Status)
+	}
+	if got.Result != nil {
+		t.Error("a canceled statement should carry no result")
+	}
+}
+
+func TestACanceledStatementStaysCanceledInTheHistory(t *testing.T) {
+	manager, store := managerWithHistory(t)
+	stmt := manager.CreateStatement("SELECT 1", "TEST_DB", "PUBLIC", "")
+	manager.UpdateStatus(stmt.Handle, StatementStatusRunning)
+	_ = manager.CancelStatement(stmt.Handle)
+
+	manager.SetResult(stmt.Handle, &Result{})
+
+	if got := store.statusOf(stmt.Handle); got != string(StatementStatusCanceled) {
+		t.Errorf("recorded status = %q, want canceled", got)
+	}
+}
