@@ -8,25 +8,49 @@ import (
 )
 
 var contextualTablePatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)\b(CREATE\s+(?:OR\s+REPLACE\s+)?(?:(?:TEMP|TEMPORARY|TRANSIENT)\s+)?TABLE(?:\s+IF\s+NOT\s+EXISTS)?\s+)([^\s(;]+)`),
-	regexp.MustCompile(`(?i)\b(INSERT\s+INTO\s+)([^\s(;]+)`),
-	regexp.MustCompile(`(?i)\b(UPDATE\s+)([^\s(;]+)`),
-	regexp.MustCompile(`(?i)\b(DELETE\s+FROM\s+)([^\s(;]+)`),
-	regexp.MustCompile(`(?i)\b(FROM\s+)([^\s(;]+)`),
-	regexp.MustCompile(`(?i)\b(JOIN\s+)([^\s(;]+)`),
-	regexp.MustCompile(`(?i)\b(ALTER\s+TABLE\s+)([^\s(;]+)`),
-	regexp.MustCompile(`(?i)\b(DROP\s+TABLE(?:\s+IF\s+EXISTS)?\s+)([^\s(;]+)`),
+	regexp.MustCompile(`(?i)\b(CREATE\s+(?:OR\s+REPLACE\s+)?(?:(?:TEMP|TEMPORARY|TRANSIENT)\s+)?TABLE(?:\s+IF\s+NOT\s+EXISTS)?\s+)([^\s(;]+)(\s*\()?`),
+	regexp.MustCompile(`(?i)\b(INSERT\s+INTO\s+)([^\s(;]+)(\s*\()?`),
+	regexp.MustCompile(`(?i)\b(UPDATE\s+)([^\s(;]+)(\s*\()?`),
+	regexp.MustCompile(`(?i)\b(DELETE\s+FROM\s+)([^\s(;]+)(\s*\()?`),
+	regexp.MustCompile(`(?i)\b(FROM\s+)([^\s(;]+)(\s*\()?`),
+	regexp.MustCompile(`(?i)\b(JOIN\s+)([^\s(;]+)(\s*\()?`),
+	regexp.MustCompile(`(?i)\b(ALTER\s+TABLE\s+)([^\s(;]+)(\s*\()?`),
+	regexp.MustCompile(`(?i)\b(DROP\s+TABLE(?:\s+IF\s+EXISTS)?\s+)([^\s(;]+)(\s*\()?`),
 	// MERGE resolves two tables. The USING pattern cannot match a JOIN's
 	// USING (col) list, because the capture group rejects a leading "(".
-	regexp.MustCompile(`(?i)\b(DESC(?:RIBE)?\s+TABLE\s+)([^\s(;]+)`),
-	regexp.MustCompile(`(?i)\b(TRUNCATE\s+TABLE\s+)([^\s(;]+)`),
-	regexp.MustCompile(`(?i)\b(MERGE\s+INTO\s+)([^\s(;]+)`),
-	regexp.MustCompile(`(?i)\b(USING\s+)([^\s(;]+)`),
+	regexp.MustCompile(`(?i)\b(DESC(?:RIBE)?\s+TABLE\s+)([^\s(;]+)(\s*\()?`),
+	regexp.MustCompile(`(?i)\b(TRUNCATE\s+TABLE\s+)([^\s(;]+)(\s*\()?`),
+	regexp.MustCompile(`(?i)\b(MERGE\s+INTO\s+)([^\s(;]+)(\s*\()?`),
+	regexp.MustCompile(`(?i)\b(USING\s+)([^\s(;]+)(\s*\()?`),
 }
 
 // sqlKeywords are words a table-reference pattern can capture by accident. The
 // clearest case is a MERGE's "WHEN MATCHED THEN UPDATE SET", where the UPDATE
 // pattern would otherwise rewrite SET as though it named a table.
+// tableFunctionPrefixes are the keywords after which an identifier followed by
+// "(" is a table function rather than a table: FROM range(5), JOIN read_csv(…).
+//
+// INSERT INTO and CREATE TABLE are deliberately absent. A parenthesis there
+// introduces a column list, and the name before it is a real table that still
+// has to be resolved: INSERT INTO users (id, email) must keep working.
+var tableFunctionPrefixes = []string{"FROM", "JOIN", "USING"}
+
+// isTableFunctionCall reports whether a match names a function being called
+// rather than a table. prefix is the keyword the pattern matched; call is the
+// parenthesis that followed the name, empty when none did.
+func isTableFunctionCall(prefix, call string) bool {
+	if call == "" {
+		return false
+	}
+	upper := strings.ToUpper(strings.TrimSpace(prefix))
+	for _, keyword := range tableFunctionPrefixes {
+		if upper == keyword {
+			return true
+		}
+	}
+	return false
+}
+
 var sqlKeywords = map[string]bool{
 	"SET":    true,
 	"VALUES": true,
@@ -49,17 +73,20 @@ func rewriteContextualTableReferences(sql string, executionContext ExecutionCont
 	for _, pattern := range contextualTablePatterns {
 		result = pattern.ReplaceAllStringFunc(result, func(match string) string {
 			parts := pattern.FindStringSubmatch(match)
-			if len(parts) != 3 {
+			if len(parts) != 4 {
 				return match
 			}
-			name := strings.TrimSpace(parts[2])
+			name, call := strings.TrimSpace(parts[2]), parts[3]
+			if isTableFunctionCall(parts[1], call) {
+				return match
+			}
 			if strings.Contains(name, ".") || strings.HasPrefix(name, "_") || !identifierPattern.MatchString(name) {
 				return match
 			}
 			if sqlKeywords[strings.ToUpper(name)] {
 				return match
 			}
-			return parts[1] + BuildTableName(executionContext.Database, executionContext.Schema, name)
+			return parts[1] + BuildTableName(executionContext.Database, executionContext.Schema, name) + call
 		})
 	}
 	return result
@@ -76,10 +103,13 @@ func (e *Executor) rewriteTablesWithContext(ctx context.Context, executionContex
 				return match
 			}
 			parts := pattern.FindStringSubmatch(match)
-			if len(parts) != 3 {
+			if len(parts) != 4 {
 				return match
 			}
-			name := strings.TrimSpace(parts[2])
+			name, call := strings.TrimSpace(parts[2]), parts[3]
+			if isTableFunctionCall(parts[1], call) {
+				return match
+			}
 			if strings.HasPrefix(name, "_") || sqlKeywords[strings.ToUpper(name)] {
 				return match
 			}
@@ -91,7 +121,7 @@ func (e *Executor) rewriteTablesWithContext(ctx context.Context, executionContex
 			if !changed {
 				return match
 			}
-			return parts[1] + physicalName
+			return parts[1] + physicalName + call
 		})
 	}
 	if rewriteErr != nil {
