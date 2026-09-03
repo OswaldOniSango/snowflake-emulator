@@ -28,12 +28,15 @@ func NewTranslator() *Translator {
 	return t
 }
 
+// duckDBCoalesce is the DuckDB function both NVL and IFNULL become.
+const duckDBCoalesce = "COALESCE"
+
 // registerFunctions registers all Snowflake to DuckDB function translations.
 func (t *Translator) registerFunctions() {
 	// Simple function renames
 	t.functionMap["IFF"] = FunctionTranslator{Name: "IF"}
-	t.functionMap["NVL"] = FunctionTranslator{Name: "COALESCE"}
-	t.functionMap["IFNULL"] = FunctionTranslator{Name: "COALESCE"}
+	t.functionMap["NVL"] = FunctionTranslator{Name: duckDBCoalesce}
+	t.functionMap["IFNULL"] = FunctionTranslator{Name: duckDBCoalesce}
 	t.functionMap["LISTAGG"] = FunctionTranslator{Name: "STRING_AGG"}
 	t.functionMap["OBJECT_CONSTRUCT"] = FunctionTranslator{Name: "json_object"}
 	t.functionMap["FLATTEN"] = FunctionTranslator{Name: "UNNEST"}
@@ -511,4 +514,69 @@ func isIdentifierStart(c byte) bool {
 
 func isIdentifierPart(c byte) bool {
 	return isIdentifierStart(c) || (c >= '0' && c <= '9') || c == '$'
+}
+
+// Rewrite records one substitution the translator will make.
+type Rewrite struct {
+	From string
+	To   string
+}
+
+// FunctionRewrites reports the function substitutions a statement will undergo.
+//
+// It walks the statement with the same rules the lexical translation uses —
+// skipping literals, comments and dollar-quoted bodies, requiring a call, and
+// ignoring qualified names — rather than instrumenting the translation itself.
+// Threading state through two translation paths to collect the same facts a
+// second scan can derive would couple them for no gain.
+func (t *Translator) FunctionRewrites(sql string) []Rewrite {
+	seen := map[string]bool{}
+	rewrites := make([]Rewrite, 0)
+
+	for i := 0; i < len(sql); {
+		if end, skipped := skipNonCode(sql, i); skipped {
+			i = end
+			continue
+		}
+
+		if !isIdentifierStart(sql[i]) {
+			i++
+			continue
+		}
+
+		end := i + 1
+		for end < len(sql) && isIdentifierPart(sql[end]) {
+			end++
+		}
+		name := sql[i:end]
+
+		if replacement, ok := t.lexicalReplacement(name); ok && callFollows(sql, end) && !isQualified(sql, i) {
+			upper := strings.ToUpper(name)
+			if !seen[upper] {
+				seen[upper] = true
+				rewrites = append(rewrites, Rewrite{From: upper, To: describeReplacement(replacement)})
+			}
+		}
+		i = end
+	}
+
+	return rewrites
+}
+
+// describeReplacement turns the marker the lexical path emits into the DuckDB
+// form a reader recognizes. A marker is an internal placeholder that
+// handleComplexTransformations later expands; showing it would be noise.
+func describeReplacement(replacement string) string {
+	switch replacement {
+	case "__NVL2__":
+		return "IF(a IS NOT NULL, b, c)"
+	case "__TO_VARIANT__", "__PARSE_JSON__":
+		return "CAST(… AS JSON)"
+	case "__DATEADD__":
+		return "date + INTERVAL n part"
+	case "__DATEDIFF__":
+		return "DATE_DIFF('part', …)"
+	default:
+		return replacement
+	}
 }

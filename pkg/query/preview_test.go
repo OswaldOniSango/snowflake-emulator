@@ -1,6 +1,10 @@
 package query
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/google/go-cmp/cmp"
+)
 
 // TestResolveHandler pins the routing the preview reports. It has to mirror the
 // executor's dispatch, or the console would attribute a statement to the wrong
@@ -135,7 +139,125 @@ func TestPreviewTranslationIsPure(t *testing.T) {
 		t.Fatalf("PreviewTranslation() error = %v", err)
 	}
 
-	if first != second {
-		t.Errorf("preview is not repeatable:\nfirst  %+v\nsecond %+v", first, second)
+	if diff := cmp.Diff(first, second); diff != "" {
+		t.Errorf("preview is not repeatable (-first +second):\n%s", diff)
+	}
+}
+
+// TestFunctionRewrites pins what the console lists as substitutions. It scans
+// with the same rules the lexical translation uses, so a name that is not a
+// call — inside a literal, a comment, or qualified by a schema — is not a
+// rewrite and must not be reported as one.
+func TestFunctionRewrites(t *testing.T) {
+	translator := NewTranslator()
+
+	tests := []struct {
+		name string
+		sql  string
+		want []Rewrite
+	}{
+		{
+			name: "simple renames",
+			sql:  "SELECT IFF(a, 'y', 'n'), NVL(b, 'x') FROM t",
+			want: []Rewrite{{From: "IFF", To: "IF"}, {From: "NVL", To: "COALESCE"}},
+		},
+		{
+			// A marker is an internal placeholder; a reader needs the shape it
+			// becomes, not the placeholder.
+			name: "a marked function reports its DuckDB form",
+			sql:  "SELECT DATEADD(day, 1, d)",
+			want: []Rewrite{{From: "DATEADD", To: "date + INTERVAL n part"}},
+		},
+		{
+			name: "each function is reported once",
+			sql:  "SELECT IFF(a, 1, 0), IFF(b, 1, 0)",
+			want: []Rewrite{{From: "IFF", To: "IF"}},
+		},
+		{
+			name: "reported in upper case regardless of how it was written",
+			sql:  "SELECT iff(a, 1, 0)",
+			want: []Rewrite{{From: "IFF", To: "IF"}},
+		},
+		{
+			name: "a name inside a literal is not a rewrite",
+			sql:  "SELECT 'IFF(a, 1, 0)' FROM t",
+			want: []Rewrite{},
+		},
+		{
+			name: "a name inside a comment is not a rewrite",
+			sql:  "SELECT 1 -- IFF(a, 1, 0)\n",
+			want: []Rewrite{},
+		},
+		{
+			name: "a qualified call is somebody else's function",
+			sql:  "SELECT my_schema.iff(a)",
+			want: []Rewrite{},
+		},
+		{
+			name: "a column that shares the name is not a call",
+			sql:  "SELECT iff FROM t",
+			want: []Rewrite{},
+		},
+		{
+			name: "a statement with nothing to translate",
+			sql:  "SELECT 1",
+			want: []Rewrite{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if diff := cmp.Diff(tt.want, translator.FunctionRewrites(tt.sql)); diff != "" {
+				t.Errorf("rewrites mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestObjectRewrites(t *testing.T) {
+	executionContext := ExecutionContext{Database: "TEST_DB", Schema: "PUBLIC"}
+
+	tests := []struct {
+		name      string
+		original  string
+		rewritten string
+		want      []Rewrite
+	}{
+		{
+			name:      "one table",
+			original:  "SELECT * FROM users",
+			rewritten: "SELECT * FROM TEST_DB.PUBLIC_USERS",
+			want:      []Rewrite{{From: "USERS", To: "TEST_DB.PUBLIC_USERS"}},
+		},
+		{
+			name:      "two tables",
+			original:  "SELECT * FROM users JOIN orders ON true",
+			rewritten: "SELECT * FROM TEST_DB.PUBLIC_USERS JOIN TEST_DB.PUBLIC_ORDERS ON true",
+			want: []Rewrite{
+				{From: "USERS", To: "TEST_DB.PUBLIC_USERS"},
+				{From: "ORDERS", To: "TEST_DB.PUBLIC_ORDERS"},
+			},
+		},
+		{
+			name:      "the same table twice is reported once",
+			original:  "SELECT * FROM users u JOIN users v ON true",
+			rewritten: "SELECT * FROM TEST_DB.PUBLIC_USERS u JOIN TEST_DB.PUBLIC_USERS v ON true",
+			want:      []Rewrite{{From: "USERS", To: "TEST_DB.PUBLIC_USERS"}},
+		},
+		{
+			name:      "nothing was rewritten",
+			original:  "SELECT 1",
+			rewritten: "SELECT 1",
+			want:      []Rewrite{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := objectRewrites(tt.original, tt.rewritten, executionContext)
+			if diff := cmp.Diff(tt.want, got); diff != "" {
+				t.Errorf("rewrites mismatch (-want +got):\n%s", diff)
+			}
+		})
 	}
 }

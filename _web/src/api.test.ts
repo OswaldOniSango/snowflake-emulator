@@ -141,6 +141,27 @@ describe("translateStatement", () => {
     expect(result.handledBy).toBe("translator");
     expect(result.complete).toBe(true);
     expect(result.note).toBeUndefined();
+    expect(result.rewrites).toEqual([]);
+  });
+
+  it("carries the substitutions the translation makes", async () => {
+    const result = await translateStatement(
+      "SELECT IFF(a,'y','n') FROM users",
+      CONTEXT,
+      respondWith({
+        translated: "select IF(a, 'y', 'n') from TEST_DB.PUBLIC_USERS",
+        handledBy: "translator",
+        complete: true,
+        rewrites: [
+          { from: "IFF", to: "IF", kind: "function" },
+          { from: "USERS", to: "TEST_DB.PUBLIC_USERS", kind: "object" },
+        ],
+      }),
+    );
+
+    expect(result.rewrites).toHaveLength(2);
+    expect(result.rewrites[0]).toEqual({ from: "IFF", to: "IF", kind: "function" });
+    expect(result.rewrites[1]?.kind).toBe("object");
   });
 
   it("keeps the note explaining a partial preview", async () => {
@@ -178,5 +199,8 @@ describe("translateStatement", () => {
 
     expect(result.complete).toBe(true);
     expect(result.handledBy).toBe("translator");
+    // An older emulator answers without the field; an absent list is not an
+    // empty translation, it is no information, and must not crash the panel.
+    expect(result.rewrites).toEqual([]);
   });
 });

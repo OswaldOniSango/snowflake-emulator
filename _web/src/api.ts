@@ -158,6 +158,16 @@ export interface Translation {
   /** False when a processor builds the final SQL elsewhere. */
   complete: boolean;
   note?: string;
+  /** What each part of the statement becomes. */
+  rewrites: Rewrite[];
+}
+
+/** One substitution the translation makes. */
+export interface Rewrite {
+  from: string;
+  to: string;
+  /** "function" or "object". */
+  kind: string;
 }
 
 /**
@@ -191,6 +201,7 @@ export async function translateStatement(
     translated: body.translated ?? "",
     handledBy: body.handledBy ?? "translator",
     complete: body.complete ?? true,
+    rewrites: body.rewrites ?? [],
     ...(body.note ? { note: body.note } : {}),
   };
 }

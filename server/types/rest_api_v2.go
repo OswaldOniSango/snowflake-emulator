@@ -262,6 +262,19 @@ type TranslateResponse struct {
 
 	// Note explains why an incomplete preview is incomplete.
 	Note string `json:"note,omitempty"`
+
+	// Rewrites lists what the statement's parts become, so a reader does not
+	// have to diff two blocks of SQL by eye to find the differences.
+	Rewrites []TranslationRewrite `json:"rewrites"`
+}
+
+// TranslationRewrite is one substitution, from what was written to what runs.
+type TranslationRewrite struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+
+	// Kind is "function" or "object".
+	Kind string `json:"kind"`
 }
 
 // SchemaObject is one entry in a schema's contents.

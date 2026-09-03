@@ -3,6 +3,7 @@ package query
 import (
 	"context"
 	"fmt"
+	"strings"
 )
 
 // Handler names the component that executes a statement. The emulator routes
@@ -34,6 +35,44 @@ type TranslationPreview struct {
 
 	// Note explains, for a reader, why a preview is incomplete.
 	Note string
+
+	// FunctionRewrites and ObjectRewrites list what changed and into what, so
+	// the console can show the substitutions rather than leaving a reader to
+	// diff two blocks of SQL by eye.
+	FunctionRewrites []Rewrite
+	ObjectRewrites   []Rewrite
+}
+
+// objectRewrites reports the table names the execution context resolves, by
+// comparing the statement before and after the contextual rewrite. The rewriter
+// works on whole statements rather than reporting per name, and re-implementing
+// its rules here to collect them would be a second source of truth.
+func objectRewrites(original, rewritten string, executionContext ExecutionContext) []Rewrite {
+	if original == rewritten {
+		return []Rewrite{}
+	}
+
+	prefix := BuildTableName(executionContext.Database, executionContext.Schema, "")
+	seen := map[string]bool{}
+	rewrites := make([]Rewrite, 0)
+
+	// Every physical name in the rewritten statement was introduced here, so
+	// the logical name is what remains once the prefix comes off.
+	for _, field := range strings.FieldsFunc(rewritten, func(r rune) bool {
+		return r == ' ' || r == '\t' || r == '\n' || r == '\r' || r == ',' || r == '(' || r == ')' || r == ';'
+	}) {
+		if !strings.HasPrefix(strings.ToUpper(field), strings.ToUpper(prefix)) {
+			continue
+		}
+		logical := field[len(prefix):]
+		if logical == "" || seen[logical] {
+			continue
+		}
+		seen[logical] = true
+		rewrites = append(rewrites, Rewrite{From: logical, To: field})
+	}
+
+	return rewrites
 }
 
 // ResolveHandler reports which component executes sql. It mirrors the order in
@@ -99,7 +138,13 @@ func PreviewTranslation(sql string, executionContext ExecutionContext) (Translat
 
 	rewritten := rewriteContextualTableReferences(sql, executionContext)
 
-	return buildTranslationPreview(sql, rewritten)
+	preview, err := buildTranslationPreview(sql, rewritten)
+	if err != nil {
+		return TranslationPreview{}, err
+	}
+
+	preview.ObjectRewrites = objectRewrites(sql, rewritten, executionContext)
+	return preview, nil
 }
 
 // PreviewTranslationWithContext uses the catalog-aware resolver so qualified
@@ -112,11 +157,20 @@ func (e *Executor) PreviewTranslationWithContext(ctx context.Context, sql string
 	if err != nil {
 		return TranslationPreview{}, err
 	}
-	return buildTranslationPreview(sql, rewritten)
+
+	preview, err := buildTranslationPreview(sql, rewritten)
+	if err != nil {
+		return TranslationPreview{}, err
+	}
+
+	preview.ObjectRewrites = objectRewrites(sql, rewritten, executionContext)
+	return preview, nil
 }
 
 func buildTranslationPreview(statement, rewritten string) (TranslationPreview, error) {
-	translated, err := NewTranslator().Translate(rewritten)
+	translator := NewTranslator()
+
+	translated, err := translator.Translate(rewritten)
 	if err != nil {
 		return TranslationPreview{}, fmt.Errorf("translation error: %w", err)
 	}
@@ -125,10 +179,12 @@ func buildTranslationPreview(statement, rewritten string) (TranslationPreview, e
 	note, incomplete := handlerNotes[handler]
 
 	return TranslationPreview{
-		Statement:  statement,
-		Translated: translated,
-		HandledBy:  handler,
-		Complete:   !incomplete,
-		Note:       note,
+		Statement:        statement,
+		Translated:       translated,
+		HandledBy:        handler,
+		Complete:         !incomplete,
+		Note:             note,
+		FunctionRewrites: translator.FunctionRewrites(statement),
+		ObjectRewrites:   []Rewrite{},
 	}, nil
 }
