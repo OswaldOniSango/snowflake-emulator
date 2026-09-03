@@ -786,6 +786,45 @@ func (r *Repository) CreateTable(ctx context.Context, schemaID, name string, col
 	return r.GetTable(ctx, id)
 }
 
+// RegisterTable records a table that was created directly through SQL. The
+// physical DuckDB table must already exist; this method only synchronizes the
+// emulator catalog used by SHOW commands and the REST object explorer.
+func (r *Repository) RegisterTable(ctx context.Context, schemaID, name, tableType string, columns []ColumnDef) (*Table, error) {
+	if name == "" {
+		return nil, fmt.Errorf("table name cannot be empty")
+	}
+
+	id := uuid.New().String()
+	normalizedName := strings.ToUpper(name)
+	normalizedType := strings.ToUpper(tableType)
+	columnDefinitions := serializeColumnDefs(columns)
+	query := `INSERT INTO _metadata_tables
+		(id, schema_id, name, table_type, comment, created_at, owner, clustering_key, column_definitions)
+		VALUES (?, ?, ?, ?, '', CURRENT_TIMESTAMP, '', '', ?)
+		ON CONFLICT (schema_id, name) DO UPDATE SET
+			table_type = EXCLUDED.table_type,
+			column_definitions = EXCLUDED.column_definitions,
+			created_at = EXCLUDED.created_at`
+	if _, err := r.mgr.Exec(ctx, query, id, schemaID, normalizedName, normalizedType, columnDefinitions); err != nil {
+		return nil, fmt.Errorf("failed to register table metadata: %w", err)
+	}
+	return r.GetTableByName(ctx, schemaID, normalizedName)
+}
+
+// DeleteTableMetadata removes only the catalog entry for a table. It is used
+// after SQL execution has already removed the physical DuckDB table.
+func (r *Repository) DeleteTableMetadata(ctx context.Context, schemaID, name string) error {
+	_, err := r.mgr.Exec(ctx,
+		`DELETE FROM _metadata_tables WHERE schema_id = ? AND name = ?`,
+		schemaID,
+		strings.ToUpper(name),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to delete table metadata: %w", err)
+	}
+	return nil
+}
+
 // GetTable retrieves a table by ID.
 func (r *Repository) GetTable(ctx context.Context, id string) (*Table, error) {
 	query := `SELECT id, schema_id, name, table_type, comment, created_at, owner, clustering_key, column_definitions
@@ -1506,12 +1545,11 @@ func (r *Repository) ClearQueryHistory(ctx context.Context, olderThan time.Time)
 // ListPhysicalTables returns the tables a schema actually contains, named the
 // way the user wrote them.
 //
-// _metadata_tables only records tables created through the REST API: a table
-// created with SQL exists in DuckDB and nowhere in the catalog, so ListTables
-// cannot see it. DuckDB is therefore the authority here. Its own naming is the
-// emulator's physical convention — the Snowflake database is a DuckDB schema,
-// and the table is prefixed with its Snowflake schema — so the prefix is
-// stripped before the names are handed back.
+// DuckDB is the authority for physical discovery, including databases written
+// by older emulator versions before SQL DDL synchronized _metadata_tables. Its
+// naming is the emulator's physical convention — the Snowflake database is a
+// DuckDB schema, and the table is prefixed with its Snowflake schema — so the
+// prefix is stripped before the names are handed back.
 func (r *Repository) ListPhysicalTables(ctx context.Context, database, schema string) ([]string, error) {
 	if database == "" || schema == "" {
 		return nil, fmt.Errorf("database and schema are required")

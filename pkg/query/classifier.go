@@ -286,6 +286,18 @@ func (c *Classifier) IsCreateTable(sql string) bool {
 	return false
 }
 
+// IsCreateSchema checks if the SQL creates a logical Snowflake schema.
+func (c *Classifier) IsCreateSchema(sql string) bool {
+	upperSQL := leadingSQL(sql)
+	return strings.HasPrefix(upperSQL, "CREATE SCHEMA") ||
+		strings.HasPrefix(upperSQL, "CREATE OR REPLACE SCHEMA")
+}
+
+// IsDropSchema checks if the SQL drops a logical Snowflake schema.
+func (c *Classifier) IsDropSchema(sql string) bool {
+	return strings.HasPrefix(leadingSQL(sql), "DROP SCHEMA")
+}
+
 // IsDropTable checks if the SQL is a DROP TABLE statement.
 func (c *Classifier) IsDropTable(sql string) bool {
 	upperSQL := leadingSQL(sql)
