@@ -114,7 +114,7 @@ func TestCreateAndDropTableSQLSynchronizesCatalog(t *testing.T) {
 			name:      "transient table as select",
 			statement: "CREATE OR REPLACE TRANSIENT TABLE staged_users AS SELECT 1 AS id",
 			tableName: "STAGED_USERS",
-			tableType: "TRANSIENT",
+			tableType: transientTableType,
 		},
 	}
 	for _, tt := range tests {

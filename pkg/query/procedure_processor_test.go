@@ -247,7 +247,7 @@ func TestProcedureSupportsDynamicTemporaryAndTransientTables(t *testing.T) {
 		tablePrefix   string
 	}{
 		{name: "temporary", tableKind: "TEMPORARY", procedureName: "build_temporary_batch", tablePrefix: "temporary_batch_"},
-		{name: "transient", tableKind: "TRANSIENT", procedureName: "build_transient_batch", tablePrefix: "transient_batch_"},
+		{name: "transient", tableKind: transientTableType, procedureName: "build_transient_batch", tablePrefix: "transient_batch_"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
