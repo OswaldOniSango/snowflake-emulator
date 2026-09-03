@@ -16,6 +16,11 @@ type SubmitStatementRequest struct {
 	Role       string                   `json:"role,omitempty"`       // Role context
 	Bindings   map[string]*BindingValue `json:"bindings,omitempty"`   // Parameter bindings
 	Parameters map[string]string        `json:"parameters,omitempty"` // Session parameters
+
+	// RowLimit caps how many rows come back. Zero uses the server's default,
+	// which exists so that a query over a large table cannot build a response
+	// no client can render.
+	RowLimit int `json:"rowLimit,omitempty"`
 }
 
 // BindingValue represents a parameter binding value.

@@ -42,6 +42,13 @@ export function isDecimalValue(value: unknown): value is DecimalValue {
 export interface Statement {
   columns: Column[];
   rows: Cell[][];
+
+  /**
+   * How many rows the statement produced, which exceeds rows.length when the
+   * server's row limit stopped short. Reporting rows.length as the count would
+   * quietly turn a slice into the whole answer.
+   */
+  totalRows: number;
   handle: string;
   /** Milliseconds measured client-side; the API reports no duration. */
   elapsedMs: number;
@@ -118,10 +125,12 @@ export async function runStatement(
 
   const columns = body.resultSetMetaData?.rowType ?? [];
   const rows = body.data ?? [];
+  const reported = body.resultSetMetaData?.numRows;
 
   return {
     columns,
     rows,
+    totalRows: typeof reported === "number" ? reported : rows.length,
     handle,
     elapsedMs,
     rowsAffected: readRowsAffected(columns, rows),

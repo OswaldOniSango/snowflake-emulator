@@ -24,6 +24,16 @@ type Result struct {
 	Columns     []string
 	ColumnTypes []types.ColumnMetadata
 	Rows        [][]interface{}
+
+	// TotalRows is how many rows the statement produced. It exceeds len(Rows)
+	// when a row limit stopped the result being materialized in full, so a
+	// caller can say "1,000 of 200,000" rather than implying there were 1,000.
+	TotalRows int
+}
+
+// Truncated reports whether rows were left behind by a row limit.
+func (r *Result) Truncated() bool {
+	return r.TotalRows > len(r.Rows)
 }
 
 // ExecResult represents the result of a non-query execution (INSERT, UPDATE, DELETE, etc.).
@@ -61,4 +71,9 @@ type ExecutionContext struct {
 	Warehouse string
 	Role      string
 	SessionID string
+
+	// RowLimit caps how many rows a query materializes. Zero uses the
+	// executor's default. It lives here because it is a property of one
+	// statement's execution, the same as the namespace it resolves against.
+	RowLimit int
 }

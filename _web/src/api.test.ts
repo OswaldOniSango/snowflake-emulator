@@ -29,6 +29,38 @@ describe("runStatement", () => {
     expect(result.rows).toEqual([[1]]);
     expect(result.handle).toBe("abc");
     expect(result.rowsAffected).toBeNull();
+    expect(result.totalRows).toBe(1);
+  });
+
+  it("keeps the total when the server returned only part of it", async () => {
+    // The row limit stops a large result short; reporting rows.length as the
+    // count would turn a slice into the whole answer.
+    const result = await runStatement(
+      "SELECT * FROM big",
+      CONTEXT,
+      respondWith({
+        resultSetMetaData: {
+          numRows: 200000,
+          format: "jsonv2",
+          rowType: [{ name: "i", type: "NUMBER", nullable: true }],
+        },
+        data: [[1], [2]],
+        sqlState: "00000",
+      }),
+    );
+
+    expect(result.rows).toHaveLength(2);
+    expect(result.totalRows).toBe(200000);
+  });
+
+  it("falls back to the rows it got when no count is reported", async () => {
+    const result = await runStatement(
+      "SELECT 1",
+      CONTEXT,
+      respondWith({ data: [[1], [2]], sqlState: "00000" }),
+    );
+
+    expect(result.totalRows).toBe(2);
   });
 
   it("lifts the row count out of a DML response", async () => {

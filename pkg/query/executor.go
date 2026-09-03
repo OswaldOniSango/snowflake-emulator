@@ -24,6 +24,14 @@ var (
 	timestampRegex = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d+)?([+-]\d{2}:?\d{2}|Z)?$`)
 )
 
+// defaultRowLimit caps how many rows a single query materializes.
+//
+// Nothing capped this before, so a SELECT over a real table built the whole
+// result in memory and shipped it in one response: 200,000 rows measured at
+// 9.8 MB, which no browser grid survives. The limit is generous enough that
+// ordinary work never meets it, and a caller that wants more can ask.
+const defaultRowLimit = 1000
+
 // Executor executes SQL queries against DuckDB with Snowflake SQL translation.
 type Executor struct {
 	mgr                *connection.Manager
@@ -157,8 +165,22 @@ func (e *Executor) QueryWithContext(ctx context.Context, executionContext Execut
 	columnTypes := InferColumnMetadata(columns, rows)
 
 	// Fetch all rows
+	// Rows stop being materialized past the limit, but the scan continues so
+	// the caller learns how many there were. Counting costs a walk DuckDB was
+	// doing anyway; building 200,000 Go slices is what has to be avoided.
+	limit := executionContext.RowLimit
+	if limit <= 0 {
+		limit = defaultRowLimit
+	}
+
 	var resultRows [][]interface{}
+	totalRows := 0
 	for rows.Next() {
+		totalRows++
+		if totalRows > limit {
+			continue
+		}
+
 		// Create a slice of interface{} to hold the values
 		values := make([]interface{}, len(columns))
 		valuePtrs := make([]interface{}, len(columns))
@@ -187,6 +209,7 @@ func (e *Executor) QueryWithContext(ctx context.Context, executionContext Execut
 		Columns:     columns,
 		ColumnTypes: columnTypes,
 		Rows:        resultRows,
+		TotalRows:   totalRows,
 	}, nil
 }
 
