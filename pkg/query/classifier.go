@@ -191,10 +191,33 @@ func (c *Classifier) Classify(sql string) ClassifyResult {
 func (c *Classifier) isQueryStatement(upperSQL string) bool {
 	return strings.HasPrefix(upperSQL, "SELECT") ||
 		strings.HasPrefix(upperSQL, "CALL") ||
+		strings.HasPrefix(upperSQL, "LIST") ||
 		strings.HasPrefix(upperSQL, "SHOW") ||
 		strings.HasPrefix(upperSQL, "DESCRIBE") ||
 		strings.HasPrefix(upperSQL, "DESC") ||
 		strings.HasPrefix(upperSQL, "EXPLAIN")
+}
+
+// IsCreateStage checks if the SQL creates a named stage.
+func (c *Classifier) IsCreateStage(sql string) bool {
+	upperSQL := leadingSQL(sql)
+	return strings.HasPrefix(upperSQL, "CREATE STAGE") ||
+		strings.HasPrefix(upperSQL, "CREATE OR REPLACE STAGE")
+}
+
+// IsDropStage checks if the SQL drops a named stage.
+func (c *Classifier) IsDropStage(sql string) bool {
+	return strings.HasPrefix(leadingSQL(sql), "DROP STAGE")
+}
+
+// IsListStage checks if the SQL lists files in a named stage.
+func (c *Classifier) IsListStage(sql string) bool {
+	return strings.HasPrefix(leadingSQL(sql), "LIST @")
+}
+
+// IsShowStages checks if the SQL lists named stages.
+func (c *Classifier) IsShowStages(sql string) bool {
+	return strings.HasPrefix(leadingSQL(sql), "SHOW STAGES")
 }
 
 // IsCreateProcedure checks if the SQL creates a stored procedure.

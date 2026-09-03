@@ -6,11 +6,13 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/nnnkkk7/snowflake-emulator/pkg/metadata"
 	"github.com/nnnkkk7/snowflake-emulator/pkg/query"
+	"github.com/nnnkkk7/snowflake-emulator/pkg/stage"
 	"github.com/nnnkkk7/snowflake-emulator/pkg/warehouse"
 	"github.com/nnnkkk7/snowflake-emulator/server/apierror"
 	"github.com/nnnkkk7/snowflake-emulator/server/types"
@@ -22,6 +24,20 @@ type RestAPIv2Handler struct {
 	stmtMgr      *query.StatementManager
 	repo         *metadata.Repository
 	warehouseMgr *warehouse.Manager
+	stageMgr     *stage.Manager
+}
+
+// NewRestAPIv2HandlerWithServices creates a handler with the server's shared
+// warehouse and internal-stage managers.
+func NewRestAPIv2HandlerWithServices(executor *query.Executor, stmtMgr *query.StatementManager, repo *metadata.Repository, warehouseMgr *warehouse.Manager, stageMgr *stage.Manager) *RestAPIv2Handler {
+	configureWarehouseValidation(executor, warehouseMgr)
+	return &RestAPIv2Handler{
+		executor:     executor,
+		stmtMgr:      stmtMgr,
+		repo:         repo,
+		warehouseMgr: warehouseMgr,
+		stageMgr:     stageMgr,
+	}
 }
 
 // NewRestAPIv2Handler creates a new REST API v2 handler.
@@ -1230,6 +1246,168 @@ func (h *RestAPIv2Handler) ListSchemaObjects(w http.ResponseWriter, r *http.Requ
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		log.Printf("Failed to write schema objects response: %v", err)
+	}
+}
+
+const maxStageUploadBytes = 64 << 20
+
+// CreateStage handles POST /api/v2/databases/{database}/schemas/{schema}/stages.
+func (h *RestAPIv2Handler) CreateStage(w http.ResponseWriter, r *http.Request) {
+	if h.stageMgr == nil {
+		h.sendError(w, http.StatusNotImplemented, "Internal stages are not configured", types.SQLState42000)
+		return
+	}
+
+	var request types.CreateStageRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		h.sendError(w, http.StatusBadRequest, "Invalid request body", types.SQLState42000)
+		return
+	}
+	request.Name = strings.TrimSpace(request.Name)
+	if request.Name == "" {
+		h.sendError(w, http.StatusBadRequest, "Stage name is required", types.SQLState42000)
+		return
+	}
+
+	database, schemaMetadata, ok := h.stageSchema(w, r)
+	if !ok {
+		return
+	}
+	created, err := h.stageMgr.CreateStage(r.Context(), schemaMetadata.ID, request.Name, "INTERNAL", "", request.Comment)
+	if err != nil {
+		h.sendError(w, http.StatusBadRequest, err.Error(), types.SQLState42000)
+		return
+	}
+	writeJSON(w, http.StatusCreated, stageResponse(database.Name, schemaMetadata.Name, created))
+}
+
+// ListStages handles GET /api/v2/databases/{database}/schemas/{schema}/stages.
+func (h *RestAPIv2Handler) ListStages(w http.ResponseWriter, r *http.Request) {
+	if h.stageMgr == nil {
+		h.sendError(w, http.StatusNotImplemented, "Internal stages are not configured", types.SQLState42000)
+		return
+	}
+	database, schemaMetadata, ok := h.stageSchema(w, r)
+	if !ok {
+		return
+	}
+	stages, err := h.stageMgr.ListStages(r.Context(), schemaMetadata.ID)
+	if err != nil {
+		h.sendError(w, http.StatusInternalServerError, err.Error(), types.SQLState42000)
+		return
+	}
+	response := make([]types.StageResponse, 0, len(stages))
+	for _, item := range stages {
+		response = append(response, stageResponse(database.Name, schemaMetadata.Name, item))
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+// DeleteStage handles DELETE /api/v2/databases/{database}/schemas/{schema}/stages/{stage}.
+func (h *RestAPIv2Handler) DeleteStage(w http.ResponseWriter, r *http.Request) {
+	if h.stageMgr == nil {
+		h.sendError(w, http.StatusNotImplemented, "Internal stages are not configured", types.SQLState42000)
+		return
+	}
+	_, schemaMetadata, ok := h.stageSchema(w, r)
+	if !ok {
+		return
+	}
+	if err := h.stageMgr.DropStage(r.Context(), schemaMetadata.ID, chi.URLParam(r, "stage")); err != nil {
+		h.sendError(w, http.StatusNotFound, err.Error(), types.SQLState42000)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// UploadStageFile accepts one multipart field named "file".
+func (h *RestAPIv2Handler) UploadStageFile(w http.ResponseWriter, r *http.Request) {
+	if h.stageMgr == nil {
+		h.sendError(w, http.StatusNotImplemented, "Internal stages are not configured", types.SQLState42000)
+		return
+	}
+	_, schemaMetadata, ok := h.stageSchema(w, r)
+	if !ok {
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, maxStageUploadBytes)
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		h.sendError(w, http.StatusBadRequest, "A multipart file field named file is required (maximum 64 MiB)", types.SQLState42000)
+		return
+	}
+	defer func() { _ = file.Close() }()
+
+	if err := h.stageMgr.PutFile(r.Context(), schemaMetadata.ID, chi.URLParam(r, "stage"), header.Filename, file); err != nil {
+		h.sendError(w, http.StatusBadRequest, err.Error(), types.SQLState42000)
+		return
+	}
+	files, err := h.stageMgr.ListFiles(r.Context(), schemaMetadata.ID, chi.URLParam(r, "stage"), "")
+	if err != nil {
+		h.sendError(w, http.StatusInternalServerError, err.Error(), types.SQLState42000)
+		return
+	}
+	for _, uploaded := range files {
+		if uploaded.Name == header.Filename {
+			writeJSON(w, http.StatusCreated, stageFileResponse(uploaded))
+			return
+		}
+	}
+	h.sendError(w, http.StatusInternalServerError, "Uploaded file could not be inspected", types.SQLState42000)
+}
+
+// ListStageFiles handles GET /api/v2/databases/{database}/schemas/{schema}/stages/{stage}/files.
+func (h *RestAPIv2Handler) ListStageFiles(w http.ResponseWriter, r *http.Request) {
+	if h.stageMgr == nil {
+		h.sendError(w, http.StatusNotImplemented, "Internal stages are not configured", types.SQLState42000)
+		return
+	}
+	_, schemaMetadata, ok := h.stageSchema(w, r)
+	if !ok {
+		return
+	}
+	files, err := h.stageMgr.ListFiles(r.Context(), schemaMetadata.ID, chi.URLParam(r, "stage"), r.URL.Query().Get("pattern"))
+	if err != nil {
+		h.sendError(w, http.StatusNotFound, err.Error(), types.SQLState42000)
+		return
+	}
+	response := make([]types.StageFileResponse, 0, len(files))
+	for _, file := range files {
+		response = append(response, stageFileResponse(file))
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (h *RestAPIv2Handler) stageSchema(w http.ResponseWriter, r *http.Request) (*metadata.Database, *metadata.Schema, bool) {
+	databaseName := chi.URLParam(r, "database")
+	schemaName := chi.URLParam(r, "schema")
+	database, err := h.repo.GetDatabaseByName(r.Context(), databaseName)
+	if err != nil {
+		h.sendError(w, http.StatusNotFound, "Database not found: "+databaseName, types.SQLState42000)
+		return nil, nil, false
+	}
+	schemaMetadata, err := h.repo.GetSchemaByName(r.Context(), database.ID, schemaName)
+	if err != nil {
+		h.sendError(w, http.StatusNotFound, "Schema not found: "+schemaName, types.SQLState42000)
+		return nil, nil, false
+	}
+	return database, schemaMetadata, true
+}
+
+func stageResponse(database, schemaName string, item *metadata.Stage) types.StageResponse {
+	return types.StageResponse{Name: item.Name, Database: database, Schema: schemaName, StageType: item.StageType, Comment: item.Comment, CreatedOn: item.CreatedAt.Format(time.RFC3339)}
+}
+
+func stageFileResponse(file stage.StageFile) types.StageFileResponse {
+	return types.StageFileResponse{Name: file.Name, Size: file.Size, LastModified: file.ModifiedTime.Format(time.RFC3339)}
+}
+
+func writeJSON(w http.ResponseWriter, status int, value interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(value); err != nil {
+		log.Printf("Failed to write JSON response: %v", err)
 	}
 }
 

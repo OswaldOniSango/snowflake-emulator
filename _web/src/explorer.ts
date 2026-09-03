@@ -1,4 +1,10 @@
-import { listDatabases, listSchemaObjects, listSchemas, type SchemaObject } from "./api";
+import {
+  listDatabases,
+  listSchemaObjects,
+  listSchemas,
+  uploadStageFile,
+  type SchemaObject,
+} from "./api";
 
 /**
  * The object explorer: databases, their schemas, and what each schema holds.
@@ -47,6 +53,8 @@ export function createExplorer(options: ExplorerOptions): Explorer {
   let error: string | null = null;
   let filter = "";
   let refreshing = false;
+  let uploading = "";
+  let feedback: { kind: "ok" | "error"; text: string } | null = null;
 
   const root = document.createElement("div");
   root.className = "explorer";
@@ -147,7 +155,7 @@ export function createExplorer(options: ExplorerOptions): Explorer {
   }
 
   function render(): void {
-    root.replaceChildren(header(), tree());
+    root.replaceChildren(header(), ...(feedback ? [uploadFeedback(feedback)] : []), tree());
   }
 
   function header(): HTMLElement {
@@ -273,8 +281,7 @@ export function createExplorer(options: ExplorerOptions): Explorer {
 
       rows.push(groupLabel(plural(kind)));
       for (const object of ofKind) {
-        rows.push(
-          row({
+        const objectRow = row({
             label: object.name,
             kind: object.kind,
             depth: 2,
@@ -283,11 +290,61 @@ export function createExplorer(options: ExplorerOptions): Explorer {
               options.onInsert(
                 nameToInsert(database, schema.name, object.name, options.context()),
               ),
-          }),
-        );
+          });
+        if (object.kind === "stage") {
+          rows.push(stageRow(objectRow, database, schema.name, object.name));
+        } else {
+          rows.push(objectRow);
+        }
       }
     }
     return rows;
+  }
+
+  function stageRow(objectRow: HTMLElement, database: string, schema: string, stage: string): HTMLElement {
+    const wrapper = document.createElement("div");
+    wrapper.className = "node-line";
+    wrapper.setAttribute("role", "presentation");
+
+    const upload = document.createElement("button");
+    upload.type = "button";
+    upload.className = "node-action";
+    upload.textContent = uploading === `${database}.${schema}.${stage}` ? "…" : "↑";
+    upload.title = `Upload file to ${stage}`;
+    upload.setAttribute("aria-label", `Upload file to ${stage}`);
+    upload.disabled = uploading !== "";
+    upload.addEventListener("click", () => chooseStageFile(database, schema, stage));
+
+    wrapper.append(objectRow, upload);
+    return wrapper;
+  }
+
+  function chooseStageFile(database: string, schema: string, stage: string): void {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".csv,.json,text/csv,application/json";
+    input.addEventListener("change", () => {
+      const file = input.files?.[0];
+      if (file) {
+        void upload(database, schema, stage, file);
+      }
+    });
+    input.click();
+  }
+
+  async function upload(database: string, schema: string, stage: string, file: File): Promise<void> {
+    uploading = `${database}.${schema}.${stage}`;
+    feedback = null;
+    render();
+    try {
+      const uploaded = await uploadStageFile(database, schema, stage, file, file.name);
+      feedback = { kind: "ok", text: `${uploaded.name} uploaded to @${stage}` };
+    } catch (cause) {
+      feedback = { kind: "error", text: messageOf(cause) };
+    } finally {
+      uploading = "";
+      render();
+    }
   }
 
   function matches(name: string): boolean {
@@ -296,6 +353,14 @@ export function createExplorer(options: ExplorerOptions): Explorer {
 
   void refresh();
   return { refresh };
+}
+
+function uploadFeedback(feedback: { kind: "ok" | "error"; text: string }): HTMLElement {
+  const message = document.createElement("div");
+  message.className = `explorer-feedback ${feedback.kind}`;
+  message.setAttribute("role", feedback.kind === "error" ? "alert" : "status");
+  message.textContent = feedback.text;
+  return message;
 }
 
 interface RowOptions {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -18,6 +19,7 @@ import (
 	"github.com/nnnkkk7/snowflake-emulator/pkg/connection"
 	"github.com/nnnkkk7/snowflake-emulator/pkg/metadata"
 	"github.com/nnnkkk7/snowflake-emulator/pkg/query"
+	"github.com/nnnkkk7/snowflake-emulator/pkg/stage"
 	"github.com/nnnkkk7/snowflake-emulator/server/types"
 )
 
@@ -50,9 +52,12 @@ func setupRestAPIv2Handler(t *testing.T) (*RestAPIv2Handler, *chi.Mux) {
 	}
 
 	executor := query.NewExecutor(connMgr, repo)
+	stageMgr := stage.NewManager(repo, t.TempDir())
+	executor.Configure(query.WithStageManager(stageMgr))
 	stmtMgr := query.NewStatementManager(1 * time.Hour)
 
 	handler := NewRestAPIv2Handler(executor, stmtMgr, repo)
+	handler.stageMgr = stageMgr
 
 	// Setup router
 	r := chi.NewRouter()
@@ -60,9 +65,115 @@ func setupRestAPIv2Handler(t *testing.T) (*RestAPIv2Handler, *chi.Mux) {
 		r.Post("/statements", handler.SubmitStatement)
 		r.Get("/statements/{handle}", handler.GetStatement)
 		r.Post("/statements/{handle}/cancel", handler.CancelStatement)
+		r.Get("/databases/{database}/schemas/{schema}/stages", handler.ListStages)
+		r.Post("/databases/{database}/schemas/{schema}/stages", handler.CreateStage)
+		r.Delete("/databases/{database}/schemas/{schema}/stages/{stage}", handler.DeleteStage)
+		r.Get("/databases/{database}/schemas/{schema}/stages/{stage}/files", handler.ListStageFiles)
+		r.Post("/databases/{database}/schemas/{schema}/stages/{stage}/files", handler.UploadStageFile)
 	})
 
 	return handler, r
+}
+
+func TestRestAPIv2Handler_InternalStageCSVWorkflow(t *testing.T) {
+	_, router := setupRestAPIv2Handler(t)
+
+	submit := func(statement string) types.StatementResponse {
+		t.Helper()
+		requestBody, err := json.Marshal(types.SubmitStatementRequest{Statement: statement, Database: "TEST_DB", Schema: "PUBLIC"})
+		if err != nil {
+			t.Fatalf("marshal statement request: %v", err)
+		}
+		request := httptest.NewRequest(http.MethodPost, "/api/v2/statements", bytes.NewReader(requestBody))
+		request.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("%s status = %d, body = %s", statement, response.Code, response.Body.String())
+		}
+		var body types.StatementResponse
+		if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode %s response: %v", statement, err)
+		}
+		if body.SQLState != types.SQLState00000 {
+			t.Fatalf("%s failed: %s", statement, body.Message)
+		}
+		return body
+	}
+
+	submit("CREATE TABLE users (id INTEGER, name VARCHAR)")
+	submit("CREATE STAGE users_stage COMMENT = 'CSV lessons'")
+
+	var upload bytes.Buffer
+	writer := multipart.NewWriter(&upload)
+	part, err := writer.CreateFormFile("file", "users.csv")
+	if err != nil {
+		t.Fatalf("create multipart file: %v", err)
+	}
+	if _, err := part.Write([]byte("id,name\n1,Alice\n2,Bob\n")); err != nil {
+		t.Fatalf("write multipart file: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close multipart body: %v", err)
+	}
+
+	request := httptest.NewRequest(http.MethodPost, "/api/v2/databases/TEST_DB/schemas/PUBLIC/stages/USERS_STAGE/files", &upload)
+	request.Header.Set("Content-Type", writer.FormDataContentType())
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("upload status = %d, body = %s", response.Code, response.Body.String())
+	}
+
+	listed := submit("LIST @users_stage")
+	if len(listed.Data) != 1 || listed.Data[0][0] != "users.csv" {
+		t.Fatalf("LIST data = %#v, want users.csv", listed.Data)
+	}
+
+	copied := submit("COPY INTO users FROM @users_stage FILE_FORMAT = (TYPE = CSV SKIP_HEADER = 1)")
+	if copied.Data[0][0] != float64(2) {
+		t.Fatalf("COPY rows affected = %#v, want 2", copied.Data)
+	}
+
+	selected := submit("SELECT id, name FROM users ORDER BY id")
+	want := [][]interface{}{{float64(1), "Alice"}, {float64(2), "Bob"}}
+	if diff := cmp.Diff(want, selected.Data); diff != "" {
+		t.Fatalf("loaded rows mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestRestAPIv2Handler_InternalStageCRUD(t *testing.T) {
+	_, router := setupRestAPIv2Handler(t)
+	basePath := "/api/v2/databases/TEST_DB/schemas/PUBLIC/stages"
+
+	request := httptest.NewRequest(http.MethodPost, basePath, strings.NewReader(`{"name":"API_STAGE","comment":"created through REST"}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("create status = %d, body = %s", response.Code, response.Body.String())
+	}
+	var created types.StageResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode stage: %v", err)
+	}
+	if created.Name != "API_STAGE" || created.StageType != "INTERNAL" {
+		t.Fatalf("created stage = %#v", created)
+	}
+
+	request = httptest.NewRequest(http.MethodGet, basePath, nil)
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "API_STAGE") {
+		t.Fatalf("list status = %d, body = %s", response.Code, response.Body.String())
+	}
+
+	request = httptest.NewRequest(http.MethodDelete, basePath+"/API_STAGE", nil)
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("delete status = %d, body = %s", response.Code, response.Body.String())
+	}
 }
 
 func TestRestAPIv2Handler_WarehouseSizeRoundTrip(t *testing.T) {

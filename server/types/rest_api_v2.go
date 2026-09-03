@@ -303,6 +303,29 @@ type ListSchemaObjectsResponse struct {
 	Objects  []SchemaObject `json:"objects"`
 }
 
+// CreateStageRequest creates a named internal stage.
+type CreateStageRequest struct {
+	Name    string `json:"name"`
+	Comment string `json:"comment,omitempty"`
+}
+
+// StageResponse describes a named internal stage.
+type StageResponse struct {
+	Name      string `json:"name"`
+	Database  string `json:"database_name"`
+	Schema    string `json:"schema_name"`
+	StageType string `json:"type"`
+	Comment   string `json:"comment,omitempty"`
+	CreatedOn string `json:"created_on"`
+}
+
+// StageFileResponse describes one file stored in an internal stage.
+type StageFileResponse struct {
+	Name         string `json:"name"`
+	Size         int64  `json:"size"`
+	LastModified string `json:"last_modified"`
+}
+
 // StatementHistoryEntry is one row of the statement history.
 type StatementHistoryEntry struct {
 	Handle      string `json:"statementHandle"`

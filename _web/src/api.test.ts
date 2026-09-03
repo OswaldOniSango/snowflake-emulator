@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { isDecimalValue, runStatement, StatementError, translateStatement } from "./api";
+import {
+  isDecimalValue,
+  runStatement,
+  StatementError,
+  translateStatement,
+  uploadStageFile,
+} from "./api";
 
 const CONTEXT = { database: "TEST_DB", schema: "PUBLIC" };
 
@@ -121,6 +127,52 @@ describe("isDecimalValue", () => {
 
   it.each([null, 5, "text", {}, { Value: 1 }])("rejects %o", (value) => {
     expect(isDecimalValue(value)).toBe(false);
+  });
+});
+
+describe("uploadStageFile", () => {
+  it("posts the file as multipart data to the selected stage", async () => {
+    let requestedPath = "";
+    let uploadedFile: FormDataEntryValue | null = null;
+    const fetchFn = (async (input: string | URL | Request, init?: RequestInit) => {
+      requestedPath = String(input);
+      uploadedFile = (init?.body as FormData).get("file");
+      return {
+        ok: true,
+        status: 201,
+        json: async () => ({
+          name: "users.csv",
+          size: 12,
+          last_modified: "2026-09-03T00:00:00Z",
+        }),
+      };
+    }) as typeof fetch;
+
+    const uploaded = await uploadStageFile(
+      "LEARNING DB",
+      "PUBLIC",
+      "USERS_STAGE",
+      new Blob(["id,name\n1,Alice"]),
+      "users.csv",
+      fetchFn,
+    );
+
+    expect(requestedPath).toContain("LEARNING%20DB/schemas/PUBLIC/stages/USERS_STAGE/files");
+    expect(uploadedFile).toBeInstanceOf(Blob);
+    expect(uploaded.name).toBe("users.csv");
+  });
+
+  it("reports the API error when an upload fails", async () => {
+    await expect(
+      uploadStageFile(
+        "TEST_DB",
+        "PUBLIC",
+        "MISSING",
+        new Blob(["1"]),
+        "data.csv",
+        respondWith({ message: "stage MISSING not found" }, false, 404),
+      ),
+    ).rejects.toThrow("stage MISSING not found");
   });
 });
 

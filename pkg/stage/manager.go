@@ -7,11 +7,14 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/nnnkkk7/snowflake-emulator/pkg/metadata"
 )
+
+var stageNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_$]*$`)
 
 // StageFile represents a file in a stage.
 type StageFile struct {
@@ -39,6 +42,9 @@ func NewManager(repo *metadata.Repository, stageDir string) *Manager {
 
 // CreateStage creates a new stage in the specified schema.
 func (m *Manager) CreateStage(ctx context.Context, schemaID, name, stageType, url, comment string) (*metadata.Stage, error) {
+	if !stageNamePattern.MatchString(name) {
+		return nil, fmt.Errorf("invalid stage name: %s", name)
+	}
 	stage, err := m.repo.CreateStage(ctx, schemaID, name, stageType, url, comment)
 	if err != nil {
 		return nil, err
