@@ -1,6 +1,9 @@
 package query
 
-import "fmt"
+import (
+	"context"
+	"fmt"
+)
 
 // Handler names the component that executes a statement. The emulator routes
 // several statement kinds to dedicated processors before the translator sees
@@ -96,16 +99,33 @@ func PreviewTranslation(sql string, executionContext ExecutionContext) (Translat
 
 	rewritten := rewriteContextualTableReferences(sql, executionContext)
 
+	return buildTranslationPreview(sql, rewritten)
+}
+
+// PreviewTranslationWithContext uses the catalog-aware resolver so qualified
+// names are previewed exactly as the executor will run them.
+func (e *Executor) PreviewTranslationWithContext(ctx context.Context, sql string, executionContext ExecutionContext) (TranslationPreview, error) {
+	if sql == "" {
+		return TranslationPreview{}, fmt.Errorf("statement is required")
+	}
+	rewritten, err := e.rewriteTablesWithContext(ctx, executionContext, sql)
+	if err != nil {
+		return TranslationPreview{}, err
+	}
+	return buildTranslationPreview(sql, rewritten)
+}
+
+func buildTranslationPreview(statement, rewritten string) (TranslationPreview, error) {
 	translated, err := NewTranslator().Translate(rewritten)
 	if err != nil {
 		return TranslationPreview{}, fmt.Errorf("translation error: %w", err)
 	}
 
-	handler := ResolveHandler(sql)
+	handler := ResolveHandler(statement)
 	note, incomplete := handlerNotes[handler]
 
 	return TranslationPreview{
-		Statement:  sql,
+		Statement:  statement,
 		Translated: translated,
 		HandledBy:  handler,
 		Complete:   !incomplete,

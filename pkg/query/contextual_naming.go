@@ -67,9 +67,103 @@ func rewriteContextualTableReferences(sql string, executionContext ExecutionCont
 
 // rewriteTablesWithContext validates the logical Snowflake namespace before
 // mapping short table names to physical DuckDB names.
-func (e *Executor) rewriteTablesWithContext(_ context.Context, executionContext ExecutionContext, sql string) (string, error) {
-	rewritten := rewriteContextualTableReferences(sql, executionContext)
-	return rewritten, nil
+func (e *Executor) rewriteTablesWithContext(ctx context.Context, executionContext ExecutionContext, sql string) (string, error) {
+	result := sql
+	var rewriteErr error
+	for _, pattern := range contextualTablePatterns {
+		result = pattern.ReplaceAllStringFunc(result, func(match string) string {
+			if rewriteErr != nil {
+				return match
+			}
+			parts := pattern.FindStringSubmatch(match)
+			if len(parts) != 3 {
+				return match
+			}
+			name := strings.TrimSpace(parts[2])
+			if strings.HasPrefix(name, "_") || sqlKeywords[strings.ToUpper(name)] {
+				return match
+			}
+			physicalName, changed, err := e.resolveTableReference(ctx, executionContext, name)
+			if err != nil {
+				rewriteErr = err
+				return match
+			}
+			if !changed {
+				return match
+			}
+			return parts[1] + physicalName
+		})
+	}
+	if rewriteErr != nil {
+		return "", rewriteErr
+	}
+	return result, nil
+}
+
+func (e *Executor) resolveTableReference(ctx context.Context, executionContext ExecutionContext, name string) (string, bool, error) {
+	parts := strings.Split(name, ".")
+	for _, part := range parts {
+		if !identifierPattern.MatchString(part) {
+			return "", false, nil
+		}
+	}
+
+	switch len(parts) {
+	case 1:
+		if executionContext.Database == "" || executionContext.Schema == "" {
+			return "", false, nil
+		}
+		return BuildTableName(executionContext.Database, executionContext.Schema, parts[0]), true, nil
+	case 2:
+		if physical, ok, err := e.existingPhysicalReference(ctx, parts[0], parts[1]); err != nil {
+			return "", false, err
+		} else if ok {
+			return physical, false, nil
+		}
+		if executionContext.Database == "" {
+			return "", false, fmt.Errorf("table reference %s requires a database context", name)
+		}
+		if err := e.validateObjectNamespace(ctx, executionContext.Database, parts[0]); err != nil {
+			return "", false, err
+		}
+		return BuildTableName(executionContext.Database, parts[0], parts[1]), true, nil
+	case 3:
+		if err := e.validateObjectNamespace(ctx, parts[0], parts[1]); err != nil {
+			return "", false, err
+		}
+		return BuildTableName(parts[0], parts[1], parts[2]), true, nil
+	default:
+		return "", false, fmt.Errorf("invalid table reference %s", name)
+	}
+}
+
+func (e *Executor) existingPhysicalReference(ctx context.Context, databaseName, physicalTableName string) (string, bool, error) {
+	database, err := e.repo.GetDatabaseByName(ctx, databaseName)
+	if err != nil {
+		return "", false, nil
+	}
+	schemas, err := e.repo.ListSchemas(ctx, database.ID)
+	if err != nil {
+		return "", false, err
+	}
+	normalizedTableName := strings.ToUpper(physicalTableName)
+	for _, schema := range schemas {
+		if strings.HasPrefix(normalizedTableName, schema.Name+"_") {
+			return strings.ToUpper(databaseName) + "." + normalizedTableName, true, nil
+		}
+	}
+	return "", false, nil
+}
+
+func (e *Executor) validateObjectNamespace(ctx context.Context, databaseName, schemaName string) error {
+	database, err := e.repo.GetDatabaseByName(ctx, databaseName)
+	if err != nil {
+		return fmt.Errorf("database %s not found: %w", strings.ToUpper(databaseName), err)
+	}
+	if _, err := e.repo.GetSchemaByName(ctx, database.ID, schemaName); err != nil {
+		return fmt.Errorf("schema %s not found in database %s: %w", strings.ToUpper(schemaName), strings.ToUpper(databaseName), err)
+	}
+	return nil
 }
 
 // validateExecutionContext checks every explicitly supplied namespace before a

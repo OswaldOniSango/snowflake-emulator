@@ -223,8 +223,10 @@ curl http://localhost:8080/api/v2/warehouses
 ```
 
 The `database` and `schema` fields provide the execution context used to resolve
-unqualified object names. For example, the following statements resolve
-`users` and `users_stream` inside `LEARNING_DB.PUBLIC`:
+unqualified and schema-qualified object names. Table references may use
+`table`, `schema.table`, or `database.schema.table`; explicit namespaces are
+validated against the emulator catalog before execution. For example, the
+following statement resolves `users_stream` inside `LEARNING_DB.PUBLIC`:
 
 ```json
 {
