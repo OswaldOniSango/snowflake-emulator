@@ -84,6 +84,7 @@ func (h *RestAPIv2Handler) SubmitStatement(w http.ResponseWriter, r *http.Reques
 		Schema:    req.Schema,
 		Warehouse: req.Warehouse,
 		Role:      req.Role,
+		RowLimit:  req.RowLimit,
 	}
 
 	var result *query.Result
@@ -268,12 +269,27 @@ func (h *RestAPIv2Handler) buildStatementResponse(stmt *query.Statement, result 
 		StatementStatusURL: "/api/v2/statements/" + stmt.Handle,
 		CreatedOn:          stmt.CreatedOn.UnixMilli(),
 		ResultSetMetaData: &types.ResultSetMetaData{
-			NumRows: int64(len(result.Rows)),
+			// numRows is how many the statement produced; data carries what
+			// fits under the row limit. A caller compares the two to know it
+			// is looking at a slice rather than the whole thing.
+			NumRows: int64(totalRows(result)),
 			Format:  "jsonv2",
 			RowType: rowType,
+			PartitionInfo: []types.PartitionInfo{
+				{RowCount: int64(len(result.Rows))},
+			},
 		},
 		Data: data,
 	}
+}
+
+// totalRows reports how many rows a statement produced. Results built before
+// the executor started counting report only what they carry.
+func totalRows(result *query.Result) int {
+	if result.TotalRows > 0 {
+		return result.TotalRows
+	}
+	return len(result.Rows)
 }
 
 // sendError sends an error response.
@@ -1032,12 +1048,21 @@ func (h *RestAPIv2Handler) TranslateStatement(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	rewrites := make([]types.TranslationRewrite, 0, len(preview.FunctionRewrites)+len(preview.ObjectRewrites))
+	for _, rewrite := range preview.FunctionRewrites {
+		rewrites = append(rewrites, types.TranslationRewrite{From: rewrite.From, To: rewrite.To, Kind: "function"})
+	}
+	for _, rewrite := range preview.ObjectRewrites {
+		rewrites = append(rewrites, types.TranslationRewrite{From: rewrite.From, To: rewrite.To, Kind: "object"})
+	}
+
 	resp := types.TranslateResponse{
 		Statement:  preview.Statement,
 		Translated: preview.Translated,
 		HandledBy:  string(preview.HandledBy),
 		Complete:   preview.Complete,
 		Note:       preview.Note,
+		Rewrites:   rewrites,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

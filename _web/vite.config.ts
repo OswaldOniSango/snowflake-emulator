@@ -1,4 +1,4 @@
-import { defineConfig } from "vite";
+import { defineConfig } from "vitest/config";
 
 // The emulator the dev server proxies to. Override with EMULATOR_URL when the
 // Go server runs on a non-default port (PORT is read by cmd/server).
@@ -13,6 +13,12 @@ export default defineConfig({
     // Source maps would be embedded in every release binary and served
     // publicly, so they stay out of the production bundle.
     sourcemap: false,
+  },
+  test: {
+    // The modules that render server data build real DOM nodes, so their tests
+    // need a document. happy-dom is enough for that and starts far faster than
+    // a browser.
+    environment: "happy-dom",
   },
   server: {
     port: 5173,

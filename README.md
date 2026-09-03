@@ -247,6 +247,11 @@ curl -X POST http://localhost:8080/api/v2/statements \
 # Get statement result
 curl http://localhost:8080/api/v2/statements/{handle}
 
+# Ask for more rows than the default cap
+curl -X POST http://localhost:8080/api/v2/statements \
+  -H "Content-Type: application/json" \
+  -d '{"statement": "SELECT * FROM orders", "rowLimit": 50000}'
+
 # Create a database
 curl -X POST http://localhost:8080/api/v2/databases \
   -H "Content-Type: application/json" \
@@ -414,7 +419,7 @@ go run ./example/gosnowflake
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/v2/statements` | POST | Submit SQL statement |
+| `/api/v2/statements` | POST | Submit SQL statement (`rowLimit` caps returned rows; `resultSetMetaData.numRows` always reports the true total) |
 | `/api/v2/statements` | GET | Recent statement history (`?limit=N`) |
 | `/api/v2/statements/{handle}` | GET | Get statement status/result |
 | `/api/v2/statements/{handle}/cancel` | POST | Cancel statement |

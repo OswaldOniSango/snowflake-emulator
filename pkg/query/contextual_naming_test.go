@@ -420,3 +420,94 @@ func TestPhysicalNameErrorPassesNilThrough(t *testing.T) {
 		t.Errorf("got %v, want nil", got)
 	}
 }
+
+// TestRewriteContextualTableReferences_TableFunctions pins the distinction the
+// rewriter used to miss: after FROM or JOIN an identifier followed by "(" is a
+// function being called, not a table. FROM range(5) became FROM PUBLIC_RANGE(5)
+// and failed with "Table Function with name public_range does not exist".
+func TestRewriteContextualTableReferences_TableFunctions(t *testing.T) {
+	executionContext := ExecutionContext{Database: "TEST_DB", Schema: "PUBLIC"}
+
+	tests := []struct {
+		name string
+		sql  string
+		want string
+	}{
+		{
+			name: "a table function after FROM is left alone",
+			sql:  "SELECT i FROM range(5) t(i)",
+			want: "SELECT i FROM range(5) t(i)",
+		},
+		{
+			name: "a table function after JOIN is left alone",
+			sql:  "SELECT * FROM users JOIN read_csv('f.csv') ON true",
+			want: "SELECT * FROM TEST_DB.PUBLIC_USERS JOIN read_csv('f.csv') ON true",
+		},
+		{
+			name: "whitespace before the parenthesis is still a call",
+			sql:  "SELECT * FROM range (5)",
+			want: "SELECT * FROM range (5)",
+		},
+		{
+			// A parenthesis after INSERT INTO is a column list, and the name
+			// before it is a real table that still has to resolve.
+			name: "an insert column list is not a function call",
+			sql:  "INSERT INTO users (id, email) VALUES (1, 'a')",
+			want: "INSERT INTO TEST_DB.PUBLIC_USERS (id, email) VALUES (1, 'a')",
+		},
+		{
+			name: "a create column list is not a function call",
+			sql:  "CREATE TABLE users (id INTEGER)",
+			want: "CREATE TABLE TEST_DB.PUBLIC_USERS (id INTEGER)",
+		},
+		{
+			name: "a plain table after FROM still resolves",
+			sql:  "SELECT * FROM users",
+			want: "SELECT * FROM TEST_DB.PUBLIC_USERS",
+		},
+		{
+			// A comma-separated FROM list resolves neither name, and never
+			// has: the capture group does not exclude a comma, so it reads
+			// "users," and rejects it as an identifier. Left as it was on
+			// purpose — resolving only the first table would half-rewrite the
+			// statement, which fails more confusingly than not rewriting at
+			// all. Fixing it properly needs a pattern for the whole list.
+			name: "a comma-separated list is left alone, as before",
+			sql:  "SELECT * FROM users, orders",
+			want: "SELECT * FROM users, orders",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := rewriteContextualTableReferences(tt.sql, executionContext); got != tt.want {
+				t.Errorf("got  %q\nwant %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsTableFunctionCall(t *testing.T) {
+	tests := []struct {
+		name   string
+		prefix string
+		call   string
+		want   bool
+	}{
+		{name: "FROM with a call", prefix: "FROM ", call: "(", want: true},
+		{name: "JOIN with a call", prefix: "JOIN ", call: "(", want: true},
+		{name: "USING with a call", prefix: "USING ", call: "(", want: true},
+		{name: "FROM without a call", prefix: "FROM ", call: "", want: false},
+		{name: "INSERT INTO with a column list", prefix: "INSERT INTO ", call: "(", want: false},
+		{name: "CREATE TABLE with a column list", prefix: "CREATE TABLE ", call: "(", want: false},
+		{name: "lowercase keyword", prefix: "from ", call: "(", want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isTableFunctionCall(tt.prefix, tt.call); got != tt.want {
+				t.Errorf("isTableFunctionCall(%q, %q) = %v, want %v", tt.prefix, tt.call, got, tt.want)
+			}
+		})
+	}
+}

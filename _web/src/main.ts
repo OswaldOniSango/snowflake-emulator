@@ -1,5 +1,5 @@
 import "./style.css";
-import { runStatement, StatementError, translateStatement } from "./api";
+import { runStatement, StatementError, translateStatement, type Statement } from "./api";
 import { createEditor, type Editor } from "./editor";
 import { createExplorer } from "./explorer";
 import { renderGrid, renderNotice } from "./grid";
@@ -227,12 +227,12 @@ function main(): void {
               )
             : result.rows.length === 0
               ? renderNotice("info", "Statement returned no rows")
-              : renderGrid(result);
+              : withTruncationNotice(result);
 
         setStatus(
           "ok",
           "Succeeded",
-          summary(statements.length, index + 1, result.rows.length, result.rowsAffected, elapsed),
+          summary(statements.length, index + 1, result, elapsed),
         );
       }
     } catch (cause) {
@@ -507,17 +507,43 @@ function main(): void {
   void showHealth(root);
 }
 
-function summary(
-  total: number,
-  done: number,
-  rowCount: number,
-  rowsAffected: number | null,
-  elapsedMs: number,
-): string {
-  const rows =
-    rowsAffected !== null ? "" : `${rowCount} ${rowCount === 1 ? "row" : "rows"} · `;
+function summary(total: number, done: number, result: Statement, elapsedMs: number): string {
   const of = total > 1 ? `${done} of ${total} · ` : "";
+  if (result.rowsAffected !== null) {
+    return `${of}${elapsedMs} ms`;
+  }
+
+  // A truncated result says both numbers, so a slice never reads as the whole
+  // answer.
+  const shown = result.rows.length;
+  const rows =
+    result.totalRows > shown
+      ? `${format(shown)} of ${format(result.totalRows)} rows · `
+      : `${format(shown)} ${shown === 1 ? "row" : "rows"} · `;
   return `${of}${rows}${elapsedMs} ms`;
+}
+
+/** Pairs a truncated grid with a note saying how to see the rest. */
+function withTruncationNotice(result: Statement): HTMLElement {
+  const grid = renderGrid(result);
+  if (result.totalRows <= result.rows.length) {
+    return grid;
+  }
+
+  const wrapper = document.createElement("div");
+  wrapper.append(
+    renderNotice(
+      "info",
+      `Showing the first ${format(result.rows.length)} of ${format(result.totalRows)} rows`,
+      "The emulator caps how many rows one statement returns so a large result cannot outgrow the browser. Add a LIMIT to choose which rows you want.",
+    ),
+    grid,
+  );
+  return wrapper;
+}
+
+function format(count: number): string {
+  return count.toLocaleString();
 }
 
 /** The emulator's messages carry the failing SQL; the first line is the gist. */
