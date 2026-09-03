@@ -5,6 +5,8 @@ import { createExplorer } from "./explorer";
 import { renderGrid, renderNotice } from "./grid";
 import { checkHealth } from "./health";
 import { createContextPicker } from "./context-picker";
+import { changesCatalog, createCatalog } from "./catalog";
+import { createCompletionSource } from "./completion";
 import { createHistoryView } from "./history";
 import { createWarehousesView } from "./warehouses";
 import { createLimitationsButton } from "./limitations";
@@ -123,9 +125,14 @@ function main(): void {
   pick(root, "theme").append(createThemeToggle());
   pick(root, "limitations").append(createLimitationsButton());
 
+  // Completion reads whatever the cache last loaded, so a namespace that has
+  // not arrived yet degrades to keywords rather than blocking a keystroke.
+  const catalog = createCatalog();
+
   const editor: Editor = createEditor({
     parent: pick(root, "editor"),
     initialValue: active().sql,
+    completions: createCompletionSource(catalog),
     onRun: () => void run(),
     onChange: (value) => {
       active().sql = value;
@@ -140,6 +147,7 @@ function main(): void {
     onChange: (context) => {
       active().context = context;
       persist();
+      syncCatalog();
       // The translation depends on the namespace, so it is no longer current.
       translationPane = null;
       if (activeTab === "translation") {
@@ -153,6 +161,16 @@ function main(): void {
     context: () => active().context,
     onInsert: (name) => editor.insert(name),
   });
+
+  /**
+   * Points the completion cache at the active worksheet's namespace. Cheap to
+   * call from every path that changes which worksheet or context is active:
+   * loading a namespace already cached does nothing.
+   */
+  function syncCatalog(): void {
+    const context = active().context;
+    void catalog.load(context.database, context.schema);
+  }
 
   function active(): Worksheet {
     const worksheet = workspace.worksheets.find((w) => w.id === workspace.activeId);
@@ -218,6 +236,12 @@ function main(): void {
 
         const result = await runStatement(statement, context);
         elapsed += result.elapsedMs;
+
+        // A statement that created or dropped an object has just invalidated
+        // what completion is offering.
+        if (changesCatalog(statement)) {
+          void catalog.refresh();
+        }
 
         resultsPane =
           result.rowsAffected !== null
@@ -308,6 +332,7 @@ function main(): void {
     workspace.activeId = id;
     editor.setValue(active().sql);
     contextPicker.set(active().context);
+    syncCatalog();
     resetOutput();
     persist();
     renderTabs();
@@ -322,6 +347,7 @@ function main(): void {
     workspace.activeId = worksheet.id;
     editor.setValue("");
     contextPicker.set(worksheet.context);
+    syncCatalog();
     resetOutput();
     persist();
     renderTabs();
@@ -349,6 +375,7 @@ function main(): void {
 
     editor.setValue(active().sql);
     contextPicker.set(active().context);
+    syncCatalog();
     resetOutput();
     persist();
     renderTabs();
@@ -477,6 +504,7 @@ function main(): void {
     workspace.activeId = worksheet.id;
     editor.setValue(sql);
     contextPicker.set(context);
+    syncCatalog();
     resetOutput();
     persist();
     renderTabs();
@@ -503,6 +531,7 @@ function main(): void {
   renderTabs();
   updateRunAll();
   showTab("results");
+  syncCatalog();
   editor.focus();
   void showHealth(root);
 }
