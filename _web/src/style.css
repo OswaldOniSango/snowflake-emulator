@@ -587,6 +587,40 @@ table.grid .rn {
   border-bottom: 1px solid var(--line-soft);
 }
 
+.explorer-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.catalog-refresh {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  color: var(--ink-3);
+  font-size: 17px;
+  line-height: 1;
+}
+
+.catalog-refresh:hover:not(:disabled) {
+  background: var(--panel-2);
+  color: var(--ink);
+}
+
+.catalog-refresh:disabled {
+  cursor: wait;
+  opacity: 0.55;
+  animation: catalog-refresh-spin 0.8s linear infinite;
+}
+
+@keyframes catalog-refresh-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .eyebrow {
   font-size: 9.5px;
   letter-spacing: 0.14em;

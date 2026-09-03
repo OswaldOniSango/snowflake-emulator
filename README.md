@@ -77,6 +77,32 @@ docker run -p 8080:8080 -v snowflake-data:/data \
   ghcr.io/nnnkkk7/snowflake-emulator:latest
 ```
 
+#### Build and Run Local Changes with Docker
+
+From the repository root, build a local image:
+
+```bash
+docker build -t snowflake-emulator .
+```
+
+Confirm that the image exists:
+
+```bash
+docker images snowflake-emulator
+```
+
+Start the emulator:
+
+```bash
+docker run --rm \
+  --name snowflake-emulator \
+  -p 8080:8080 \
+  snowflake-emulator
+```
+
+Open `http://localhost:8080` in a browser. Press `Ctrl+C` to stop the
+container; `--rm` removes the stopped container automatically.
+
 ### Build from Source (Linux x86_64)
 
 Prerequisites:

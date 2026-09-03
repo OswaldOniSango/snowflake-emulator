@@ -46,26 +46,78 @@ export function createExplorer(options: ExplorerOptions): Explorer {
   let databases: DatabaseNode[] = [];
   let error: string | null = null;
   let filter = "";
+  let refreshing = false;
 
   const root = document.createElement("div");
   root.className = "explorer";
   options.parent.append(root);
 
   async function refresh(): Promise<void> {
+    const previous = new Map(databases.map((database) => [database.name, database]));
+    refreshing = true;
+    render();
     try {
       const found = await listDatabases();
       databases = found.map((database) => ({
         name: database.name,
-        open: false,
+        open: previous.get(database.name)?.open ?? false,
         schemas: null,
         error: null,
         loading: false,
       }));
       error = null;
+
+      await Promise.all(
+        databases
+          .filter((database) => database.open)
+          .map((database) => loadSchemas(database, previous.get(database.name))),
+      );
     } catch (cause) {
       error = messageOf(cause);
+    } finally {
+      refreshing = false;
+      render();
     }
-    render();
+  }
+
+  async function loadSchemas(node: DatabaseNode, previous?: DatabaseNode): Promise<void> {
+    node.loading = true;
+    try {
+      const previousSchemas = new Map(
+        (previous?.schemas ?? []).map((schema) => [schema.name, schema]),
+      );
+      const found = await listSchemas(node.name);
+      node.schemas = found.map((schema) => ({
+        name: schema.name,
+        open: previousSchemas.get(schema.name)?.open ?? false,
+        objects: null,
+        error: null,
+        loading: false,
+      }));
+      node.error = null;
+
+      await Promise.all(
+        node.schemas
+          .filter((schema) => schema.open)
+          .map((schema) => loadObjects(node.name, schema)),
+      );
+    } catch (cause) {
+      node.error = messageOf(cause);
+    } finally {
+      node.loading = false;
+    }
+  }
+
+  async function loadObjects(database: string, node: SchemaNode): Promise<void> {
+    node.loading = true;
+    try {
+      node.objects = await listSchemaObjects(database, node.name);
+      node.error = null;
+    } catch (cause) {
+      node.error = messageOf(cause);
+    } finally {
+      node.loading = false;
+    }
   }
 
   async function toggleDatabase(node: DatabaseNode): Promise<void> {
@@ -77,22 +129,8 @@ export function createExplorer(options: ExplorerOptions): Explorer {
 
     node.loading = true;
     render();
-    try {
-      const found = await listSchemas(node.name);
-      node.schemas = found.map((schema) => ({
-        name: schema.name,
-        open: false,
-        objects: null,
-        error: null,
-        loading: false,
-      }));
-      node.error = null;
-    } catch (cause) {
-      node.error = messageOf(cause);
-    } finally {
-      node.loading = false;
-      render();
-    }
+    await loadSchemas(node);
+    render();
   }
 
   async function toggleSchema(database: DatabaseNode, node: SchemaNode): Promise<void> {
@@ -104,15 +142,8 @@ export function createExplorer(options: ExplorerOptions): Explorer {
 
     node.loading = true;
     render();
-    try {
-      node.objects = await listSchemaObjects(database.name, node.name);
-      node.error = null;
-    } catch (cause) {
-      node.error = messageOf(cause);
-    } finally {
-      node.loading = false;
-      render();
-    }
+    await loadObjects(database.name, node);
+    render();
   }
 
   function render(): void {
@@ -126,6 +157,19 @@ export function createExplorer(options: ExplorerOptions): Explorer {
     const label = document.createElement("div");
     label.className = "eyebrow";
     label.textContent = "Objects";
+
+    const reload = document.createElement("button");
+    reload.type = "button";
+    reload.className = "catalog-refresh";
+    reload.textContent = "↻";
+    reload.title = "Refresh objects";
+    reload.setAttribute("aria-label", "Refresh objects");
+    reload.disabled = refreshing;
+    reload.addEventListener("click", () => void refresh());
+
+    const title = document.createElement("div");
+    title.className = "explorer-title";
+    title.append(label, reload);
 
     const search = document.createElement("input");
     search.type = "search";
@@ -143,7 +187,7 @@ export function createExplorer(options: ExplorerOptions): Explorer {
     box.className = "filter";
     box.append(search);
 
-    head.append(label, box);
+    head.append(title, box);
     return head;
   }
 
