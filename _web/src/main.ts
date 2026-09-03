@@ -273,16 +273,17 @@ function main(): void {
           void catalog.refresh();
         }
 
-        shownResult = result.rowsAffected === null && result.rows.length > 0 ? result : null;
+        // A query always shows its grid, empty or not: the columns say what
+        // was asked for. Only a statement with no result set at all — a DDL or
+        // a DML — is reported as a notice.
+        shownResult = result.rowsAffected === null ? result : null;
         resultsPane =
           result.rowsAffected !== null
             ? renderNotice(
                 "info",
                 `${result.rowsAffected} ${result.rowsAffected === 1 ? "row" : "rows"} affected`,
               )
-            : result.rows.length === 0
-              ? renderNotice("info", "Statement returned no rows")
-              : withTruncationNotice(result);
+            : withTruncationNotice(result);
 
         setStatus(
           "ok",

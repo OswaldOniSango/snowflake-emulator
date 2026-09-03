@@ -214,11 +214,11 @@ func (h *RestAPIv2Handler) runStatement(
 		return h.buildStatementResponse(stmt, result)
 	}
 
-	// DDL and DML carry no result set, so there is nothing to store — but the
-	// statement still has to be marked finished. Without this it stays
-	// "running" for as long as it is retained, and every INSERT in the history
-	// reads as though it never completed.
-	h.stmtMgr.UpdateStatus(stmt.Handle, query.StatementStatusSuccess)
+	// DDL and DML carry no result set, only a rows-affected count. Recording
+	// it — rather than a bare UpdateStatus — is what lets a later poll of this
+	// handle (GetStatement, on the asynchronous path) answer with the same
+	// count instead of an empty result with no rows-affected column at all.
+	h.stmtMgr.SetExecResult(stmt.Handle, execResult.RowsAffected)
 	return h.buildExecResponse(stmt, execResult)
 }
 
@@ -244,10 +244,18 @@ func (h *RestAPIv2Handler) GetStatement(w http.ResponseWriter, r *http.Request) 
 			CreatedOn:          stmt.CreatedOn.UnixMilli(),
 		}
 	case query.StatementStatusSuccess:
-		// A DDL or DML statement succeeds without a result set. Polling one by
-		// handle is ordinary now that statements can run asynchronously, so
-		// this answers with the success rather than dereferencing a nil.
-		if stmt.Result == nil {
+		switch {
+		case stmt.Result != nil:
+			resp = h.buildStatementResponse(stmt, stmt.Result)
+		case stmt.RowsAffected != nil:
+			// A DDL or DML statement, polled by handle now that statements can
+			// run asynchronously. Answering with the same shape SubmitStatement
+			// would have is what lets a reader see "N rows affected" rather
+			// than an empty result with no rows-affected column at all.
+			resp = h.buildExecResponse(stmt, &query.ExecResult{RowsAffected: *stmt.RowsAffected})
+		default:
+			// Neither is set only for a statement whose success predates this
+			// distinction — there is no rows-affected count to report.
 			resp = types.StatementResponse{
 				StatementHandle:    stmt.Handle,
 				Code:               types.ResponseCodeSuccess,
@@ -261,9 +269,7 @@ func (h *RestAPIv2Handler) GetStatement(w http.ResponseWriter, r *http.Request) 
 				},
 				Data: [][]interface{}{},
 			}
-			break
 		}
-		resp = h.buildStatementResponse(stmt, stmt.Result)
 	case query.StatementStatusFailed:
 		resp = types.StatementResponse{
 			StatementHandle:    stmt.Handle,

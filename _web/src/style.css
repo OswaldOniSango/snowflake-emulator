@@ -1365,3 +1365,11 @@ table.grid .rn {
 .wtab.drop-after {
   box-shadow: inset -2px 0 0 var(--accent);
 }
+
+/* An empty result keeps its header row; this says so without looking broken. */
+table.grid tr.empty td {
+  padding: 14px 12px;
+  color: var(--ink-3);
+  font-style: italic;
+  text-align: center;
+}
