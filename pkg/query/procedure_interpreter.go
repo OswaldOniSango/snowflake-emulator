@@ -193,7 +193,11 @@ func (i *procedureInterpreter) rewriteTemporaryTableReferences(sql string) (stri
 	for _, pattern := range contextualTablePatterns {
 		result = pattern.ReplaceAllStringFunc(result, func(match string) string {
 			parts := pattern.FindStringSubmatch(match)
-			if len(parts) != 3 {
+			if len(parts) != 4 {
+				return match
+			}
+			call := parts[3]
+			if isTableFunctionCall(parts[1], call) {
 				return match
 			}
 			logicalName := strings.ToUpper(strings.TrimSpace(parts[2]))
@@ -204,7 +208,7 @@ func (i *procedureInterpreter) rewriteTemporaryTableReferences(sql string) (stri
 			if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(parts[1])), "DROP TABLE") {
 				droppedTemporaryTable = logicalName
 			}
-			return parts[1] + physicalName
+			return parts[1] + physicalName + call
 		})
 	}
 	return result, droppedTemporaryTable
