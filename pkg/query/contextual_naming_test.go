@@ -282,7 +282,7 @@ func TestCatalogAwarePreviewResolvesQualifiedNames(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PreviewTranslationWithContext() error = %v", err)
 	}
-	if preview.Translated != "select * from PREVIEW_DB.ANALYTICS_EVENTS" {
+	if preview.Translated != "SELECT * FROM PREVIEW_DB.ANALYTICS_EVENTS" {
 		t.Fatalf("translated preview = %q", preview.Translated)
 	}
 }

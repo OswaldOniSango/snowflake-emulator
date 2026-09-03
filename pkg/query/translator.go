@@ -3,20 +3,27 @@ package query
 import (
 	"fmt"
 	"strings"
-
-	"github.com/blastrain/vitess-sqlparser/sqlparser"
 )
 
-// Translator converts Snowflake SQL to DuckDB-compatible SQL using AST manipulation.
+// Translator converts Snowflake SQL to DuckDB-compatible SQL.
+//
+// Translation is lexical: the statement is scanned for function calls and each
+// one is replaced in place, leaving everything else — including the author's
+// own formatting — untouched. It used to parse the statement into a MySQL AST
+// and serialize it back, which could not survive Snowflake spellings the MySQL
+// grammar rejects, and rewrote the rest of the statement on the way through.
 type Translator struct {
 	functionMap map[string]FunctionTranslator
 }
 
 // FunctionTranslator defines how to translate a specific function.
+//
+// A function is either a straight rename, or too different to express as one
+// and replaced by a marker that handleComplexTransformations expands once the
+// whole statement has been scanned.
 type FunctionTranslator struct {
-	Handler func(fn *sqlparser.FuncExpr) sqlparser.Expr // Custom handler for complex transformations
-	Name    string                                      // DuckDB function name (for simple renames)
-	Marker  string                                      // Placeholder the lexical path emits for handler-based functions
+	Name   string // DuckDB function name, for a simple rename
+	Marker string // Placeholder emitted for a function that needs rewriting
 }
 
 // NewTranslator creates a new SQL translator with registered function mappings.
@@ -41,65 +48,27 @@ func (t *Translator) registerFunctions() {
 	t.functionMap["OBJECT_CONSTRUCT"] = FunctionTranslator{Name: "json_object"}
 	t.functionMap["FLATTEN"] = FunctionTranslator{Name: "UNNEST"}
 
-	// NVL2: Transform in-place by modifying the FuncExpr
-	// NVL2(a, b, c) → IF(a IS NOT NULL, b, c)
-	t.functionMap["NVL2"] = FunctionTranslator{
-		Marker: "__NVL2__",
-		Handler: func(fn *sqlparser.FuncExpr) sqlparser.Expr {
-			if len(fn.Exprs) != 3 {
-				return fn
-			}
-			// Modify the function name
-			fn.Name = sqlparser.NewColIdent("IF")
-			// Wrap the first argument with IS NOT NULL
-			if aliased, ok := fn.Exprs[0].(*sqlparser.AliasedExpr); ok {
-				aliased.Expr = &sqlparser.IsExpr{
-					Operator: "is not null",
-					Expr:     aliased.Expr,
-				}
-			}
-			return fn
-		},
-	}
+	// Functions with no DuckDB equivalent of the same shape. Each is replaced
+	// by its marker while scanning, and expanded once the whole statement has
+	// been rewritten — the expansion needs the argument text, which is only
+	// unambiguous after the call's parentheses have been matched.
+	//
+	// NVL2(a, b, c)            → IF(a IS NOT NULL, b, c)
+	// TO_VARIANT(x)            → CAST(x AS JSON)
+	// PARSE_JSON(x)            → CAST(x AS JSON)
+	// DATEADD(part, n, date)   → (date + INTERVAL n part)
+	// DATEDIFF(part, a, b)     → DATE_DIFF('part', a, b)
+	// CURRENT_TIMESTAMP and CURRENT_DATE are keywords in DuckDB, not functions,
+	// so the empty parentheses Snowflake allows have to come off. Written
+	// without them they are not calls at all and the scanner leaves them be.
+	t.functionMap["CURRENT_TIMESTAMP"] = FunctionTranslator{Marker: "__CURRENT_TIMESTAMP__"}
+	t.functionMap["CURRENT_DATE"] = FunctionTranslator{Marker: "__CURRENT_DATE__"}
 
-	// TO_VARIANT: Marks for post-processing (can't replace node type with Walk)
-	t.functionMap["TO_VARIANT"] = FunctionTranslator{
-		Marker: "__TO_VARIANT__",
-		Handler: func(fn *sqlparser.FuncExpr) sqlparser.Expr {
-			// Mark for post-processing by setting a unique marker name
-			fn.Name = sqlparser.NewColIdent("__TO_VARIANT__")
-			return fn
-		},
-	}
-
-	// PARSE_JSON: Marks for post-processing
-	t.functionMap["PARSE_JSON"] = FunctionTranslator{
-		Marker: "__PARSE_JSON__",
-		Handler: func(fn *sqlparser.FuncExpr) sqlparser.Expr {
-			fn.Name = sqlparser.NewColIdent("__PARSE_JSON__")
-			return fn
-		},
-	}
-
-	// DATEADD: Marks for post-processing
-	// DATEADD(part, n, date) → (date + INTERVAL n part)
-	t.functionMap["DATEADD"] = FunctionTranslator{
-		Marker: "__DATEADD__",
-		Handler: func(fn *sqlparser.FuncExpr) sqlparser.Expr {
-			fn.Name = sqlparser.NewColIdent("__DATEADD__")
-			return fn
-		},
-	}
-
-	// DATEDIFF: Marks for post-processing
-	// DATEDIFF(part, start, end) → DATE_DIFF('part', start, end)
-	t.functionMap["DATEDIFF"] = FunctionTranslator{
-		Marker: "__DATEDIFF__",
-		Handler: func(fn *sqlparser.FuncExpr) sqlparser.Expr {
-			fn.Name = sqlparser.NewColIdent("__DATEDIFF__")
-			return fn
-		},
-	}
+	t.functionMap["NVL2"] = FunctionTranslator{Marker: "__NVL2__"}
+	t.functionMap["TO_VARIANT"] = FunctionTranslator{Marker: "__TO_VARIANT__"}
+	t.functionMap["PARSE_JSON"] = FunctionTranslator{Marker: "__PARSE_JSON__"}
+	t.functionMap["DATEADD"] = FunctionTranslator{Marker: "__DATEADD__"}
+	t.functionMap["DATEDIFF"] = FunctionTranslator{Marker: "__DATEDIFF__"}
 }
 
 // Translate converts Snowflake SQL to DuckDB-compatible SQL.
@@ -117,11 +86,10 @@ func (t *Translator) Translate(sql string) (string, error) {
 	// emulator catalog once SQL DDL and metadata creation are unified.
 	sql = translateCreateTableKind(sql)
 
-	// Skip AST transformation for DDL statements - they don't need function translation
-	// and the sqlparser adds unwanted backticks when serializing back to string
-	// Also skip SHOW/DESCRIBE/EXPLAIN which cause vitess-sqlparser to panic.
-	// leadingSQL looks past a leading comment: without it, a commented DDL or
-	// SHOW would reach the parser this branch exists to avoid.
+	// DDL and the SHOW family carry no function calls worth translating, and
+	// a CREATE TABLE body in particular holds type names that must not be
+	// touched. leadingSQL looks past a leading comment, so a commented DDL
+	// takes this branch too.
 	upperSQL := leadingSQL(sql)
 	if strings.HasPrefix(upperSQL, "CREATE ") ||
 		strings.HasPrefix(upperSQL, "DROP ") ||
@@ -134,47 +102,7 @@ func (t *Translator) Translate(sql string) (string, error) {
 		return sql, nil
 	}
 
-	// Vitess follows MySQL semantics and parses || as boolean OR. Snowflake and
-	// DuckDB both use it for string concatenation, so the AST cannot be used
-	// here — but the functions still have to be translated.
-	if strings.Contains(sql, "||") {
-		return t.handleComplexTransformations(t.translateFunctionsLexically(sql)), nil
-	}
-
-	// Parse the SQL statement into an AST
-	stmt, err := sqlparser.Parse(sql)
-	if err != nil {
-		// The parser follows MySQL syntax, so it rejects Snowflake spellings
-		// such as the "::" cast. Returning the statement untouched is only
-		// graceful when DuckDB knows the function, which it does not for IFF,
-		// NVL and the rest, so fall back to scanning instead of parsing.
-		return t.handleComplexTransformations(t.translateFunctionsLexically(sql)), nil
-	}
-
-	// Walk the AST and transform functions in-place
-	_ = sqlparser.Walk(func(node sqlparser.SQLNode) (bool, error) {
-		if n, ok := node.(*sqlparser.FuncExpr); ok {
-			funcName := strings.ToUpper(n.Name.String())
-			if translator, exists := t.functionMap[funcName]; exists {
-				if translator.Handler != nil {
-					// Apply handler - modifies the node in-place or marks it
-					translator.Handler(n)
-				} else if translator.Name != "" {
-					// Simple function rename - modify in-place
-					n.Name = sqlparser.NewColIdent(translator.Name)
-				}
-			}
-		}
-		return true, nil
-	}, stmt)
-
-	// Convert AST back to string
-	result := sqlparser.String(stmt)
-
-	// Apply post-processing for transformations that couldn't be done in-place
-	result = t.handleComplexTransformations(result)
-
-	return result, nil
+	return t.handleComplexTransformations(t.translateFunctionsLexically(sql)), nil
 }
 
 // translateCreateTableKind converts Snowflake CREATE TABLE modifiers that
@@ -201,12 +129,17 @@ func translateCreateTableKind(sql string) string {
 // handleComplexTransformations handles transformations that require more than simple renames.
 // This handles marked functions and CURRENT_TIMESTAMP/CURRENT_DATE.
 func (t *Translator) handleComplexTransformations(sql string) string {
-	// Remove "from dual" added by vitess-sqlparser (Oracle-style, not needed in DuckDB)
+	// DUAL is Oracle's one-row table, which Snowflake accepts and DuckDB has
+	// no need of: SELECT without FROM is already one row.
 	sql = removeDualSuffix(sql)
 
-	// Remove parentheses from CURRENT_TIMESTAMP() and CURRENT_DATE()
-	sql = strings.ReplaceAll(sql, "current_timestamp()", "CURRENT_TIMESTAMP")
-	sql = strings.ReplaceAll(sql, "current_date()", "CURRENT_DATE")
+	// CURRENT_TIMESTAMP() and CURRENT_DATE() lose their parentheses.
+	sql = t.transformMarkedFunction(sql, "__CURRENT_TIMESTAMP__", func(string) string {
+		return "CURRENT_TIMESTAMP"
+	})
+	sql = t.transformMarkedFunction(sql, "__CURRENT_DATE__", func(string) string {
+		return "CURRENT_DATE"
+	})
 
 	// Handle TO_VARIANT: __TO_VARIANT__(x) → CAST(x AS JSON)
 	sql = t.transformMarkedFunction(sql, "__TO_VARIANT__", func(args string) string {
