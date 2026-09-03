@@ -1,6 +1,8 @@
 // Package types provides API request/response types for Snowflake REST API v2.
 package types
 
+import "encoding/json"
+
 // SQL REST API v2 Types
 // Reference: https://docs.snowflake.com/en/developer-guide/sql-api/
 
@@ -159,6 +161,31 @@ type WarehouseRequest struct {
 	AutoSuspend int    `json:"auto_suspend,omitempty"`   // Seconds
 	AutoResume  bool   `json:"auto_resume,omitempty"`
 	Comment     string `json:"comment,omitempty"`
+}
+
+// UnmarshalJSON accepts both the Snowflake-style warehouse_size request field
+// and the size field returned by this API and reused by the web client.
+func (r *WarehouseRequest) UnmarshalJSON(data []byte) error {
+	var payload struct {
+		Name          string `json:"name"`
+		WarehouseSize string `json:"warehouse_size"`
+		Size          string `json:"size"`
+		AutoSuspend   int    `json:"auto_suspend"`
+		AutoResume    bool   `json:"auto_resume"`
+		Comment       string `json:"comment"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return err
+	}
+	r.Name = payload.Name
+	r.Size = payload.WarehouseSize
+	if r.Size == "" {
+		r.Size = payload.Size
+	}
+	r.AutoSuspend = payload.AutoSuspend
+	r.AutoResume = payload.AutoResume
+	r.Comment = payload.Comment
+	return nil
 }
 
 // WarehouseResponse represents warehouse information.
