@@ -17,6 +17,7 @@ COPY _web/package.json _web/package-lock.json ./_web/
 RUN --mount=type=cache,target=/root/.npm \
     npm --prefix _web ci
 
+COPY README.md ./README.md
 COPY _web/ ./_web/
 RUN npm --prefix _web run build && test -f /src/server/ui/dist/index.html
 
