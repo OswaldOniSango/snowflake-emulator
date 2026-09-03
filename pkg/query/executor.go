@@ -143,7 +143,7 @@ func (e *Executor) QueryWithContext(ctx context.Context, executionContext Execut
 	// Execute query
 	rows, err := e.mgr.Query(ctx, translatedSQL)
 	if err != nil {
-		return nil, fmt.Errorf("query execution error: %w", err)
+		return nil, fmt.Errorf("query execution error: %w", physicalNameError(err, executionContext))
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -400,23 +400,31 @@ func (e *Executor) ExecuteWithContext(ctx context.Context, executionContext Exec
 	if classifier.IsExecuteTask(sql) {
 		return e.taskProcessor.Execute(ctx, executionContext, sql)
 	}
+	if classifier.IsCreateSchema(sql) {
+		return e.executeCreateSchema(ctx, executionContext, sql)
+	}
+	if classifier.IsDropSchema(sql) {
+		return e.executeDropSchema(ctx, executionContext, sql)
+	}
 
 	// For CREATE TABLE, we need to register it in metadata
 	if classifier.IsCreateTable(sql) {
+		originalSQL := sql
 		rewrittenSQL, err := e.rewriteTablesWithContext(ctx, executionContext, sql)
 		if err != nil {
 			return nil, err
 		}
-		return e.executeCreateTable(ctx, rewrittenSQL)
+		return e.executeCreateTable(ctx, executionContext, originalSQL, rewrittenSQL)
 	}
 
 	// For DROP TABLE, we need to remove it from metadata
 	if classifier.IsDropTable(sql) {
+		originalSQL := sql
 		rewrittenSQL, err := e.rewriteTablesWithContext(ctx, executionContext, sql)
 		if err != nil {
 			return nil, err
 		}
-		return e.executeDropTable(ctx, rewrittenSQL)
+		return e.executeDropTable(ctx, executionContext, originalSQL, rewrittenSQL)
 	}
 
 	// Handle transaction control statements
@@ -465,7 +473,7 @@ func (e *Executor) executeRawWithContext(ctx context.Context, executionContext E
 	// Execute statement
 	result, err := e.mgr.Exec(ctx, translatedSQL)
 	if err != nil {
-		return nil, fmt.Errorf("execution error: %w", err)
+		return nil, fmt.Errorf("execution error: %w", physicalNameError(err, executionContext))
 	}
 
 	rowsAffected, err := result.RowsAffected()
@@ -482,7 +490,7 @@ func (e *Executor) executeRawWithContext(ctx context.Context, executionContext E
 }
 
 // executeCreateTable handles CREATE TABLE statements with metadata registration.
-func (e *Executor) executeCreateTable(ctx context.Context, sql string) (*ExecResult, error) {
+func (e *Executor) executeCreateTable(ctx context.Context, executionContext ExecutionContext, originalSQL, sql string) (*ExecResult, error) {
 	// Execute the CREATE TABLE in DuckDB first
 	translatedSQL, err := e.translator.Translate(sql)
 	if err != nil {
@@ -493,9 +501,9 @@ func (e *Executor) executeCreateTable(ctx context.Context, sql string) (*ExecRes
 		return nil, fmt.Errorf("create table execution error: %w", err)
 	}
 
-	// Note: In a full implementation, we would parse the CREATE TABLE statement
-	// and register it in metadata. For now, we just execute it.
-	// This would require SQL parsing to extract table name, columns, etc.
+	if err := e.registerSQLTable(ctx, executionContext, originalSQL); err != nil {
+		return nil, err
+	}
 
 	return &ExecResult{
 		RowsAffected: 0,
@@ -503,7 +511,7 @@ func (e *Executor) executeCreateTable(ctx context.Context, sql string) (*ExecRes
 }
 
 // executeDropTable handles DROP TABLE statements with metadata cleanup.
-func (e *Executor) executeDropTable(ctx context.Context, sql string) (*ExecResult, error) {
+func (e *Executor) executeDropTable(ctx context.Context, executionContext ExecutionContext, originalSQL, sql string) (*ExecResult, error) {
 	// Execute the DROP TABLE in DuckDB first
 	translatedSQL, err := e.translator.Translate(sql)
 	if err != nil {
@@ -514,8 +522,9 @@ func (e *Executor) executeDropTable(ctx context.Context, sql string) (*ExecResul
 		return nil, fmt.Errorf("drop table execution error: %w", err)
 	}
 
-	// Note: In a full implementation, we would remove the table from metadata.
-	// This would require SQL parsing to extract the table name.
+	if err := e.unregisterSQLTable(ctx, executionContext, originalSQL); err != nil {
+		return nil, err
+	}
 
 	return &ExecResult{
 		RowsAffected: 0,

@@ -1,0 +1,32 @@
+{
+  "name": "mallard-console",
+  "description": "Web console for the Snowflake emulator",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "npm run generate && vite",
+    "build": "npm run generate && npm run typecheck && vite build && node scripts/publish-dist.mjs",
+    "typecheck": "npm run generate && tsc --noEmit",
+    "lint": "eslint .",
+    "test": "npm run generate && vitest run",
+    "preview": "vite preview",
+    "generate": "node scripts/generate-limitations.mjs"
+  },
+  "devDependencies": {
+    "@codemirror/commands": "^6.11.0",
+    "@codemirror/lang-sql": "^6.10.0",
+    "@codemirror/state": "^6.7.2",
+    "@codemirror/view": "^6.43.10",
+    "@eslint/js": "^9.39.1",
+    "@types/node": "^24.10.1",
+    "codemirror": "^6.0.2",
+    "eslint": "^9.39.1",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.46.4",
+    "vite": "^7.1.12",
+    "vitest": "^3.2.4"
+  }
+}

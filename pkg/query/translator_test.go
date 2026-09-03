@@ -229,7 +229,7 @@ func TestTranslator_DateTimeFunctions(t *testing.T) {
 		{
 			name:     "DATEADD_Translation",
 			input:    "SELECT DATEADD(day, 7, order_date) FROM orders",
-			expected: "select (CAST(order_date AS DATE) + interval 7 day) from orders",
+			expected: "select (CAST(order_date AS DATE) + interval (7) day) from orders",
 			wantErr:  false,
 		},
 		{
@@ -553,37 +553,37 @@ func TestTranslator_DATEADD(t *testing.T) {
 		{
 			name:     "DATEADDDays",
 			input:    "SELECT DATEADD(day, 7, order_date) FROM orders",
-			expected: "select (CAST(order_date AS DATE) + interval 7 day) from orders",
+			expected: "select (CAST(order_date AS DATE) + interval (7) day) from orders",
 			wantErr:  false,
 		},
 		{
 			name:     "DATEADDMonths",
 			input:    "SELECT DATEADD(month, 1, start_date) FROM subscriptions",
-			expected: "select (CAST(start_date AS DATE) + interval 1 month) from subscriptions",
+			expected: "select (CAST(start_date AS DATE) + interval (1) month) from subscriptions",
 			wantErr:  false,
 		},
 		{
 			name:     "DATEADDYears",
 			input:    "SELECT DATEADD(year, 5, birth_date) FROM users",
-			expected: "select (CAST(birth_date AS DATE) + interval 5 year) from users",
+			expected: "select (CAST(birth_date AS DATE) + interval (5) year) from users",
 			wantErr:  false,
 		},
 		{
 			name:     "DATEADDNegative",
 			input:    "SELECT DATEADD(day, -30, CURRENT_DATE()) FROM dual",
-			expected: "select (CAST(CURRENT_DATE AS DATE) + interval -30 day)",
+			expected: "select (CAST(CURRENT_DATE AS DATE) + interval (-30) day)",
 			wantErr:  false,
 		},
 		{
 			name:     "DATEADDHours",
 			input:    "SELECT DATEADD(hour, 24, created_at) FROM events",
-			expected: "select (CAST(created_at AS DATE) + interval 24 hour) from events",
+			expected: "select (CAST(created_at AS DATE) + interval (24) hour) from events",
 			wantErr:  false,
 		},
 		{
 			name:     "MultipleDATEADD",
 			input:    "SELECT DATEADD(day, 1, date1), DATEADD(month, 2, date2) FROM test",
-			expected: "select (CAST(date1 AS DATE) + interval 1 day), (CAST(date2 AS DATE) + interval 2 month) from test",
+			expected: "select (CAST(date1 AS DATE) + interval (1) day), (CAST(date2 AS DATE) + interval (2) month) from test",
 			wantErr:  false,
 		},
 	}
@@ -739,9 +739,12 @@ func TestTranslator_FLATTEN(t *testing.T) {
 			wantErr:  false,
 		},
 		{
-			name:     "FLATTENWithNamedParam_GracefulDegradation",
+			// The parser rejects "=>", so this goes through the lexical path.
+			// It used to come back untranslated, and then failed in DuckDB,
+			// which has no FLATTEN.
+			name:     "FLATTENWithNamedParam",
 			input:    "SELECT * FROM TABLE(FLATTEN(input => array_col))",
-			expected: "SELECT * FROM TABLE(FLATTEN(input => array_col))", // Parser fails on => syntax
+			expected: "SELECT * FROM TABLE(UNNEST(input => array_col))",
 			wantErr:  false,
 		},
 	}
@@ -824,7 +827,7 @@ func TestTranslator_CombinedFunctions(t *testing.T) {
 		{
 			name:     "NVL2WithDATEADD",
 			input:    "SELECT NVL2(end_date, DATEADD(day, 7, end_date), CURRENT_DATE()) FROM projects",
-			expected: "select IF(end_date is not null, (CAST(end_date AS DATE) + interval 7 day), CURRENT_DATE) from projects",
+			expected: "select IF(end_date is not null, (CAST(end_date AS DATE) + interval (7) day), CURRENT_DATE) from projects",
 			wantErr:  false,
 		},
 		{
@@ -939,10 +942,13 @@ func TestTranslator_ErrorCases(t *testing.T) {
 			expectedContains: "SELECT FROM", // Returns original
 		},
 		{
-			name:             "UnbalancedParentheses_GracefulDegradation",
+			// Malformed either way: DuckDB rejects it whether or not IFF was
+			// translated. What matters is that translation no longer depends
+			// on the statement being parseable.
+			name:             "UnbalancedParentheses",
 			input:            "SELECT IFF(age > 18, 'adult' FROM users",
 			wantErr:          false,
-			expectedContains: "SELECT IFF(age > 18, 'adult' FROM users", // Returns original
+			expectedContains: "SELECT IF(age > 18, 'adult' FROM users",
 		},
 		{
 			name:             "CompletelyInvalidSQL",
@@ -1028,9 +1034,11 @@ func TestTranslator_EdgeCases(t *testing.T) {
 			wantErr:  false,
 		},
 		{
+			// The parser cannot read a derived table, so IFF inside a subquery
+			// used to survive untranslated all the way to DuckDB.
 			name:     "SubqueryWithFunctions",
 			input:    "SELECT * FROM (SELECT IFF(a, 1, 0) AS flag FROM test) WHERE flag = 1",
-			expected: "SELECT * FROM (SELECT IFF(a, 1, 0) AS flag FROM test) WHERE flag = 1", // Subquery parsing fails, returns original
+			expected: "SELECT * FROM (SELECT IF(a, 1, 0) AS flag FROM test) WHERE flag = 1",
 			wantErr:  false,
 		},
 		{

@@ -39,6 +39,12 @@ func TestManager_CreateWarehouse(t *testing.T) {
 			wantErr:       false,
 		},
 		{
+			name:          "Mixed case size is normalized",
+			warehouseName: "SMALL_WH",
+			size:          "Small",
+			wantErr:       false,
+		},
+		{
 			name:          "Empty name",
 			warehouseName: "",
 			size:          "X-SMALL",
@@ -75,6 +81,9 @@ func TestManager_CreateWarehouse(t *testing.T) {
 				}
 				if tt.size == "" && wh.Size != "X-SMALL" {
 					t.Errorf("Expected default size X-SMALL, got %s", wh.Size)
+				}
+				if tt.size == "Small" && wh.Size != "SMALL" {
+					t.Errorf("Expected normalized size SMALL, got %s", wh.Size)
 				}
 				if wh.AutoResume != true {
 					t.Error("Expected AutoResume to be true")

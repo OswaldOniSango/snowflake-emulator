@@ -1,6 +1,8 @@
 // Package types provides API request/response types for Snowflake REST API v2.
 package types
 
+import "encoding/json"
+
 // SQL REST API v2 Types
 // Reference: https://docs.snowflake.com/en/developer-guide/sql-api/
 
@@ -161,6 +163,31 @@ type WarehouseRequest struct {
 	Comment     string `json:"comment,omitempty"`
 }
 
+// UnmarshalJSON accepts both the Snowflake-style warehouse_size request field
+// and the size field returned by this API and reused by the web client.
+func (r *WarehouseRequest) UnmarshalJSON(data []byte) error {
+	var payload struct {
+		Name          string `json:"name"`
+		WarehouseSize string `json:"warehouse_size"`
+		Size          string `json:"size"`
+		AutoSuspend   int    `json:"auto_suspend"`
+		AutoResume    bool   `json:"auto_resume"`
+		Comment       string `json:"comment"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return err
+	}
+	r.Name = payload.Name
+	r.Size = payload.WarehouseSize
+	if r.Size == "" {
+		r.Size = payload.Size
+	}
+	r.AutoSuspend = payload.AutoSuspend
+	r.AutoResume = payload.AutoResume
+	r.Comment = payload.Comment
+	return nil
+}
+
 // WarehouseResponse represents warehouse information.
 type WarehouseResponse struct {
 	Name        string `json:"name"`
@@ -206,3 +233,76 @@ const (
 	ResponseCodeStatementPending  = "333334" // Statement still running
 	ResponseCodeStatementCanceled = "000604" // Statement canceled
 )
+
+// TranslateRequest represents POST /api/v2/translate request body.
+type TranslateRequest struct {
+	Statement string `json:"statement"`
+	Database  string `json:"database,omitempty"` // Execution context for short object names
+	Schema    string `json:"schema,omitempty"`
+}
+
+// TranslateResponse shows what a statement becomes on its way to DuckDB,
+// without executing it.
+type TranslateResponse struct {
+	Statement  string `json:"statement"`
+	Translated string `json:"translated"`
+
+	// HandledBy names the component that executes the statement. Several
+	// statement kinds are routed to processors before the translator sees
+	// them, and their final SQL is built elsewhere.
+	HandledBy string `json:"handledBy"`
+
+	// Complete reports whether Translated is the SQL DuckDB actually receives.
+	Complete bool `json:"complete"`
+
+	// Note explains why an incomplete preview is incomplete.
+	Note string `json:"note,omitempty"`
+}
+
+// SchemaObject is one entry in a schema's contents.
+type SchemaObject struct {
+	Name string `json:"name"`
+
+	// Kind is "table", "stream", "procedure", "task" or "stage".
+	Kind string `json:"kind"`
+
+	// Detail is a short, human-readable qualifier: a stream's source table, a
+	// procedure's arguments, a task's state.
+	Detail string `json:"detail,omitempty"`
+}
+
+// ListSchemaObjectsResponse lists everything a schema contains, in one call so
+// that a tree can expand a schema without fanning out.
+type ListSchemaObjectsResponse struct {
+	Database string         `json:"database"`
+	Schema   string         `json:"schema"`
+	Objects  []SchemaObject `json:"objects"`
+}
+
+// StatementHistoryEntry is one row of the statement history.
+type StatementHistoryEntry struct {
+	Handle      string `json:"statementHandle"`
+	Status      string `json:"status"`
+	Statement   string `json:"statement"`
+	Database    string `json:"database,omitempty"`
+	Schema      string `json:"schema,omitempty"`
+	Warehouse   string `json:"warehouse,omitempty"`
+	CreatedOn   int64  `json:"createdOn"`
+	CompletedOn int64  `json:"completedOn,omitempty"`
+
+	// DurationMs is set once a statement has finished.
+	DurationMs int64 `json:"durationMs,omitempty"`
+	NumRows    int   `json:"numRows"`
+
+	Code    string `json:"code,omitempty"`
+	Message string `json:"message,omitempty"`
+}
+
+// ListStatementsResponse is the statement history.
+type ListStatementsResponse struct {
+	Statements []StatementHistoryEntry `json:"statements"`
+
+	// RetainedFor says how long a statement is kept, so a reader can tell an
+	// empty history from a short one.
+	RetainedFor string `json:"retainedFor"`
+}

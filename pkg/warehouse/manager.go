@@ -66,7 +66,9 @@ func (m *Manager) CreateWarehouse(_ context.Context, name, size, comment string)
 		return nil, fmt.Errorf("warehouse %s already exists", normalizedName)
 	}
 
-	// Validate size
+	// Snowflake warehouse sizes are case-insensitive unquoted values. Store one
+	// canonical representation so every API read returns the same value.
+	size = strings.ToUpper(strings.TrimSpace(size))
 	if size == "" {
 		size = "X-SMALL" // Default size
 	}

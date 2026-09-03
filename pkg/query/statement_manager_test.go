@@ -275,3 +275,97 @@ func TestGenerateStatementHandle(t *testing.T) {
 		t.Errorf("Expected handle to start with '01', got %s", handle1)
 	}
 }
+
+func TestStatementManager_ListStatements(t *testing.T) {
+	manager := NewStatementManager(1 * time.Hour)
+
+	first := manager.CreateStatement("SELECT 1", "TEST_DB", "PUBLIC", "WH")
+	second := manager.CreateStatement("SELECT 2", "TEST_DB", "PUBLIC", "WH")
+	third := manager.CreateStatement("SELECT 3", "TEST_DB", "PUBLIC", "WH")
+
+	manager.SetResult(first.Handle, &Result{Rows: [][]interface{}{{1}, {2}}})
+	manager.SetError(second.Handle, apierror.NewSnowflakeError("001007", "boom"))
+
+	t.Run("most recent first", func(t *testing.T) {
+		got := manager.ListStatements(0)
+		if len(got) != 3 {
+			t.Fatalf("got %d statements, want 3", len(got))
+		}
+		if got[0].Handle != third.Handle {
+			t.Errorf("first entry = %q, want the newest statement", got[0].SQLText)
+		}
+		if got[2].Handle != first.Handle {
+			t.Errorf("last entry = %q, want the oldest statement", got[2].SQLText)
+		}
+	})
+
+	t.Run("carries the outcome", func(t *testing.T) {
+		byHandle := map[string]StatementSummary{}
+		for _, summary := range manager.ListStatements(0) {
+			byHandle[summary.Handle] = summary
+		}
+
+		succeeded := byHandle[first.Handle]
+		if succeeded.Status != StatementStatusSuccess {
+			t.Errorf("status = %q, want %q", succeeded.Status, StatementStatusSuccess)
+		}
+		if succeeded.RowCount != 2 {
+			t.Errorf("RowCount = %d, want 2", succeeded.RowCount)
+		}
+		if succeeded.CompletedOn == nil {
+			t.Error("a finished statement should carry a completion time")
+		}
+
+		failed := byHandle[second.Handle]
+		if failed.Status != StatementStatusFailed {
+			t.Errorf("status = %q, want %q", failed.Status, StatementStatusFailed)
+		}
+		if failed.ErrorCode != "001007" || failed.ErrorMessage == "" {
+			t.Errorf("error = %q/%q, want the recorded failure", failed.ErrorCode, failed.ErrorMessage)
+		}
+	})
+
+	t.Run("limit takes the most recent", func(t *testing.T) {
+		got := manager.ListStatements(2)
+		if len(got) != 2 {
+			t.Fatalf("got %d statements, want 2", len(got))
+		}
+		if got[0].Handle != third.Handle {
+			t.Error("a limited listing should keep the newest statements")
+		}
+	})
+
+	t.Run("zero means no limit", func(t *testing.T) {
+		if len(manager.ListStatements(0)) != 3 {
+			t.Error("a limit of zero should return everything")
+		}
+	})
+
+	t.Run("carries no result set", func(t *testing.T) {
+		// A history is scanned, not read: shipping every row back would make
+		// the listing arbitrarily large.
+		for _, summary := range manager.ListStatements(0) {
+			if summary.SQLText == "" {
+				t.Error("a summary should keep its SQL text")
+			}
+		}
+	})
+}
+
+func TestStatementManager_ListStatementsWhenEmpty(t *testing.T) {
+	manager := NewStatementManager(1 * time.Hour)
+
+	got := manager.ListStatements(0)
+	if got == nil {
+		t.Error("an empty history should be an empty slice, not nil")
+	}
+	if len(got) != 0 {
+		t.Errorf("got %d statements, want none", len(got))
+	}
+}
+
+func TestStatementManager_RetentionPeriod(t *testing.T) {
+	if got := NewStatementManager(90 * time.Minute).RetentionPeriod(); got != 90*time.Minute {
+		t.Errorf("RetentionPeriod() = %v, want 90m", got)
+	}
+}

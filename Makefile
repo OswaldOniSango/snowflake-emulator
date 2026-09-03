@@ -1,10 +1,15 @@
-.PHONY: all build test test-unit test-integration test-e2e test-all test-coverage lint fmt ci clean run docker-build docker-up docker-down docker-test docker-logs
+.PHONY: all build test test-unit test-integration test-e2e test-all test-coverage lint fmt ci clean run docker-build docker-up docker-down docker-test docker-logs ui-install ui-dev ui-build ui-test ui-lint ui-typecheck ui-clean ui-distclean
+
+# npm lives in _web/ — the leading underscore keeps node_modules invisible to the
+# Go toolchain, which otherwise compiles Go files shipped inside npm packages.
+NPM := npm --prefix _web
 
 # Default target
 all: build
 
-# Build all packages
-build:
+# Build all packages, with the web console embedded.
+# For a Node-free Go build, use: CGO_ENABLED=1 go build -o snowflake-emulator ./cmd/server
+build: ui-build
 	go build ./...
 
 # Run unit tests (pkg/ only) with race detection
@@ -39,13 +44,54 @@ lint:
 fmt:
 	gofmt -w .
 
-# CI target: lint + all tests (used by GitHub Actions)
-ci: lint test-all
+# CI target: mirrors the GitHub Actions workflow
+ci: lint test-all ui-lint ui-typecheck ui-test ui-build
 
-# Clean build artifacts
-clean:
+# Clean build artifacts (keeps server/ui/dist/.gitkeep so go:embed still compiles).
+# Frontend dependencies survive; use ui-distclean to drop those too.
+clean: ui-clean
 	rm -f coverage.out
 	go clean ./...
+
+# --- Web console ------------------------------------------------------------
+
+# Reinstall only when the manifest changes; the timestamp bump makes the
+# directory a valid Make target.
+_web/node_modules: _web/package.json _web/package-lock.json
+	$(NPM) ci
+	@touch _web/node_modules
+
+# Install frontend dependencies
+ui-install: _web/node_modules
+
+# Vite dev server on :5173, proxying /api and /health to the emulator on :8080
+ui-dev: _web/node_modules
+	$(NPM) run dev
+
+# Produce server/ui/dist, which cmd/server embeds
+ui-build: _web/node_modules
+	$(NPM) run build
+
+# Frontend unit tests
+ui-test: _web/node_modules
+	$(NPM) run test
+
+# Frontend linting
+ui-lint: _web/node_modules
+	$(NPM) run lint
+
+# Frontend type checking
+ui-typecheck: _web/node_modules
+	$(NPM) run typecheck
+
+# Remove build output, keeping the placeholder go:embed needs
+ui-clean:
+	rm -rf _web/dist
+	find server/ui/dist -mindepth 1 ! -name .gitkeep -delete
+
+# Also remove installed dependencies (forces a full npm ci next build)
+ui-distclean: ui-clean
+	rm -rf _web/node_modules
 
 # Run the server (default port 8080, in-memory DB)
 run:

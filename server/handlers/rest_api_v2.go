@@ -3,7 +3,9 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -129,7 +131,11 @@ func (h *RestAPIv2Handler) SubmitStatement(w http.ResponseWriter, r *http.Reques
 		h.stmtMgr.SetResult(stmt.Handle, result)
 		resp = h.buildStatementResponse(stmt, result)
 	} else {
-		// Build response for DDL/DML
+		// DDL and DML carry no result set, so there is nothing to store — but
+		// the statement still has to be marked finished. Without this it stays
+		// "running" for as long as it is retained, and every INSERT in the
+		// history reads as though it never completed.
+		h.stmtMgr.UpdateStatus(stmt.Handle, query.StatementStatusSuccess)
 		resp = h.buildExecResponse(stmt, execResult)
 	}
 
@@ -998,4 +1004,181 @@ func convertBindings(bindings map[string]*types.BindingValue) map[string]*query.
 		}
 	}
 	return result
+}
+
+// TranslateStatement handles POST /api/v2/translate.
+//
+// It answers what a statement becomes on its way to DuckDB without running it,
+// which is the emulator's one genuinely unusual view: every other console shows
+// the SQL you wrote, not the SQL that executes.
+func (h *RestAPIv2Handler) TranslateStatement(w http.ResponseWriter, r *http.Request) {
+	var req types.TranslateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.sendError(w, http.StatusBadRequest, "Invalid request body", types.SQLState42000)
+		return
+	}
+
+	if req.Statement == "" {
+		h.sendError(w, http.StatusBadRequest, "Statement is required", types.SQLState42000)
+		return
+	}
+
+	preview, err := h.executor.PreviewTranslationWithContext(r.Context(), req.Statement, query.ExecutionContext{
+		Database: req.Database,
+		Schema:   req.Schema,
+	})
+	if err != nil {
+		h.sendError(w, http.StatusBadRequest, err.Error(), types.SQLState42000)
+		return
+	}
+
+	resp := types.TranslateResponse{
+		Statement:  preview.Statement,
+		Translated: preview.Translated,
+		HandledBy:  string(preview.HandledBy),
+		Complete:   preview.Complete,
+		Note:       preview.Note,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		log.Printf("Failed to write translate response: %v", err)
+	}
+}
+
+// ListSchemaObjects handles GET /api/v2/databases/{database}/schemas/{schema}/objects.
+//
+// It answers with everything a schema contains in one call, so an object
+// explorer can expand a schema without issuing five requests. Tables come from
+// DuckDB rather than the catalog: _metadata_tables only records tables created
+// through the REST API, so a table created with SQL would otherwise be absent.
+func (h *RestAPIv2Handler) ListSchemaObjects(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	databaseName := chi.URLParam(r, "database")
+	schemaName := chi.URLParam(r, "schema")
+
+	database, err := h.repo.GetDatabaseByName(ctx, databaseName)
+	if err != nil {
+		h.sendError(w, http.StatusNotFound, "Database not found: "+databaseName, types.SQLState42000)
+		return
+	}
+
+	schema, err := h.repo.GetSchemaByName(ctx, database.ID, schemaName)
+	if err != nil {
+		h.sendError(w, http.StatusNotFound, "Schema not found: "+schemaName, types.SQLState42000)
+		return
+	}
+
+	objects := make([]types.SchemaObject, 0)
+
+	tables, err := h.repo.ListPhysicalTables(ctx, database.Name, schema.Name)
+	if err != nil {
+		h.sendError(w, http.StatusInternalServerError, err.Error(), types.SQLState42000)
+		return
+	}
+	for _, name := range tables {
+		objects = append(objects, types.SchemaObject{Name: name, Kind: "table"})
+	}
+
+	if streams, err := h.repo.ListStreams(ctx, schema.ID); err == nil {
+		for _, stream := range streams {
+			objects = append(objects, types.SchemaObject{
+				Name:   stream.Name,
+				Kind:   "stream",
+				Detail: "on " + stream.SourceTable,
+			})
+		}
+	}
+
+	if procedures, err := h.repo.ListProcedures(ctx, schema.ID); err == nil {
+		for _, procedure := range procedures {
+			objects = append(objects, types.SchemaObject{
+				Name:   procedure.Name,
+				Kind:   "procedure",
+				Detail: procedure.ReturnType,
+			})
+		}
+	}
+
+	if tasks, err := h.repo.ListTasks(ctx, schema.ID); err == nil {
+		for _, task := range tasks {
+			objects = append(objects, types.SchemaObject{
+				Name:   task.Name,
+				Kind:   "task",
+				Detail: task.State,
+			})
+		}
+	}
+
+	if stages, err := h.repo.ListStages(ctx, schema.ID); err == nil {
+		for _, stage := range stages {
+			objects = append(objects, types.SchemaObject{Name: stage.Name, Kind: "stage"})
+		}
+	}
+
+	resp := types.ListSchemaObjectsResponse{
+		Database: database.Name,
+		Schema:   schema.Name,
+		Objects:  objects,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		log.Printf("Failed to write schema objects response: %v", err)
+	}
+}
+
+// defaultHistoryLimit caps a history listing that asks for no limit of its own.
+const defaultHistoryLimit = 200
+
+// ListStatements handles GET /api/v2/statements.
+//
+// Statements live in memory for the manager's TTL, so this is a recent history
+// rather than a complete one: anything older, and everything from before a
+// restart, is gone. The response says so rather than leaving a reader to guess
+// why a statement they remember is missing.
+func (h *RestAPIv2Handler) ListStatements(w http.ResponseWriter, r *http.Request) {
+	limit := defaultHistoryLimit
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 0 {
+			h.sendError(w, http.StatusBadRequest, "limit must be a non-negative integer", types.SQLState42000)
+			return
+		}
+		limit = parsed
+	}
+
+	summaries := h.stmtMgr.ListStatements(limit)
+	entries := make([]types.StatementHistoryEntry, 0, len(summaries))
+
+	for i := range summaries {
+		summary := &summaries[i]
+		entry := types.StatementHistoryEntry{
+			Handle:    summary.Handle,
+			Status:    string(summary.Status),
+			Statement: summary.SQLText,
+			Database:  summary.Database,
+			Schema:    summary.Schema,
+			Warehouse: summary.Warehouse,
+			CreatedOn: summary.CreatedOn.UnixMilli(),
+			NumRows:   summary.RowCount,
+			Code:      summary.ErrorCode,
+			Message:   summary.ErrorMessage,
+		}
+		if summary.CompletedOn != nil {
+			entry.CompletedOn = summary.CompletedOn.UnixMilli()
+			entry.DurationMs = summary.CompletedOn.Sub(summary.CreatedOn).Milliseconds()
+		}
+		entries = append(entries, entry)
+	}
+
+	resp := types.ListStatementsResponse{
+		Statements:  entries,
+		RetainedFor: h.stmtMgr.RetentionPeriod().String(),
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		log.Printf("Failed to write statement history response: %v", err)
+	}
 }
