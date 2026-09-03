@@ -1286,3 +1286,38 @@ table.grid .rn {
   font-size: 11.5px;
   white-space: normal;
 }
+
+/* --- results export ------------------------------------------------------ */
+
+.dock-tabs {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+}
+
+.dock-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.dock-actions .ghost {
+  padding: 3px 9px;
+  font-size: 11px;
+}
+
+/* --- dragging a worksheet tab -------------------------------------------- */
+
+.wtab.dragging {
+  opacity: 0.45;
+}
+
+/* An insertion line, so the drop lands where the pointer says it will. */
+.wtab.drop-before {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.wtab.drop-after {
+  box-shadow: inset -2px 0 0 var(--accent);
+}

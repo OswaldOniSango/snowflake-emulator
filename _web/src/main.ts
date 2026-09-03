@@ -6,6 +6,7 @@ import { renderGrid, renderNotice } from "./grid";
 import { checkHealth } from "./health";
 import { createContextPicker } from "./context-picker";
 import { changesCatalog, createCatalog } from "./catalog";
+import { createExportControls } from "./export";
 import { createCompletionSource } from "./completion";
 import { createHistoryView } from "./history";
 import { createWarehousesView } from "./warehouses";
@@ -16,6 +17,7 @@ import { renderTranslation } from "./translation";
 import {
   loadWorkspace,
   nextWorksheetName,
+  reorderWorksheets,
   newWorksheet,
   saveWorkspace,
   type ExecutionContext,
@@ -75,9 +77,11 @@ const SHELL = `
       </div>
     </div>
 
-    <div class="dock-head" role="tablist" aria-label="Statement output">
-      <button class="dtab" data-tab="results" aria-selected="true" role="tab">Results</button>
-      <button class="dtab" data-tab="translation" aria-selected="false" role="tab">Translated SQL</button>
+    <div class="dock-head" data-role="dock-head">
+      <div role="tablist" aria-label="Statement output" class="dock-tabs">
+        <button class="dtab" data-tab="results" aria-selected="true" role="tab">Results</button>
+        <button class="dtab" data-tab="translation" aria-selected="false" role="tab">Translated SQL</button>
+      </div>
     </div>
 
     <section class="dock" data-role="dock" aria-live="polite"></section>
@@ -118,11 +122,18 @@ function main(): void {
   let activeTab: "results" | "translation" = "results";
   let resultsPane: HTMLElement = renderNotice("info", "Run a statement to see results here");
   let translationPane: HTMLElement | null = null;
+  // What the results tab is showing, or null when it holds a notice. Export
+  // reads this rather than re-running the statement.
+  let shownResult: Statement | null = null;
+  // The worksheet being dragged along the tab strip, or null when none is.
+  let dragged: string | null = null;
   let translatedStatement = "";
   let running = false;
 
   pick(root, "shortcut").textContent = isApplePlatform() ? "⌘↵" : "Ctrl+↵";
   pick(root, "theme").append(createThemeToggle());
+  const exportControls = createExportControls(() => shownResult);
+  pick(root, "dock-head").append(exportControls);
   pick(root, "limitations").append(createLimitationsButton());
 
   // Completion reads whatever the cache last loaded, so a namespace that has
@@ -243,6 +254,7 @@ function main(): void {
           void catalog.refresh();
         }
 
+        shownResult = result.rowsAffected === null && result.rows.length > 0 ? result : null;
         resultsPane =
           result.rowsAffected !== null
             ? renderNotice(
@@ -261,6 +273,7 @@ function main(): void {
       }
     } catch (cause) {
       const error = asStatementError(cause);
+      shownResult = null;
       resultsPane = renderNotice("error", firstLine(error.message), error.message);
       setStatus("err", "Failed", `${error.code} · SQLSTATE ${error.sqlState}`);
     } finally {
@@ -271,6 +284,28 @@ function main(): void {
     }
   }
 
+  /** Which side of a tab the pointer is on, so a drop lands where it looks. */
+  function dropSide(event: DragEvent, tab: HTMLElement): "before" | "after" {
+    const box = tab.getBoundingClientRect();
+    return event.clientX < box.left + box.width / 2 ? "before" : "after";
+  }
+
+  function moveWorksheet(draggedId: string, targetId: string, place: "before" | "after"): void {
+    const reordered = reorderWorksheets(workspace.worksheets, draggedId, targetId, place);
+    if (reordered === workspace.worksheets) {
+      return;
+    }
+    workspace.worksheets = reordered;
+    dragged = null;
+    persist();
+    renderTabs();
+  }
+
+  /** Export is offered only where it means something: rows, on the results tab. */
+  function updateExportControls(): void {
+    exportControls.hidden = activeTab !== "results" || shownResult === null;
+  }
+
   function setStatus(state: string, label: string, detail: string): void {
     pill.className = `pill ${state}`;
     pill.textContent = label;
@@ -279,6 +314,7 @@ function main(): void {
 
   function showTab(tab: "results" | "translation"): void {
     activeTab = tab;
+    updateExportControls();
     root!.querySelectorAll<HTMLElement>(".dtab").forEach((button) => {
       button.setAttribute("aria-selected", String(button.dataset["tab"] === tab));
     });
@@ -321,6 +357,7 @@ function main(): void {
   function resetOutput(): void {
     translationPane = null;
     translatedStatement = "";
+    shownResult = null;
     resultsPane = renderNotice("info", "Run a statement to see results here");
     setStatus("idle", "Idle", "no statement submitted");
   }
@@ -420,6 +457,44 @@ function main(): void {
       tab.className = "wtab";
       tab.setAttribute("role", "tab");
       tab.setAttribute("aria-selected", String(worksheet.id === workspace.activeId));
+      tab.draggable = true;
+
+      tab.addEventListener("dragstart", (event) => {
+        dragged = worksheet.id;
+        tab.classList.add("dragging");
+        if (event.dataTransfer) {
+          event.dataTransfer.effectAllowed = "move";
+          // Firefox starts no drag at all unless some data is set.
+          event.dataTransfer.setData("text/plain", worksheet.name);
+        }
+      });
+
+      tab.addEventListener("dragend", () => {
+        dragged = null;
+        renderTabs();
+      });
+
+      tab.addEventListener("dragover", (event) => {
+        if (dragged === null || dragged === worksheet.id) {
+          return;
+        }
+        // Without this the drop never fires: the default is to reject.
+        event.preventDefault();
+        tab.classList.toggle("drop-before", dropSide(event, tab) === "before");
+        tab.classList.toggle("drop-after", dropSide(event, tab) === "after");
+      });
+
+      tab.addEventListener("dragleave", () => {
+        tab.classList.remove("drop-before", "drop-after");
+      });
+
+      tab.addEventListener("drop", (event) => {
+        event.preventDefault();
+        if (dragged === null) {
+          return;
+        }
+        moveWorksheet(dragged, worksheet.id, dropSide(event, tab));
+      });
 
       const name = document.createElement("button");
       name.className = "wtab-name";
