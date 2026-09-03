@@ -292,6 +292,11 @@ export interface History {
   statements: HistoryEntry[];
   /** How long the emulator keeps a statement, as a Go duration. */
   retainedFor: string;
+  /**
+   * Whether the history survives a restart. It does only when the emulator was
+   * given a database file rather than the default in-memory one.
+   */
+  persistent?: boolean;
 }
 
 export function listWarehouses(fetchFn: typeof fetch = fetch): Promise<Warehouse[]> {

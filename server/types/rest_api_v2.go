@@ -323,4 +323,9 @@ type ListStatementsResponse struct {
 	// RetainedFor says how long a statement is kept, so a reader can tell an
 	// empty history from a short one.
 	RetainedFor string `json:"retainedFor"`
+
+	// Persistent says whether the history survives a restart. It does only
+	// when the emulator was given a database file rather than the default
+	// in-memory one.
+	Persistent bool `json:"persistent"`
 }

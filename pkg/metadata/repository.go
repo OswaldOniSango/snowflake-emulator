@@ -253,7 +253,11 @@ func (r *Repository) initMetadataTables(ctx context.Context) error {
 			execution_time_ms BIGINT DEFAULT 0,
 			error_message TEXT,
 			started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-			completed_at TIMESTAMP
+			completed_at TIMESTAMP,
+			error_code VARCHAR,
+			database_name VARCHAR,
+			schema_name VARCHAR,
+			warehouse VARCHAR
 		)`,
 		`CREATE TABLE IF NOT EXISTS _metadata_procedures (
 			id VARCHAR PRIMARY KEY,
@@ -301,6 +305,21 @@ func (r *Repository) initMetadataTables(ctx context.Context) error {
 	for _, query := range queries {
 		if _, err := r.mgr.Exec(ctx, query); err != nil {
 			return fmt.Errorf("failed to create metadata table: %w", err)
+		}
+	}
+
+	// A database file written before the console recorded a namespace has the
+	// history table without these columns. CREATE TABLE IF NOT EXISTS leaves
+	// such a table alone, so the columns are added separately.
+	migrations := []string{
+		`ALTER TABLE _metadata_query_history ADD COLUMN IF NOT EXISTS error_code VARCHAR`,
+		`ALTER TABLE _metadata_query_history ADD COLUMN IF NOT EXISTS database_name VARCHAR`,
+		`ALTER TABLE _metadata_query_history ADD COLUMN IF NOT EXISTS schema_name VARCHAR`,
+		`ALTER TABLE _metadata_query_history ADD COLUMN IF NOT EXISTS warehouse VARCHAR`,
+	}
+	for _, query := range migrations {
+		if _, err := r.mgr.Exec(ctx, query); err != nil {
+			return fmt.Errorf("failed to migrate metadata table: %w", err)
 		}
 	}
 

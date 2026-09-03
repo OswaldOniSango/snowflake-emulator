@@ -1158,10 +1158,10 @@ const defaultHistoryLimit = 200
 
 // ListStatements handles GET /api/v2/statements.
 //
-// Statements live in memory for the manager's TTL, so this is a recent history
-// rather than a complete one: anything older, and everything from before a
-// restart, is gone. The response says so rather than leaving a reader to guess
-// why a statement they remember is missing.
+// Statements are kept for a fixed period, so this is a recent history rather
+// than a complete one, and it survives a restart only when the emulator was
+// given a database file. The response reports both, rather than leaving a
+// reader to guess why a statement they remember is missing.
 func (h *RestAPIv2Handler) ListStatements(w http.ResponseWriter, r *http.Request) {
 	limit := defaultHistoryLimit
 	if raw := r.URL.Query().Get("limit"); raw != "" {
@@ -1173,7 +1173,7 @@ func (h *RestAPIv2Handler) ListStatements(w http.ResponseWriter, r *http.Request
 		limit = parsed
 	}
 
-	summaries := h.stmtMgr.ListStatements(limit)
+	summaries := h.stmtMgr.ListStatementsWithContext(r.Context(), limit)
 	entries := make([]types.StatementHistoryEntry, 0, len(summaries))
 
 	for i := range summaries {
@@ -1200,6 +1200,7 @@ func (h *RestAPIv2Handler) ListStatements(w http.ResponseWriter, r *http.Request
 	resp := types.ListStatementsResponse{
 		Statements:  entries,
 		RetainedFor: h.stmtMgr.RetentionPeriod().String(),
+		Persistent:  h.stmtMgr.HistoryIsPersistent(),
 	}
 
 	w.Header().Set("Content-Type", "application/json")
