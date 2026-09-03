@@ -35,8 +35,12 @@ type Statement struct {
 	CreatedOn   time.Time
 	CompletedOn *time.Time
 	Result      *Result
-	Error       *apierror.SnowflakeError
-	cancelFunc  context.CancelFunc
+	// RowsAffected is set instead of Result for a successful DDL or DML
+	// statement, which has no rows to return. A pointer distinguishes "not a
+	// DDL/DML success" from "affected zero rows".
+	RowsAffected *int64
+	Error        *apierror.SnowflakeError
+	cancelFunc   context.CancelFunc
 }
 
 // HistoryStore keeps statements past the manager's own retention, so that the
@@ -165,8 +169,9 @@ func (sm *StatementManager) GetStatement(handle string) (*Statement, bool) {
 
 // snapshot copies a statement's fields. It must be called with the lock held.
 //
-// Result and Error are shared rather than deep-copied: both are written once,
-// before the status that makes them reachable, and never modified afterwards.
+// Result, RowsAffected and Error are shared rather than deep-copied: each is
+// written once, before the status that makes it reachable, and never modified
+// afterwards.
 func snapshot(stmt *Statement) *Statement {
 	copied := *stmt
 	return &copied
@@ -216,6 +221,27 @@ func (sm *StatementManager) SetResult(handle string, result *Result) bool {
 	}
 
 	stmt.Result = result
+	stmt.Status = StatementStatusSuccess
+	now := time.Now()
+	stmt.CompletedOn = &now
+	summary := summarize(stmt)
+	sm.mu.Unlock()
+
+	sm.record(&summary)
+	return true
+}
+
+// SetExecResult records a successful DDL or DML statement, which has no
+// result set of its own — only how many rows it affected.
+func (sm *StatementManager) SetExecResult(handle string, rowsAffected int64) bool {
+	sm.mu.Lock()
+	stmt, ok := sm.statements[handle]
+	if !ok || stmt.Status == StatementStatusCanceled {
+		sm.mu.Unlock()
+		return false
+	}
+
+	stmt.RowsAffected = &rowsAffected
 	stmt.Status = StatementStatusSuccess
 	now := time.Now()
 	stmt.CompletedOn = &now

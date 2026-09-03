@@ -191,7 +191,11 @@ func TestCancellingAFinishedStatementIsRejected(t *testing.T) {
 
 // A DDL statement finishes with no result set. Polling one used to reach a
 // nil dereference, which nothing hit while every statement ran synchronously.
-func TestPollingADDLStatementReportsSuccessWithNoRows(t *testing.T) {
+// A DDL statement carries no result set, only a rows-affected count. Polling
+// one has to answer with that count in the same shape a synchronous
+// submission would — the "number of rows affected" column DML relies on —
+// rather than an empty result nothing can read a count out of.
+func TestPollingADDLStatementReportsItsRowsAffected(t *testing.T) {
 	_, router := setupRestAPIv2Handler(t)
 
 	_, accepted := submit(t, router,
@@ -201,10 +205,34 @@ func TestPollingADDLStatementReportsSuccessWithNoRows(t *testing.T) {
 	if final.Code != types.ResponseCodeSuccess {
 		t.Fatalf("code = %q, message %q", final.Code, final.Message)
 	}
-	if len(final.Data) != 0 {
-		t.Errorf("a DDL statement has no rows, got %v", final.Data)
+	if final.ResultSetMetaData == nil || len(final.ResultSetMetaData.RowType) != 1 ||
+		final.ResultSetMetaData.RowType[0].Name != "number of rows affected" {
+		t.Fatalf("expected the rows-affected column, got %+v", final.ResultSetMetaData)
 	}
-	if final.ResultSetMetaData == nil {
-		t.Error("the response should still describe an empty result set")
+	if len(final.Data) != 1 || len(final.Data[0]) != 1 {
+		t.Fatalf("expected one row of one column, got %v", final.Data)
+	}
+}
+
+// An INSERT's rows-affected count must survive being polled by handle, not
+// just answered synchronously — that is the whole point of recording it.
+func TestPollingADMLStatementReportsItsRowsAffected(t *testing.T) {
+	_, router := setupRestAPIv2Handler(t)
+
+	submit(t, router,
+		`{"statement":"CREATE TABLE POLLED_DML (id INT)","database":"TEST_DB","schema":"PUBLIC"}`)
+	_, accepted := submit(t, router,
+		`{"statement":"INSERT INTO POLLED_DML VALUES (1), (2), (3)","database":"TEST_DB","schema":"PUBLIC","async":true}`)
+	final := poll(t, router, accepted.StatementHandle)
+
+	if final.Code != types.ResponseCodeSuccess {
+		t.Fatalf("code = %q, message %q", final.Code, final.Message)
+	}
+	if len(final.Data) != 1 || len(final.Data[0]) != 1 {
+		t.Fatalf("expected one row of one column, got %v", final.Data)
+	}
+	count, ok := final.Data[0][0].(float64)
+	if !ok || int(count) != 3 {
+		t.Errorf("rows affected = %v, want 3", final.Data[0][0])
 	}
 }
