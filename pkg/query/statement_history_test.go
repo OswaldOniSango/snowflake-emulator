@@ -326,3 +326,42 @@ func TestACanceledStatementStaysCanceledInTheHistory(t *testing.T) {
 		t.Errorf("recorded status = %q, want canceled", got)
 	}
 }
+
+// Statements run on their own goroutines, so a caller polling one must not be
+// handed the manager's own copy to read while it is being written.
+func TestGetStatementHandsOutASnapshot(t *testing.T) {
+	manager := NewStatementManager(time.Hour)
+	created := manager.CreateStatement("SELECT 1", "TEST_DB", "PUBLIC", "")
+
+	first, ok := manager.GetStatement(created.Handle)
+	if !ok {
+		t.Fatal("the statement should be found")
+	}
+
+	manager.SetResult(created.Handle, &Result{Rows: [][]interface{}{{1}}})
+
+	if first.Status == StatementStatusSuccess {
+		t.Error("a snapshot taken before the result should not see it")
+	}
+
+	second, _ := manager.GetStatement(created.Handle)
+	if second.Status != StatementStatusSuccess {
+		t.Errorf("a snapshot taken after should: status = %q", second.Status)
+	}
+	if first == second {
+		t.Error("each call should answer with its own copy")
+	}
+}
+
+func TestCreateStatementDoesNotLeakTheManagersCopy(t *testing.T) {
+	manager := NewStatementManager(time.Hour)
+	created := manager.CreateStatement("SELECT 1", "TEST_DB", "PUBLIC", "")
+
+	// Writing through the returned statement must not reach the manager.
+	created.Status = StatementStatusFailed
+
+	held, _ := manager.GetStatement(created.Handle)
+	if held.Status != StatementStatusPending {
+		t.Errorf("status = %q, want pending", held.Status)
+	}
+}
