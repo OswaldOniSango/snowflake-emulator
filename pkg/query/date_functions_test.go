@@ -42,29 +42,29 @@ func TestTranslator_DateFunctionQuoting(t *testing.T) {
 		{
 			name:  "DATEADD with a bare part",
 			input: "SELECT DATEADD(day, 7, d)",
-			want:  "select (CAST(d AS DATE) + interval (7) day)",
+			want:  "SELECT (CAST(d AS DATE) + interval (7) day)",
 		},
 		{
 			name:  "DATEADD with a quoted part",
 			input: "SELECT DATEADD('day', 7, d)",
-			want:  "select (CAST(d AS DATE) + interval (7) day)",
+			want:  "SELECT (CAST(d AS DATE) + interval (7) day)",
 		},
 		{
 			// "interval -1 year" is a DuckDB syntax error, so the count is
 			// parenthesised. Subtracting an interval is the common case.
 			name:  "DATEADD with a negative offset",
 			input: "SELECT DATEADD(year, -1, d)",
-			want:  "select (CAST(d AS DATE) + interval (-1) year)",
+			want:  "SELECT (CAST(d AS DATE) + interval (-1) year)",
 		},
 		{
 			name:  "DATEDIFF with a bare part",
 			input: "SELECT DATEDIFF(day, a, b)",
-			want:  "select DATE_DIFF('day', CAST(a AS DATE), CAST(b AS DATE))",
+			want:  "SELECT DATE_DIFF('day', CAST(a AS DATE), CAST(b AS DATE))",
 		},
 		{
 			name:  "DATEDIFF with a quoted part",
 			input: "SELECT DATEDIFF('day', a, b)",
-			want:  "select DATE_DIFF('day', CAST(a AS DATE), CAST(b AS DATE))",
+			want:  "SELECT DATE_DIFF('day', CAST(a AS DATE), CAST(b AS DATE))",
 		},
 	}
 
