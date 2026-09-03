@@ -1,7 +1,14 @@
 import type { Statement } from "./api";
 import { formatCell, isNumericColumn } from "./format";
 
-/** Renders a result set. Values are set with textContent, never as markup. */
+/**
+ * Renders a result set. Values are set with textContent, never as markup.
+ *
+ * A query that matched nothing still renders its header row. The columns are
+ * the answer to "did this run against what I meant?", and a bare "no rows"
+ * notice throws them away — leaving a reader unable to tell an empty table
+ * from a query they got wrong.
+ */
 export function renderGrid(statement: Statement): HTMLElement {
   const wrapper = document.createElement("div");
   wrapper.className = "grid-wrap";
@@ -51,9 +58,25 @@ export function renderGrid(statement: Statement): HTMLElement {
     body.append(tr);
   });
 
+  if (statement.rows.length === 0) {
+    body.append(emptyRow(statement.columns.length + 1));
+  }
+
   table.append(body);
   wrapper.append(table);
   return wrapper;
+}
+
+/** Says the result is empty, spanning the grid so it reads as part of it. */
+function emptyRow(span: number): HTMLElement {
+  const row = document.createElement("tr");
+  row.className = "empty";
+
+  const cell = document.createElement("td");
+  cell.colSpan = span;
+  cell.textContent = "No rows";
+  row.append(cell);
+  return row;
 }
 
 /** A message pane: an empty result, a row count, or a failure. */

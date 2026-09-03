@@ -62,12 +62,6 @@ describe("renderGrid", () => {
     expect(cells.every((cell) => cell.classList.contains("num"))).toBe(true);
   });
 
-  it("renders an empty result without a body row", () => {
-    const grid = renderGrid(statement({ rows: [], totalRows: 0 }));
-
-    expect(grid.querySelectorAll("tbody tr")).toHaveLength(0);
-    expect(grid.querySelectorAll("thead th")).toHaveLength(3);
-  });
 });
 
 /**
@@ -134,5 +128,48 @@ describe("renderNotice", () => {
 
     expect(notice.querySelector("script")).toBeNull();
     expect(notice.querySelector("pre")?.textContent).toBe("<script>alert(1)</script>");
+  });
+});
+
+/**
+ * A query that matched nothing used to be reported as a bare notice, which
+ * threw away the one thing that says whether the query was the right one: its
+ * columns. The grid is rendered either way now.
+ */
+describe("renderGrid with no rows", () => {
+  const empty = () => renderGrid(statement({ rows: [], totalRows: 0 }));
+
+  it("still shows every column in the header", () => {
+    expect(text(empty(), "thead th")).toEqual(["", "idNUMBER", "emailTEXT"]);
+  });
+
+  it("says the result is empty rather than showing a blank table", () => {
+    expect(text(empty(), "tbody tr.empty td")).toEqual(["No rows"]);
+  });
+
+  it("spans the empty message across the header, gutter included", () => {
+    const cell = empty().querySelector<HTMLTableCellElement>("tbody tr.empty td");
+
+    expect(cell?.colSpan).toBe(3);
+  });
+
+  it("has no data rows to read", () => {
+    const rows = [...empty().querySelectorAll("tbody tr")];
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.className).toBe("empty");
+  });
+
+  it("leaves a result that does have rows alone", () => {
+    expect(renderGrid(statement()).querySelector("tbody tr.empty")).toBeNull();
+  });
+
+  it("renders a column named like markup as text", () => {
+    const grid = renderGrid(
+      statement({ columns: [{ name: "<img src=x>", type: "TEXT", nullable: true }], rows: [], totalRows: 0 }),
+    );
+
+    expect(grid.querySelector("img")).toBeNull();
+    expect(grid.querySelector("thead th:nth-child(2)")?.textContent).toBe("<img src=x>TEXT");
   });
 });

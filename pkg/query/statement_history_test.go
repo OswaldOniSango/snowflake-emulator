@@ -95,6 +95,49 @@ func TestSetResultRecordsTheStatement(t *testing.T) {
 	}
 }
 
+func TestSetExecResultRecordsTheStatement(t *testing.T) {
+	manager, store := managerWithHistory(t)
+
+	stmt := manager.CreateStatement("INSERT INTO t VALUES (1)", "TEST_DB", "PUBLIC", "")
+	if !manager.SetExecResult(stmt.Handle, 1) {
+		t.Fatal("SetExecResult should succeed for a statement that exists")
+	}
+
+	got, ok := manager.GetStatement(stmt.Handle)
+	if !ok {
+		t.Fatal("the statement should still be found")
+	}
+	if got.Status != StatementStatusSuccess {
+		t.Errorf("status = %q, want success", got.Status)
+	}
+	if got.RowsAffected == nil || *got.RowsAffected != 1 {
+		t.Errorf("RowsAffected = %v, want a pointer to 1", got.RowsAffected)
+	}
+	if got.Result != nil {
+		t.Error("a DDL/DML statement carries no result set")
+	}
+	if store.count() != 1 {
+		t.Errorf("expected the statement to be recorded, got %d records", store.count())
+	}
+}
+
+func TestSetExecResultRefusesACanceledStatement(t *testing.T) {
+	manager := NewStatementManager(time.Hour)
+	stmt := manager.CreateStatement("CREATE TABLE t (id INT)", "TEST_DB", "PUBLIC", "")
+	manager.UpdateStatus(stmt.Handle, StatementStatusRunning)
+	if err := manager.CancelStatement(stmt.Handle); err != nil {
+		t.Fatalf("CancelStatement failed: %v", err)
+	}
+
+	if manager.SetExecResult(stmt.Handle, 0) {
+		t.Error("a rows-affected count arriving after cancellation should be refused")
+	}
+	got, _ := manager.GetStatement(stmt.Handle)
+	if got.Status != StatementStatusCanceled {
+		t.Errorf("status = %q, want canceled", got.Status)
+	}
+}
+
 func TestSetErrorRecordsTheFailure(t *testing.T) {
 	manager, store := managerWithHistory(t)
 
