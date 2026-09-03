@@ -8,6 +8,7 @@ function translation(overrides: Partial<Translation> = {}): Translation {
     translated: "select IF(a, 'y', 'n') from TEST_DB.PUBLIC_USERS",
     handledBy: "translator",
     complete: true,
+    rewrites: [],
     ...overrides,
   };
 }
@@ -88,5 +89,45 @@ describe("renderTranslation does not treat SQL as markup", () => {
     );
 
     expect(pane.querySelector("img")).toBeNull();
+  });
+});
+
+/**
+ * The rewrite list is required, so a fixture that omitted it stopped
+ * compiling the moment the field landed. This pins the panel's behaviour with
+ * and without rewrites so the two stay in step.
+ */
+describe("renderTranslation with rewrites", () => {
+  it("lists each substitution and why it happened", () => {
+    const pane = renderTranslation(
+      translation({
+        rewrites: [
+          { from: "IFF", to: "IF", kind: "function" },
+          { from: "USERS", to: "TEST_DB.PUBLIC_USERS", kind: "object" },
+        ],
+      }),
+    );
+
+    const rows = [...pane.querySelectorAll(".rewrites tbody tr")].map((row) =>
+      [...row.querySelectorAll("td")].map((cell) => cell.textContent),
+    );
+
+    expect(rows).toEqual([
+      ["IFF", "IF", "DuckDB has no such function"],
+      ["USERS", "TEST_DB.PUBLIC_USERS", "Resolved against the worksheet's database and schema"],
+    ]);
+  });
+
+  it("shows no table when nothing was rewritten", () => {
+    expect(renderTranslation(translation()).querySelector(".rewrites")).toBeNull();
+  });
+
+  it("renders a rewritten name containing a tag as text", () => {
+    const pane = renderTranslation(
+      translation({ rewrites: [{ from: "<script>alert(1)</script>", to: "X", kind: "object" }] }),
+    );
+
+    expect(pane.querySelector("script")).toBeNull();
+    expect(pane.querySelector(".rewrites .from")?.textContent).toBe("<script>alert(1)</script>");
   });
 });
