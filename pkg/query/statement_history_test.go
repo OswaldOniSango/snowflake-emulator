@@ -284,3 +284,84 @@ func TestAnInMemoryHistoryIsNotPersistent(t *testing.T) {
 		t.Errorf("retention should still be the store's, got %v", manager.RetentionPeriod())
 	}
 }
+
+// Cancellation has to be the last word: the work may finish anyway, and a
+// statement the reader stopped must not come back as though it had succeeded.
+func TestCancellationIsFinal(t *testing.T) {
+	manager := NewStatementManager(time.Hour)
+	stmt := manager.CreateStatement("SELECT 1", "TEST_DB", "PUBLIC", "")
+	manager.UpdateStatus(stmt.Handle, StatementStatusRunning)
+	if err := manager.CancelStatement(stmt.Handle); err != nil {
+		t.Fatalf("CancelStatement failed: %v", err)
+	}
+
+	if manager.SetResult(stmt.Handle, &Result{Rows: [][]interface{}{{1}}}) {
+		t.Error("a result arriving after cancellation should be refused")
+	}
+	if manager.UpdateStatus(stmt.Handle, StatementStatusSuccess) {
+		t.Error("a canceled statement should not be moved to success")
+	}
+	if manager.SetError(stmt.Handle, &apierror.SnowflakeError{Code: "x", Message: "y"}) {
+		t.Error("the interruption should not be recorded over the cancellation")
+	}
+
+	got, _ := manager.GetStatement(stmt.Handle)
+	if got.Status != StatementStatusCanceled {
+		t.Errorf("status = %q, want canceled", got.Status)
+	}
+	if got.Result != nil {
+		t.Error("a canceled statement should carry no result")
+	}
+}
+
+func TestACanceledStatementStaysCanceledInTheHistory(t *testing.T) {
+	manager, store := managerWithHistory(t)
+	stmt := manager.CreateStatement("SELECT 1", "TEST_DB", "PUBLIC", "")
+	manager.UpdateStatus(stmt.Handle, StatementStatusRunning)
+	_ = manager.CancelStatement(stmt.Handle)
+
+	manager.SetResult(stmt.Handle, &Result{})
+
+	if got := store.statusOf(stmt.Handle); got != string(StatementStatusCanceled) {
+		t.Errorf("recorded status = %q, want canceled", got)
+	}
+}
+
+// Statements run on their own goroutines, so a caller polling one must not be
+// handed the manager's own copy to read while it is being written.
+func TestGetStatementHandsOutASnapshot(t *testing.T) {
+	manager := NewStatementManager(time.Hour)
+	created := manager.CreateStatement("SELECT 1", "TEST_DB", "PUBLIC", "")
+
+	first, ok := manager.GetStatement(created.Handle)
+	if !ok {
+		t.Fatal("the statement should be found")
+	}
+
+	manager.SetResult(created.Handle, &Result{Rows: [][]interface{}{{1}}})
+
+	if first.Status == StatementStatusSuccess {
+		t.Error("a snapshot taken before the result should not see it")
+	}
+
+	second, _ := manager.GetStatement(created.Handle)
+	if second.Status != StatementStatusSuccess {
+		t.Errorf("a snapshot taken after should: status = %q", second.Status)
+	}
+	if first == second {
+		t.Error("each call should answer with its own copy")
+	}
+}
+
+func TestCreateStatementDoesNotLeakTheManagersCopy(t *testing.T) {
+	manager := NewStatementManager(time.Hour)
+	created := manager.CreateStatement("SELECT 1", "TEST_DB", "PUBLIC", "")
+
+	// Writing through the returned statement must not reach the manager.
+	created.Status = StatementStatusFailed
+
+	held, _ := manager.GetStatement(created.Handle)
+	if held.Status != StatementStatusPending {
+		t.Errorf("status = %q, want pending", held.Status)
+	}
+}

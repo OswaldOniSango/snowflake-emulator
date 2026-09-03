@@ -1,5 +1,12 @@
 import "./style.css";
-import { runStatement, StatementError, translateStatement, type Statement } from "./api";
+import {
+  cancelStatement,
+  CODE_CANCELED,
+  runStatement,
+  StatementError,
+  translateStatement,
+  type Statement,
+} from "./api";
 import { createEditor, type Editor } from "./editor";
 import { createExplorer } from "./explorer";
 import { renderGrid, renderNotice } from "./grid";
@@ -65,6 +72,7 @@ const SHELL = `
     <div class="ctxbar">
       <div data-role="context"></div>
       <button class="run" data-role="run">Run <kbd data-role="shortcut"></kbd></button>
+      <button class="ghost danger" data-role="cancel" hidden>Cancel</button>
       <button class="ghost" data-role="run-all" hidden></button>
     </div>
 
@@ -115,6 +123,7 @@ function main(): void {
   const tabstrip = pick(root, "tabs");
   const runButton = pick<HTMLButtonElement>(root, "run");
   const runAllButton = pick<HTMLButtonElement>(root, "run-all");
+  const cancelButton = pick<HTMLButtonElement>(root, "cancel");
   const pill = pick(root, "pill");
   const meta = pick(root, "meta");
 
@@ -127,6 +136,10 @@ function main(): void {
   let shownResult: Statement | null = null;
   // The worksheet being dragged along the tab strip, or null when none is.
   let dragged: string | null = null;
+  // The statement the emulator is running for us, so it can be cancelled. A
+  // run of several statements cancels the one in flight and stops there.
+  let runningHandle: string | null = null;
+  let canceled = false;
   let translatedStatement = "";
   let running = false;
 
@@ -232,8 +245,12 @@ function main(): void {
     }
 
     running = true;
+    canceled = false;
+    runningHandle = null;
     runButton.disabled = true;
     runAllButton.disabled = true;
+    cancelButton.hidden = false;
+    cancelButton.disabled = false;
     setStatus("run", "Running", statements.length === 1 ? "submitting statement" : `1 of ${statements.length}`);
 
     const context = active().context;
@@ -245,7 +262,9 @@ function main(): void {
           setStatus("run", "Running", `${index + 1} of ${statements.length}`);
         }
 
-        const result = await runStatement(statement, context);
+        const result = await runStatement(statement, context, fetch, (handle) => {
+          runningHandle = handle;
+        });
         elapsed += result.elapsedMs;
 
         // A statement that created or dropped an object has just invalidated
@@ -270,16 +289,32 @@ function main(): void {
           "Succeeded",
           summary(statements.length, index + 1, result, elapsed),
         );
+
+        // Cancelling stops the run, not just the statement in flight.
+        if (canceled) {
+          break;
+        }
       }
     } catch (cause) {
       const error = asStatementError(cause);
       shownResult = null;
-      resultsPane = renderNotice("error", firstLine(error.message), error.message);
-      setStatus("err", "Failed", `${error.code} · SQLSTATE ${error.sqlState}`);
+      if (error.code === CODE_CANCELED) {
+        resultsPane = renderNotice(
+          "info",
+          "Statement canceled",
+          "The emulator stopped it before it finished, so there is nothing to show. Partial rows are not returned.",
+        );
+        setStatus("idle", "Canceled", "stopped before it finished");
+      } else {
+        resultsPane = renderNotice("error", firstLine(error.message), error.message);
+        setStatus("err", "Failed", `${error.code} · SQLSTATE ${error.sqlState}`);
+      }
     } finally {
       running = false;
+      runningHandle = null;
       runButton.disabled = false;
       runAllButton.disabled = false;
+      cancelButton.hidden = true;
       showTab("results");
     }
   }
@@ -593,6 +628,18 @@ function main(): void {
     if (button?.dataset["view"]) {
       showView(button.dataset["view"]);
     }
+  });
+
+  cancelButton.addEventListener("click", () => {
+    if (!runningHandle) {
+      return;
+    }
+    // The handle is what cancels; the flag stops a multi-statement run from
+    // carrying on with the next one.
+    canceled = true;
+    cancelButton.disabled = true;
+    setStatus("run", "Canceling", "asking the emulator to stop");
+    void cancelStatement(runningHandle);
   });
 
   runButton.addEventListener("click", () => void run());

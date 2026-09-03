@@ -143,15 +143,33 @@ func (sm *StatementManager) CreateStatement(sqlText, database, schema, warehouse
 		CreatedOn: time.Now(),
 	}
 	sm.statements[handle] = stmt
-	return stmt
+	return snapshot(stmt)
 }
 
 // GetStatement retrieves a statement by handle.
+//
+// The statement is a snapshot, not the manager's own copy. Statements now run
+// on their own goroutines, so handing out the live pointer would let a caller
+// read fields the manager is writing — a race the compiler cannot see and the
+// caller has no lock to take.
 func (sm *StatementManager) GetStatement(handle string) (*Statement, bool) {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
+
 	stmt, ok := sm.statements[handle]
-	return stmt, ok
+	if !ok {
+		return nil, false
+	}
+	return snapshot(stmt), true
+}
+
+// snapshot copies a statement's fields. It must be called with the lock held.
+//
+// Result and Error are shared rather than deep-copied: both are written once,
+// before the status that makes them reachable, and never modified afterwards.
+func snapshot(stmt *Statement) *Statement {
+	copied := *stmt
+	return &copied
 }
 
 // UpdateStatus updates the status of a statement.
@@ -166,6 +184,12 @@ func (sm *StatementManager) UpdateStatus(handle string, status StatementStatus) 
 
 	stmt, ok := sm.statements[handle]
 	if !ok {
+		return false
+	}
+	if stmt.Status == StatementStatusCanceled {
+		// Cancellation is final. A statement whose work finished anyway, or
+		// which was canceled between starting and being marked running, must
+		// not be reported as though it had never been stopped.
 		return false
 	}
 
@@ -186,7 +210,7 @@ func (sm *StatementManager) UpdateStatus(handle string, status StatementStatus) 
 func (sm *StatementManager) SetResult(handle string, result *Result) bool {
 	sm.mu.Lock()
 	stmt, ok := sm.statements[handle]
-	if !ok {
+	if !ok || stmt.Status == StatementStatusCanceled {
 		sm.mu.Unlock()
 		return false
 	}
@@ -206,7 +230,7 @@ func (sm *StatementManager) SetResult(handle string, result *Result) bool {
 func (sm *StatementManager) SetError(handle string, err *apierror.SnowflakeError) bool {
 	sm.mu.Lock()
 	stmt, ok := sm.statements[handle]
-	if !ok {
+	if !ok || stmt.Status == StatementStatusCanceled {
 		sm.mu.Unlock()
 		return false
 	}
