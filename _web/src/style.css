@@ -658,6 +658,50 @@ table.grid .rn {
   padding: 6px 6px 18px;
 }
 
+.explorer-feedback {
+  margin: 8px 12px 0;
+  padding: 7px 8px;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
+  border-radius: 6px;
+  color: var(--ink-2);
+  font-size: 11px;
+}
+
+.explorer-feedback.error {
+  border-color: color-mix(in srgb, var(--crit) 45%, var(--line));
+  color: var(--crit);
+}
+
+.node-line {
+  display: flex;
+  align-items: center;
+}
+
+.node-line .node {
+  min-width: 0;
+}
+
+.node-action {
+  display: grid;
+  place-items: center;
+  width: 25px;
+  height: 25px;
+  flex: none;
+  border-radius: 6px;
+  color: var(--ink-3);
+  font-size: 15px;
+}
+
+.node-action:hover:not(:disabled) {
+  background: var(--panel-2);
+  color: var(--accent);
+}
+
+.node-action:disabled {
+  cursor: wait;
+  opacity: 0.5;
+}
+
 .node {
   display: flex;
   align-items: center;

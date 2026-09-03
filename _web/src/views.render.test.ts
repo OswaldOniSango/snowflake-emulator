@@ -82,6 +82,33 @@ describe("createExplorer", () => {
     expect(parent.querySelector("script")).toBeNull();
     expect(parent.querySelector(".node .nm")?.textContent).toBe("<script>alert(1)</script>");
   });
+
+  it("offers file upload only for stage objects", async () => {
+    vi.stubGlobal("fetch", async (input: string) => {
+      if (input.endsWith("/objects")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ objects: [{ name: "USERS", kind: "table" }, { name: "LOAD_STAGE", kind: "stage" }] }),
+        };
+      }
+      if (input.endsWith("/schemas")) {
+        return { ok: true, status: 200, json: async () => [{ name: "PUBLIC" }] };
+      }
+      return { ok: true, status: 200, json: async () => [{ name: "TEST_DB" }] };
+    });
+    const parent = host();
+
+    createExplorer({ parent, context: () => ({ database: "TEST_DB", schema: "PUBLIC" }), onInsert: () => {} });
+    await settle();
+    parent.querySelector<HTMLButtonElement>('[role="treeitem"]')?.click();
+    await settle();
+    parent.querySelectorAll<HTMLButtonElement>('[role="treeitem"]')[1]?.click();
+    await settle();
+
+    expect(parent.querySelector('[aria-label="Upload file to LOAD_STAGE"]')).not.toBeNull();
+    expect(parent.querySelector('[aria-label="Upload file to USERS"]')).toBeNull();
+  });
 });
 
 describe("createWarehousesView", () => {
