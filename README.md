@@ -418,6 +418,11 @@ The emulator supports standard SQL operations with automatic Snowflake-to-DuckDB
 
 **Parameter Binding**: Supports positional placeholder substitution (`:1`, `:2`, `?`).
 
+Schemas and persistent/transient tables created through SQL are synchronized
+with the emulator catalog, so they are visible through the REST object explorer.
+Temporary tables remain connection-scoped and are not stored in the global
+catalog.
+
 </details>
 
 <details>
