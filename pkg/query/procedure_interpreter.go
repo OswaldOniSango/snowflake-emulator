@@ -293,6 +293,18 @@ func (i *procedureInterpreter) bindVariables(input string, replaceBareVariables 
 			continue
 		}
 		if input[position] == ':' {
+			// "::" is the cast operator, not a :variable reference. Scanned
+			// one colon at a time, the first of a pair found nothing to read
+			// after it (":" is not an identifier character) and passed
+			// through harmlessly — but the second colon then looked like a
+			// bind reference in its own right, demanding that the type name
+			// after it — "column1::INTEGER" reading as :INTEGER — be a
+			// declared procedure variable.
+			if position+1 < len(input) && input[position+1] == ':' {
+				output.WriteString("::")
+				position += 2
+				continue
+			}
 			name, end := readProcedureVariableName(input, position+1)
 			if name == "" {
 				output.WriteByte(input[position])
