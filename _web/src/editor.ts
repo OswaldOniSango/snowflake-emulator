@@ -3,8 +3,10 @@ import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirro
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { sql, StandardSQL } from "@codemirror/lang-sql";
 import { tags } from "@lezer/highlight";
-import { EditorState, Prec, type Extension } from "@codemirror/state";
+import { EditorState, StateEffect, StateField, Prec, type Extension } from "@codemirror/state";
 import {
+  Decoration,
+  type DecorationSet,
   EditorView,
   highlightActiveLine,
   highlightActiveLineGutter,
@@ -37,6 +39,12 @@ const theme = EditorView.theme({
     fontFamily: "var(--mono)",
   },
   ".cm-activeLine": { backgroundColor: "var(--sunk)" },
+  // The statement currently in flight, so a multi-statement Run All shows
+  // which one the emulator is on without the user having to watch the toolbar.
+  ".cm-runningStatement": { backgroundColor: "var(--warn-soft)" },
+  ".cm-runningStatement.cm-activeLine": {
+    backgroundColor: "color-mix(in srgb, var(--warn-soft) 70%, var(--sunk))",
+  },
   ".cm-activeLineGutter": { backgroundColor: "var(--panel-2)", color: "var(--ink-2)" },
   ".cm-selectionBackground, &.cm-focused .cm-selectionBackground": {
     backgroundColor: "var(--accent-soft)",
@@ -76,6 +84,48 @@ const highlighting = HighlightStyle.define([
   { tag: tags.null, color: "var(--warn)" },
 ]);
 
+/** A span of the buffer, such as the statement currently being submitted. */
+export interface Range {
+  from: number;
+  to: number;
+}
+
+const runningLineMark = Decoration.line({ class: "cm-runningStatement" });
+
+/** Marks every line the range touches, so a multi-line statement highlights whole. */
+function runningLineDecorations(state: EditorState, range: Range): DecorationSet {
+  const marks = [];
+  const to = Math.min(range.to, state.doc.length);
+  let pos = Math.min(range.from, to);
+  for (;;) {
+    const line = state.doc.lineAt(pos);
+    marks.push(runningLineMark.range(line.from));
+    if (line.to >= to) {
+      break;
+    }
+    pos = line.to + 1;
+  }
+  return Decoration.set(marks);
+}
+
+const setRunningRange = StateEffect.define<Range | null>();
+
+const runningStatementField = StateField.define<DecorationSet>({
+  create() {
+    return Decoration.none;
+  },
+  update(decorations, tr) {
+    decorations = decorations.map(tr.changes);
+    for (const effect of tr.effects) {
+      if (effect.is(setRunningRange)) {
+        decorations = effect.value ? runningLineDecorations(tr.state, effect.value) : Decoration.none;
+      }
+    }
+    return decorations;
+  },
+  provide: (field) => EditorView.decorations.from(field),
+});
+
 export interface EditorOptions {
   parent: HTMLElement;
   initialValue: string;
@@ -98,8 +148,12 @@ export interface Editor {
   setValue(text: string): void;
   /** The selected text, or "" when nothing is selected. */
   selection(): string;
+  /** The selected range, or null when nothing is selected. */
+  selectionRange(): Range | null;
   /** Where the cursor sits, for locating the statement around it. */
   cursorOffset(): number;
+  /** Highlights the given range's lines as the statement in flight, or clears it when null. */
+  highlightRunning(range: Range | null): void;
   /** Replaces the selection with text, or inserts it at the cursor. */
   insert(text: string): void;
   focus(): void;
@@ -146,6 +200,7 @@ export function createEditor(options: EditorOptions): Editor {
             options.onChange?.(update.state.doc.toString());
           }
         }),
+        runningStatementField,
         theme,
       ],
     }),
@@ -165,8 +220,15 @@ export function createEditor(options: EditorOptions): Editor {
       const { from, to } = view.state.selection.main;
       return from === to ? "" : view.state.sliceDoc(from, to).trim();
     },
+    selectionRange() {
+      const { from, to } = view.state.selection.main;
+      return from === to ? null : { from, to };
+    },
     cursorOffset() {
       return view.state.selection.main.head;
+    },
+    highlightRunning(range: Range | null) {
+      view.dispatch({ effects: setRunningRange.of(range) });
     },
     insert(text: string) {
       const { from, to } = view.state.selection.main;
