@@ -55,6 +55,22 @@ export function createExplorer(options: ExplorerOptions): Explorer {
   let refreshing = false;
   let uploading = "";
   let feedback: { kind: "ok" | "error"; text: string } | null = null;
+  let feedbackTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function setFeedback(next: typeof feedback): void {
+    if (feedbackTimer !== null) {
+      clearTimeout(feedbackTimer);
+      feedbackTimer = null;
+    }
+    feedback = next;
+    if (next?.kind === "ok") {
+      feedbackTimer = setTimeout(() => {
+        feedbackTimer = null;
+        feedback = null;
+        render();
+      }, 5000);
+    }
+  }
 
   const root = document.createElement("div");
   root.className = "explorer";
@@ -63,6 +79,7 @@ export function createExplorer(options: ExplorerOptions): Explorer {
   async function refresh(): Promise<void> {
     const previous = new Map(databases.map((database) => [database.name, database]));
     refreshing = true;
+    setFeedback(null);
     render();
     try {
       const found = await listDatabases();
@@ -155,7 +172,11 @@ export function createExplorer(options: ExplorerOptions): Explorer {
   }
 
   function render(): void {
-    root.replaceChildren(header(), ...(feedback ? [uploadFeedback(feedback)] : []), tree());
+    root.replaceChildren(
+      header(),
+      ...(feedback ? [uploadFeedback(feedback, () => { setFeedback(null); render(); })] : []),
+      tree(),
+    );
   }
 
   function header(): HTMLElement {
@@ -334,13 +355,13 @@ export function createExplorer(options: ExplorerOptions): Explorer {
 
   async function upload(database: string, schema: string, stage: string, file: File): Promise<void> {
     uploading = `${database}.${schema}.${stage}`;
-    feedback = null;
+    setFeedback(null);
     render();
     try {
       const uploaded = await uploadStageFile(database, schema, stage, file, file.name);
-      feedback = { kind: "ok", text: `${uploaded.name} uploaded to @${stage}` };
+      setFeedback({ kind: "ok", text: `${uploaded.name} uploaded to @${stage}` });
     } catch (cause) {
-      feedback = { kind: "error", text: messageOf(cause) };
+      setFeedback({ kind: "error", text: messageOf(cause) });
     } finally {
       uploading = "";
       render();
@@ -355,11 +376,23 @@ export function createExplorer(options: ExplorerOptions): Explorer {
   return { refresh };
 }
 
-function uploadFeedback(feedback: { kind: "ok" | "error"; text: string }): HTMLElement {
+function uploadFeedback(feedback: { kind: "ok" | "error"; text: string }, onDismiss: () => void): HTMLElement {
   const message = document.createElement("div");
   message.className = `explorer-feedback ${feedback.kind}`;
   message.setAttribute("role", feedback.kind === "error" ? "alert" : "status");
-  message.textContent = feedback.text;
+
+  const text = document.createElement("span");
+  text.textContent = feedback.text;
+
+  const dismiss = document.createElement("button");
+  dismiss.type = "button";
+  dismiss.className = "explorer-feedback-dismiss";
+  dismiss.textContent = "×";
+  dismiss.title = "Dismiss";
+  dismiss.setAttribute("aria-label", "Dismiss");
+  dismiss.addEventListener("click", onDismiss);
+
+  message.append(text, dismiss);
   return message;
 }
 
