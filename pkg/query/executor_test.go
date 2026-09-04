@@ -19,6 +19,10 @@ func setupTestExecutor(t *testing.T) (*Executor, *metadata.Repository) {
 	if err != nil {
 		t.Fatalf("failed to open DuckDB: %v", err)
 	}
+	// Mirrors production (cmd/server/main.go): a TEMP table is scoped to the
+	// physical connection that created it, so tests run against the same
+	// single-connection topology real requests do.
+	db.SetMaxOpenConns(1)
 
 	t.Cleanup(func() {
 		if err := db.Close(); err != nil {

@@ -450,8 +450,11 @@ The emulator supports standard SQL operations with automatic Snowflake-to-DuckDB
 | Category | Operations | Description |
 |----------|------------|-------------|
 | **Query** | `SELECT`, `SHOW`, `DESCRIBE`, `EXPLAIN` | Read operations with full result set support |
+| **Query** | `WITH ... SELECT` | Common table expressions, chained and referencing one another, ahead of any statement type |
 | **DML** | `INSERT`, `UPDATE`, `DELETE` | Data manipulation with rows affected count |
 | **DDL** | `CREATE TABLE`, `DROP TABLE`, `ALTER TABLE` | Schema management |
+| **DDL** | `CREATE TABLE ... AS <query>`, including a `WITH` clause | Function translation runs on the query body, not just a bare `SELECT` |
+| **DDL** | `CREATE [OR REPLACE] TEMPORARY TABLE ... AS <query>` | A true DuckDB TEMP table, visible to every statement in the session |
 | **DDL** | `CREATE DATABASE`, `DROP DATABASE` | Database management |
 | **DDL** | `CREATE SCHEMA`, `DROP SCHEMA` | Schema namespace management |
 | **DDL** | `CREATE [OR REPLACE] STAGE`, `DROP STAGE` | Named internal stages |

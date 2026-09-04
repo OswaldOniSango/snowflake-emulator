@@ -164,6 +164,25 @@ func NewRepository(mgr *connection.Manager) (*Repository, error) {
 	return repo, nil
 }
 
+// WithManager returns a Repository reading and writing through mgr instead of
+// the one it was built with — the metadata tables already exist, so nothing
+// needs re-initializing.
+//
+// This exists for recursive execution (a stored procedure calling another
+// one): Executor.withPinnedConnection rebuilds an Executor around a single
+// pinned DuckDB connection so nested work reuses it rather than checking out
+// a second one from the pool, and every processor that reads or writes
+// metadata needs the SAME pinned connection — a Repository still bound to the
+// original, pool-backed Manager would try to open one of its own, which
+// deadlocks once the pool is capped at a single connection (temp tables are
+// scoped to the connection that creates them, so the whole emulator now runs
+// on one; see cmd/server/main.go).
+func (r *Repository) WithManager(mgr *connection.Manager) *Repository {
+	pinned := *r
+	pinned.mgr = mgr
+	return &pinned
+}
+
 // EnsureDefaultNamespace creates the default database and schema when they are
 // absent. config.DefaultDatabase and config.DefaultSchema are the namespace the
 // documented quickstart DSN connects to, and execution contexts are validated
@@ -381,7 +400,7 @@ func (r *Repository) GetDatabase(ctx context.Context, id string) (*Database, err
 	query := `SELECT id, name, account_id, comment, created_at, owner
 	          FROM _metadata_databases WHERE id = ?`
 
-	row := r.mgr.DB().QueryRowContext(ctx, query, id)
+	row := r.mgr.QueryRow(ctx, query, id)
 
 	var db Database
 	var createdAt sql.NullTime
@@ -421,7 +440,7 @@ func (r *Repository) GetDatabaseByName(ctx context.Context, name string) (*Datab
 	query := `SELECT id, name, account_id, comment, created_at, owner
 	          FROM _metadata_databases WHERE name = ?`
 
-	row := r.mgr.DB().QueryRowContext(ctx, query, normalizedName)
+	row := r.mgr.QueryRow(ctx, query, normalizedName)
 
 	var db Database
 	var createdAt sql.NullTime
@@ -588,7 +607,7 @@ func (r *Repository) GetSchema(ctx context.Context, id string) (*Schema, error) 
 	query := `SELECT id, database_id, name, comment, created_at, owner
 	          FROM _metadata_schemas WHERE id = ?`
 
-	row := r.mgr.DB().QueryRowContext(ctx, query, id)
+	row := r.mgr.QueryRow(ctx, query, id)
 
 	var schema Schema
 	var createdAt sql.NullTime
@@ -621,7 +640,7 @@ func (r *Repository) GetSchemaByName(ctx context.Context, databaseID, name strin
 	query := `SELECT id, database_id, name, comment, created_at, owner
 	          FROM _metadata_schemas WHERE database_id = ? AND name = ?`
 
-	row := r.mgr.DB().QueryRowContext(ctx, query, databaseID, strings.ToUpper(name))
+	row := r.mgr.QueryRow(ctx, query, databaseID, strings.ToUpper(name))
 
 	var schema Schema
 	var createdAt sql.NullTime
@@ -849,7 +868,7 @@ func (r *Repository) GetTable(ctx context.Context, id string) (*Table, error) {
 	query := `SELECT id, schema_id, name, table_type, comment, created_at, owner, clustering_key, column_definitions
 	          FROM _metadata_tables WHERE id = ?`
 
-	row := r.mgr.DB().QueryRowContext(ctx, query, id)
+	row := r.mgr.QueryRow(ctx, query, id)
 
 	var table Table
 	var createdAt sql.NullTime
@@ -890,7 +909,7 @@ func (r *Repository) GetTableByName(ctx context.Context, schemaID, name string) 
 	query := `SELECT id, schema_id, name, table_type, comment, created_at, owner, clustering_key, column_definitions
 	          FROM _metadata_tables WHERE schema_id = ? AND name = ?`
 
-	row := r.mgr.DB().QueryRowContext(ctx, query, schemaID, strings.ToUpper(name))
+	row := r.mgr.QueryRow(ctx, query, schemaID, strings.ToUpper(name))
 
 	var table Table
 	var createdAt sql.NullTime
@@ -1102,7 +1121,7 @@ func (r *Repository) GetStage(ctx context.Context, id string) (*Stage, error) {
 	query := `SELECT id, schema_id, name, stage_type, url, comment, created_at, owner
 	          FROM _metadata_stages WHERE id = ?`
 
-	row := r.mgr.DB().QueryRowContext(ctx, query, id)
+	row := r.mgr.QueryRow(ctx, query, id)
 
 	var stage Stage
 	var createdAt sql.NullTime
@@ -1138,7 +1157,7 @@ func (r *Repository) GetStageByName(ctx context.Context, schemaID, name string) 
 	query := `SELECT id, schema_id, name, stage_type, url, comment, created_at, owner
 	          FROM _metadata_stages WHERE schema_id = ? AND name = ?`
 
-	row := r.mgr.DB().QueryRowContext(ctx, query, schemaID, normalizedName)
+	row := r.mgr.QueryRow(ctx, query, schemaID, normalizedName)
 
 	var stage Stage
 	var createdAt sql.NullTime
@@ -1179,7 +1198,7 @@ func (r *Repository) ListStages(ctx context.Context, schemaID string) ([]*Stage,
 	}
 	query += sqlOrderByName
 
-	rows, err := r.mgr.DB().QueryContext(ctx, query, args...)
+	rows, err := r.mgr.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list stages: %w", err)
 	}
@@ -1267,7 +1286,7 @@ func (r *Repository) GetFileFormat(ctx context.Context, id string) (*FileFormat,
 	query := `SELECT id, schema_id, name, format_type, options, comment, created_at, owner
 	          FROM _metadata_fileformats WHERE id = ?`
 
-	row := r.mgr.DB().QueryRowContext(ctx, query, id)
+	row := r.mgr.QueryRow(ctx, query, id)
 
 	var ff FileFormat
 	var createdAt sql.NullTime
@@ -1303,7 +1322,7 @@ func (r *Repository) GetFileFormatByName(ctx context.Context, schemaID, name str
 	query := `SELECT id, schema_id, name, format_type, options, comment, created_at, owner
 	          FROM _metadata_fileformats WHERE schema_id = ? AND name = ?`
 
-	row := r.mgr.DB().QueryRowContext(ctx, query, schemaID, normalizedName)
+	row := r.mgr.QueryRow(ctx, query, schemaID, normalizedName)
 
 	var ff FileFormat
 	var createdAt sql.NullTime
@@ -1338,7 +1357,7 @@ func (r *Repository) ListFileFormats(ctx context.Context, schemaID string) ([]*F
 	query := `SELECT id, schema_id, name, format_type, options, comment, created_at, owner
 	          FROM _metadata_fileformats WHERE schema_id = ? ORDER BY name`
 
-	rows, err := r.mgr.DB().QueryContext(ctx, query, schemaID)
+	rows, err := r.mgr.Query(ctx, query, schemaID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list file formats: %w", err)
 	}
@@ -1606,4 +1625,27 @@ func (r *Repository) ListPhysicalTables(ctx context.Context, database, schema st
 	}
 
 	return tables, nil
+}
+
+// TableIsTemporary reports whether name is a DuckDB TEMP table already
+// visible on this connection.
+//
+// A Snowflake temporary table is created as a bare DuckDB TEMP table rather
+// than under the DATABASE.SCHEMA_TABLE physical naming every persistent table
+// gets: DuckDB places every TEMP table in its own built-in temp catalog and
+// refuses to put one under an explicit schema at all. A later, unqualified
+// reference to it therefore has to be recognized and left bare too, which is
+// what this check is for.
+func (r *Repository) TableIsTemporary(ctx context.Context, name string) (bool, error) {
+	const query = `SELECT 1 FROM duckdb_tables() WHERE temporary AND lower(table_name) = lower(?) LIMIT 1`
+
+	var found int
+	err := r.mgr.QueryRow(ctx, query, name).Scan(&found)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("failed to check whether %s is a temporary table: %w", name, err)
+	}
+	return true, nil
 }
