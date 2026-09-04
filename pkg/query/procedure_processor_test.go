@@ -435,6 +435,263 @@ func TestProcedureExceptionWhenOther(t *testing.T) {
 	}
 }
 
+// TestCreateProcedureAllowsALeadingComment pins the fix for a statement the
+// console's own splitter produces routinely: a comment describing the
+// procedure, with no semicolon of its own, sits right above the CREATE and
+// is folded into the same statement text. IsCreateProcedure already looks
+// past a leading comment to dispatch here, but Create's own regex was
+// anchored at the very start of the string — with the comment still there,
+// "CREATE" was nowhere near position 0, and a perfectly ordinary CREATE
+// PROCEDURE was rejected as unsupported syntax.
+func TestCreateProcedureAllowsALeadingComment(t *testing.T) {
+	executor, repo := setupTestExecutor(t)
+	ctx := context.Background()
+
+	database, err := repo.CreateDatabase(ctx, "COMMENT_DB", "")
+	if err != nil {
+		t.Fatalf("CreateDatabase() error = %v", err)
+	}
+	if _, err := repo.GetSchemaByName(ctx, database.ID, "PUBLIC"); err != nil {
+		t.Fatalf("GetSchemaByName() error = %v", err)
+	}
+	executionContext := ExecutionContext{Database: "COMMENT_DB", Schema: "PUBLIC"}
+
+	createSQL := `-- Greets whoever is asked about.
+-- Kept simple on purpose.
+CREATE PROCEDURE greet(name VARCHAR)
+RETURNS VARCHAR
+LANGUAGE SQL
+AS $$
+BEGIN
+    RETURN 'Hello, ' || :name;
+END
+$$`
+	if _, err := executor.ExecuteWithContext(ctx, executionContext, createSQL); err != nil {
+		t.Fatalf("CREATE PROCEDURE error = %v", err)
+	}
+
+	result, err := executor.QueryWithContext(ctx, executionContext, "CALL greet('World')")
+	if err != nil {
+		t.Fatalf("CALL error = %v", err)
+	}
+	if len(result.Rows) != 1 || result.Rows[0][0] != "Hello, World" {
+		t.Fatalf("CALL result = %#v, want Hello, World", result.Rows)
+	}
+}
+
+// TestDropAndCallProcedureAllowALeadingCommentToo covers DROP PROCEDURE and
+// CALL, which parse a statement the same anchored way CREATE PROCEDURE does.
+func TestDropAndCallProcedureAllowALeadingCommentToo(t *testing.T) {
+	executor, repo := setupTestExecutor(t)
+	ctx := context.Background()
+
+	database, err := repo.CreateDatabase(ctx, "COMMENT_DB2", "")
+	if err != nil {
+		t.Fatalf("CreateDatabase() error = %v", err)
+	}
+	if _, err := repo.GetSchemaByName(ctx, database.ID, "PUBLIC"); err != nil {
+		t.Fatalf("GetSchemaByName() error = %v", err)
+	}
+	executionContext := ExecutionContext{Database: "COMMENT_DB2", Schema: "PUBLIC"}
+
+	if _, err := executor.ExecuteWithContext(ctx, executionContext,
+		"CREATE PROCEDURE noop() RETURNS VARCHAR LANGUAGE SQL AS $$ BEGIN RETURN 'ok'; END $$"); err != nil {
+		t.Fatalf("CREATE PROCEDURE error = %v", err)
+	}
+
+	if _, err := executor.QueryWithContext(ctx, executionContext,
+		"-- calling it\nCALL noop()"); err != nil {
+		t.Fatalf("commented CALL error = %v", err)
+	}
+
+	if _, err := executor.ExecuteWithContext(ctx, executionContext,
+		"-- cleaning up\nDROP PROCEDURE noop()"); err != nil {
+		t.Fatalf("commented DROP PROCEDURE error = %v", err)
+	}
+}
+
+// TestSQLROWCOUNTIsReadableFromTheStart pins that SQLROWCOUNT — unlike
+// SQLCODE/SQLSTATE/SQLERRM, which exist only once an exception handler is
+// running — is a real variable from the moment a procedure starts, the same
+// way it is in Snowflake, rather than an undeclared name that happens to
+// read as literal SQL text until something sets it.
+func TestSQLROWCOUNTIsReadableFromTheStart(t *testing.T) {
+	executor, repo := setupTestExecutor(t)
+	ctx := context.Background()
+	if _, err := repo.CreateDatabase(ctx, "ROWCOUNT_DB", ""); err != nil {
+		t.Fatalf("CreateDatabase() error = %v", err)
+	}
+	executionContext := ExecutionContext{Database: "ROWCOUNT_DB", Schema: "PUBLIC"}
+
+	if _, err := executor.ExecuteWithContext(ctx, executionContext,
+		`CREATE PROCEDURE before_any_dml()
+		RETURNS VARCHAR
+		LANGUAGE SQL
+		AS $$
+		BEGIN
+			RETURN 'n=' || SQLROWCOUNT;
+		END
+		$$`); err != nil {
+		t.Fatalf("CREATE PROCEDURE error = %v", err)
+	}
+
+	result, err := executor.QueryWithContext(ctx, executionContext, "CALL before_any_dml()")
+	if err != nil {
+		t.Fatalf("CALL error = %v", err)
+	}
+	if len(result.Rows) != 1 || result.Rows[0][0] != "n=0" {
+		t.Fatalf("CALL result = %#v, want n=0", result.Rows)
+	}
+}
+
+// TestSQLROWCOUNTTracksTheMostRecentDML runs exactly the shape the user's own
+// procedure needs: build a staging table from a CTE, MERGE it into a target,
+// and read back how many rows the MERGE touched. It also checks that an
+// earlier INSERT's count does not leak into a later statement's read of
+// SQLROWCOUNT — it always reflects the MOST RECENT DML, not a running total.
+func TestSQLROWCOUNTTracksTheMostRecentDML(t *testing.T) {
+	executor, repo := setupTestExecutor(t)
+	executor.Configure(WithMergeProcessor(NewMergeProcessor(executor)))
+	ctx := context.Background()
+	if _, err := repo.CreateDatabase(ctx, "ROWCOUNT_DB2", ""); err != nil {
+		t.Fatalf("CreateDatabase() error = %v", err)
+	}
+	executionContext := ExecutionContext{Database: "ROWCOUNT_DB2", Schema: "PUBLIC"}
+
+	for _, statement := range []string{
+		"CREATE TABLE seed_users (id INTEGER, name VARCHAR)",
+		"INSERT INTO seed_users VALUES (1, 'Alice'), (2, 'Bob'), (3, 'Oswaldo')",
+		"CREATE TABLE clean_users (id INTEGER, name VARCHAR, updated_at TIMESTAMP)",
+		// Pre-seed one row so the MERGE below does one UPDATE and two INSERTs —
+		// three rows affected, not the row count of any single branch alone.
+		"INSERT INTO clean_users (id, name) VALUES (1, 'stale name')",
+	} {
+		if _, err := executor.ExecuteWithContext(ctx, executionContext, statement); err != nil {
+			t.Fatalf("setup %q error = %v", statement, err)
+		}
+	}
+
+	createSQL := `CREATE PROCEDURE load_clean_users()
+RETURNS VARCHAR
+LANGUAGE SQL
+AS
+$$
+DECLARE
+    rows_affected INTEGER DEFAULT 0;
+BEGIN
+    CREATE OR REPLACE TEMPORARY TABLE raw_users AS
+    WITH raw AS (
+        SELECT id, name FROM seed_users
+    )
+    SELECT id, name FROM raw;
+
+    MERGE INTO clean_users AS target
+    USING raw_users AS source
+        ON target.id = source.id
+    WHEN MATCHED THEN
+        UPDATE SET target.name = source.name
+    WHEN NOT MATCHED THEN
+        INSERT (id, name) VALUES (source.id, source.name);
+
+    rows_affected := SQLROWCOUNT;
+
+    RETURN 'MERGE completed. Rows affected: ' || rows_affected;
+END;
+$$`
+	if _, err := executor.ExecuteWithContext(ctx, executionContext, createSQL); err != nil {
+		t.Fatalf("CREATE PROCEDURE error = %v", err)
+	}
+
+	result, err := executor.QueryWithContext(ctx, executionContext, "CALL load_clean_users()")
+	if err != nil {
+		t.Fatalf("CALL error = %v", err)
+	}
+	if len(result.Rows) != 1 || result.Rows[0][0] != "MERGE completed. Rows affected: 3" {
+		t.Fatalf("CALL result = %#v, want the MERGE's own 3 rows, not the earlier INSERT's", result.Rows)
+	}
+
+	rows, err := executor.QueryWithContext(ctx, executionContext,
+		"SELECT id, name FROM clean_users ORDER BY id")
+	if err != nil {
+		t.Fatalf("readback error = %v", err)
+	}
+	if len(rows.Rows) != 3 {
+		t.Fatalf("clean_users rows = %#v, want 3", rows.Rows)
+	}
+	if rows.Rows[0][1] != "Alice" {
+		t.Fatalf("the pre-seeded row was not updated: %#v", rows.Rows[0])
+	}
+}
+
+// TestSQLROWCOUNTSurvivesIntoAnExceptionHandler mirrors the user's own
+// request: add EXCEPTION WHEN OTHER to a procedure built around SQLROWCOUNT,
+// and confirm the handler can still read whatever DML most recently ran —
+// SQLCODE/SQLSTATE/SQLERRM describe the failure itself, but SQLROWCOUNT is
+// not reset by the exception, so a handler can report what was salvaged
+// before the failing statement.
+func TestSQLROWCOUNTSurvivesIntoAnExceptionHandler(t *testing.T) {
+	executor, repo := setupTestExecutor(t)
+	ctx := context.Background()
+	if _, err := repo.CreateDatabase(ctx, "ROWCOUNT_DB3", ""); err != nil {
+		t.Fatalf("CreateDatabase() error = %v", err)
+	}
+	executionContext := ExecutionContext{Database: "ROWCOUNT_DB3", Schema: "PUBLIC"}
+
+	for _, statement := range []string{
+		"CREATE TABLE clean_users (id INTEGER, name VARCHAR)",
+		"CREATE TABLE procedure_log (message VARCHAR)",
+	} {
+		if _, err := executor.ExecuteWithContext(ctx, executionContext, statement); err != nil {
+			t.Fatalf("setup %q error = %v", statement, err)
+		}
+	}
+
+	createSQL := `CREATE PROCEDURE load_clean_users()
+RETURNS VARCHAR
+LANGUAGE SQL
+AS
+$$
+BEGIN
+    INSERT INTO clean_users VALUES (1, 'Alice'), (2, 'Bob');
+
+    -- clean_users has two columns; this MERGE names a third that does not
+    -- exist, so it fails after the INSERT above has already run.
+    MERGE INTO clean_users AS target
+    USING clean_users AS source
+        ON target.id = source.id
+    WHEN MATCHED THEN
+        UPDATE SET target.missing_column = source.name;
+
+    RETURN 'unreachable';
+EXCEPTION
+    WHEN OTHER THEN
+        INSERT INTO procedure_log VALUES (
+            'failed after ' || :SQLROWCOUNT || ' rows; ' || :SQLSTATE
+        );
+        RETURN 'handled';
+END;
+$$`
+	if _, err := executor.ExecuteWithContext(ctx, executionContext, createSQL); err != nil {
+		t.Fatalf("CREATE PROCEDURE error = %v", err)
+	}
+
+	result, err := executor.QueryWithContext(ctx, executionContext, "CALL load_clean_users()")
+	if err != nil {
+		t.Fatalf("CALL error = %v", err)
+	}
+	if len(result.Rows) != 1 || result.Rows[0][0] != "handled" {
+		t.Fatalf("CALL result = %#v, want the handler's own return value", result.Rows)
+	}
+
+	logResult, err := executor.QueryWithContext(ctx, executionContext, "SELECT message FROM procedure_log")
+	if err != nil {
+		t.Fatalf("SELECT procedure_log error = %v", err)
+	}
+	if len(logResult.Rows) != 1 || logResult.Rows[0][0] != "failed after 2 rows; XX000" {
+		t.Fatalf("procedure_log rows = %#v, want the INSERT's 2 rows to have survived into the handler", logResult.Rows)
+	}
+}
+
 func TestParseProcedureScriptRejectsMalformedBlocks(t *testing.T) {
 	tests := []struct {
 		name string

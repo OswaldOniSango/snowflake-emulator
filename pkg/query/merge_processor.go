@@ -75,8 +75,11 @@ func newMergePatterns() *mergePatterns {
 		whenMatched: regexp.MustCompile(`(?i)WHEN\s+MATCHED(?:\s+AND\s+(.+?))?\s+THEN`),
 		// WHEN NOT MATCHED [AND condition] THEN
 		whenNotMatched: regexp.MustCompile(`(?i)WHEN\s+NOT\s+MATCHED(?:\s+AND\s+(.+?))?\s+THEN`),
-		// THEN UPDATE SET ... - we'll handle boundary in parsing logic
-		thenUpdate: regexp.MustCompile(`(?i)THEN\s+UPDATE\s+SET\s+(.+)`),
+		// THEN UPDATE SET ... - we'll handle boundary in parsing logic.
+		// (?s) lets "." cross a newline: without it, a SET clause with each
+		// assignment on its own line — ordinary, readable formatting — had
+		// everything after the first line silently dropped from the capture.
+		thenUpdate: regexp.MustCompile(`(?is)THEN\s+UPDATE\s+SET\s+(.+)`),
 		// THEN DELETE
 		thenDelete: regexp.MustCompile(`(?i)THEN\s+DELETE`),
 		// THEN INSERT (cols) VALUES (vals) or THEN INSERT VALUES (vals)
@@ -226,20 +229,27 @@ func (h *MergeProcessor) parseWhenClause(section, upperSection string) (WhenClau
 		return clause, fmt.Errorf("invalid WHEN clause: %s", section)
 	}
 
-	// Determine action (UPDATE, DELETE, or INSERT)
+	// Determine action (UPDATE, DELETE, or INSERT). Matched against the
+	// compiled patterns rather than a literal "THEN UPDATE" substring: SQL
+	// formatted across several lines — "THEN\n    UPDATE SET", entirely
+	// ordinary style — has more than the one space Contains required, and
+	// fell through to every case as an "invalid WHEN clause action".
 	switch {
-	case strings.Contains(upperSection, "THEN DELETE"):
+	case h.patterns.thenDelete.MatchString(section):
 		clause.Action = MergeActionDelete
-	case strings.Contains(upperSection, "THEN UPDATE"):
+	case h.patterns.thenUpdate.MatchString(section):
 		clause.Action = MergeActionUpdate
 		// Parse SET clauses
 		updateMatch := h.patterns.thenUpdate.FindStringSubmatch(section)
 		if len(updateMatch) > 1 {
 			setStr := updateMatch[1]
-			// Truncate at WHEN keyword if present (for multi-clause MERGE)
-			whenIdx := strings.Index(strings.ToUpper(setStr), " WHEN")
-			if whenIdx != -1 {
-				setStr = setStr[:whenIdx]
+			// Truncate at a following WHEN clause, if the (now dotall) capture
+			// reached one — section is already bounded to this one clause by
+			// parseWhenClauses, so this is a safety net rather than the usual
+			// case. Matched with whitespace generally, not a literal single
+			// space, for the same reason the SET capture itself needed (?s).
+			if loc := nextWhenClausePattern.FindStringIndex(setStr); loc != nil {
+				setStr = setStr[:loc[0]]
 			}
 			setClauses, err := h.parseSetClauses(setStr)
 			if err != nil {
@@ -247,19 +257,14 @@ func (h *MergeProcessor) parseWhenClause(section, upperSection string) (WhenClau
 			}
 			clause.SetClauses = setClauses
 		}
-	case strings.Contains(upperSection, "THEN INSERT"):
+	case h.patterns.thenInsert.MatchString(section):
 		clause.Action = MergeActionInsert
-		// Parse INSERT columns and values
-		insertMatch := h.patterns.thenInsert.FindStringSubmatch(section)
-		if len(insertMatch) >= 3 {
-			if insertMatch[1] != "" {
-				clause.InsertCols = parseCommaSeparated(insertMatch[1])
-			}
-			clause.InsertVals = parseCommaSeparated(insertMatch[2])
-		} else if len(insertMatch) >= 2 {
-			// VALUES only (no column list)
-			clause.InsertVals = parseCommaSeparated(insertMatch[1])
+		cols, vals, err := parseInsertClause(section)
+		if err != nil {
+			return clause, err
 		}
+		clause.InsertCols = cols
+		clause.InsertVals = vals
 	default:
 		return clause, fmt.Errorf("invalid WHEN clause action: %s", section)
 	}
@@ -293,6 +298,61 @@ func (h *MergeProcessor) parseSetClauses(setStr string) ([]SetClause, error) {
 	}
 
 	return clauses, nil
+}
+
+// insertKeywordPattern and valuesKeywordPattern locate INSERT and VALUES as
+// standalone words, so parseInsertClause can find the parenthesized lists that
+// follow each one without trusting a regex to also capture their contents.
+var (
+	insertKeywordPattern = regexp.MustCompile(`(?i)\bINSERT\b`)
+	valuesKeywordPattern = regexp.MustCompile(`(?i)\bVALUES\b`)
+
+	// nextWhenClausePattern finds a WHEN clause possibly separated from the
+	// text before it by a newline rather than a plain space.
+	nextWhenClausePattern = regexp.MustCompile(`(?i)\bWHEN\b`)
+)
+
+// parseInsertClause extracts the optional column list and the VALUES list
+// from a WHEN NOT MATCHED THEN INSERT section.
+//
+// Regex alone cannot capture either parenthesized list correctly: a pattern
+// built on [^)]+ between the two parens has no way to look past a value that
+// is itself a function call — CURRENT_TIMESTAMP(), say — since that call's own
+// closing paren satisfies the character class first and truncates the whole
+// capture right there, silently dropping the closing paren of the list
+// itself along with anything meant to follow it. Finding the true matching
+// paren the same way a CTE's body is found avoids that.
+func parseInsertClause(section string) (cols, vals []string, err error) {
+	insertLoc := insertKeywordPattern.FindStringIndex(section)
+	if insertLoc == nil {
+		return nil, nil, fmt.Errorf("invalid WHEN clause action: %s", section)
+	}
+
+	pos := skipSpaceAndComments(section, insertLoc[1])
+	if pos < len(section) && section[pos] == '(' {
+		closeAt := matchingParen(section, pos)
+		if closeAt < 0 {
+			return nil, nil, fmt.Errorf("unterminated INSERT column list: %s", section)
+		}
+		cols = parseCommaSeparated(section[pos+1 : closeAt])
+		pos = skipSpaceAndComments(section, closeAt+1)
+	}
+
+	valuesLoc := valuesKeywordPattern.FindStringIndex(section[pos:])
+	if valuesLoc == nil {
+		return nil, nil, fmt.Errorf("INSERT is missing VALUES: %s", section)
+	}
+	pos = skipSpaceAndComments(section, pos+valuesLoc[1])
+	if pos >= len(section) || section[pos] != '(' {
+		return nil, nil, fmt.Errorf("INSERT VALUES must be followed by (...): %s", section)
+	}
+	closeAt := matchingParen(section, pos)
+	if closeAt < 0 {
+		return nil, nil, fmt.Errorf("unterminated INSERT VALUES list: %s", section)
+	}
+	vals = parseCommaSeparated(section[pos+1 : closeAt])
+
+	return cols, vals, nil
 }
 
 // parseCommaSeparated splits a comma-separated string into parts.
@@ -350,7 +410,10 @@ func (h *MergeProcessor) ExecuteMerge(ctx context.Context, executionContext Exec
 	// the target's alias with stmt.TargetTable inside SET and WHERE clauses,
 	// where the contextual rewriter cannot reach it, so both paths must start
 	// from the physical name.
-	stmt = resolveMergeTables(stmt, executionContext)
+	stmt, err := h.resolveMergeTables(ctx, stmt, executionContext)
+	if err != nil {
+		return nil, err
+	}
 
 	// Build the native MERGE SQL
 	mergeSQL := h.buildMergeSQL(stmt)
@@ -371,22 +434,46 @@ func (h *MergeProcessor) ExecuteMerge(ctx context.Context, executionContext Exec
 // resolveMergeTables returns a copy of stmt whose unqualified table names are
 // mapped to their physical DuckDB names. Without an execution context, or for
 // names already qualified or shaped like a subquery, the statement is unchanged.
-func resolveMergeTables(stmt *MergeStatement, executionContext ExecutionContext) *MergeStatement {
+//
+// A name that is already a temporary table is left bare rather than
+// qualified: this runs after the calling statement has already been rewritten
+// once — inside a procedure body, a temp table's logical name has already
+// become its mangled physical one, and inside a plain MERGE its physical name
+// has already been resolved by the same rules a CREATE would go through — so
+// qualifying it again here would double it (TEST_DB.PUBLIC___PROC_TEMP_...),
+// a name that was never created and could never resolve to the real table.
+func (h *MergeProcessor) resolveMergeTables(
+	ctx context.Context,
+	stmt *MergeStatement,
+	executionContext ExecutionContext,
+) (*MergeStatement, error) {
 	if executionContext.Database == "" || executionContext.Schema == "" {
-		return stmt
+		return stmt, nil
 	}
 
-	resolve := func(name string) string {
+	resolve := func(name string) (string, error) {
 		if strings.Contains(name, ".") || !identifierPattern.MatchString(name) {
-			return name
+			return name, nil
 		}
-		return BuildTableName(executionContext.Database, executionContext.Schema, name)
+		temp, err := h.executor.repo.TableIsTemporary(ctx, name)
+		if err != nil {
+			return "", err
+		}
+		if temp {
+			return name, nil
+		}
+		return BuildTableName(executionContext.Database, executionContext.Schema, name), nil
 	}
 
 	resolved := *stmt
-	resolved.TargetTable = resolve(stmt.TargetTable)
-	resolved.SourceTable = resolve(stmt.SourceTable)
-	return &resolved
+	var err error
+	if resolved.TargetTable, err = resolve(stmt.TargetTable); err != nil {
+		return nil, err
+	}
+	if resolved.SourceTable, err = resolve(stmt.SourceTable); err != nil {
+		return nil, err
+	}
+	return &resolved, nil
 }
 
 // buildMergeSQL constructs the MERGE SQL statement for native execution.
@@ -522,15 +609,20 @@ func (h *MergeProcessor) executeMatchedUpdate(ctx context.Context, executionCont
 	sb.WriteString(stmt.TargetTable)
 	sb.WriteString(" SET ")
 
-	// Replace target alias with table name in SET clauses
+	// DuckDB's UPDATE ... SET accepts only a bare column name on the left —
+	// "Qualified column names in UPDATE .. SET not supported" — even though
+	// the same alias is fine in FROM, WHERE, and on the right-hand side of
+	// the assignment. "target.name = source.name" is ordinary Snowflake
+	// MERGE syntax, so the alias (or the table name itself, had the author
+	// written that instead) has to come off the column being assigned to.
 	var sets []string
 	for _, sc := range when.SetClauses {
 		col := sc.Column
 		val := sc.Value
-		// If column has alias prefix matching target alias, replace with table name
 		if stmt.TargetAlias != "" {
-			col = strings.Replace(col, stmt.TargetAlias+".", stmt.TargetTable+".", 1)
+			col = strings.TrimPrefix(col, stmt.TargetAlias+".")
 		}
+		col = strings.TrimPrefix(col, stmt.TargetTable+".")
 		sets = append(sets, col+" = "+val)
 	}
 	sb.WriteString(strings.Join(sets, ", "))

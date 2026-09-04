@@ -20,7 +20,7 @@ var (
 )
 
 func (e *Executor) executeCreateSchema(ctx context.Context, executionContext ExecutionContext, statement string) (*ExecResult, error) {
-	match := createSchemaSQLPattern.FindStringSubmatch(strings.TrimSpace(statement))
+	match := createSchemaSQLPattern.FindStringSubmatch(trimLeadingComments(statement))
 	if match == nil {
 		return nil, fmt.Errorf("unsupported CREATE SCHEMA syntax")
 	}
@@ -51,7 +51,7 @@ func (e *Executor) executeCreateSchema(ctx context.Context, executionContext Exe
 }
 
 func (e *Executor) executeDropSchema(ctx context.Context, executionContext ExecutionContext, statement string) (*ExecResult, error) {
-	match := dropSchemaSQLPattern.FindStringSubmatch(strings.TrimSpace(statement))
+	match := dropSchemaSQLPattern.FindStringSubmatch(trimLeadingComments(statement))
 	if match == nil {
 		return nil, fmt.Errorf("unsupported DROP SCHEMA syntax")
 	}
@@ -92,7 +92,7 @@ func resolveSchemaName(name string, executionContext ExecutionContext) (string, 
 }
 
 func (e *Executor) registerSQLTable(ctx context.Context, executionContext ExecutionContext, statement string) error {
-	match := createTableSQLPattern.FindStringSubmatch(strings.TrimSpace(statement))
+	match := createTableSQLPattern.FindStringSubmatch(trimLeadingComments(statement))
 	if match == nil || executionContext.Database == "" || executionContext.Schema == "" || strings.Contains(match[2], ".") {
 		return nil
 	}
@@ -122,7 +122,7 @@ func (e *Executor) registerSQLTable(ctx context.Context, executionContext Execut
 }
 
 func (e *Executor) unregisterSQLTable(ctx context.Context, executionContext ExecutionContext, statement string) error {
-	match := dropTableSQLPattern.FindStringSubmatch(strings.TrimSpace(statement))
+	match := dropTableSQLPattern.FindStringSubmatch(trimLeadingComments(statement))
 	if match == nil || executionContext.Database == "" || executionContext.Schema == "" || strings.Contains(match[1], ".") {
 		return nil
 	}

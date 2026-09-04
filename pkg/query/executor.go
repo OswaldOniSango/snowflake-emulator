@@ -105,18 +105,22 @@ func (e *Executor) Configure(opts ...ExecutorOption) {
 
 // withPinnedConnection runs a unit of work through a single DuckDB connection.
 // Processor instances are rebuilt so recursive execution also uses that
-// connection instead of returning to the database/sql pool.
+// connection instead of returning to the database/sql pool — the repository
+// too: every processor reads and writes metadata through it, and one still
+// bound to the original Manager would reach back into the pool on its own,
+// which is exactly the return-to-the-pool this whole function exists to avoid.
 func (e *Executor) withPinnedConnection(ctx context.Context, fn func(*Executor) error) error {
 	return e.mgr.WithConnection(ctx, func(mgr *connection.Manager) error {
-		pinned := NewExecutor(mgr, e.repo, WithWarehouseValidator(e.warehouseValidator))
+		pinnedRepo := e.repo.WithManager(mgr)
+		pinned := NewExecutor(mgr, pinnedRepo, WithWarehouseValidator(e.warehouseValidator))
 		if e.mergeProcessor != nil {
 			pinned.mergeProcessor = NewMergeProcessor(pinned)
 		}
 		if e.copyProcessor != nil {
-			pinned.copyProcessor = NewCopyProcessor(e.copyProcessor.stageMgr, e.repo, pinned)
+			pinned.copyProcessor = NewCopyProcessor(e.copyProcessor.stageMgr, pinnedRepo, pinned)
 		}
 		if e.stageProcessor != nil {
-			pinned.stageProcessor = NewStageProcessor(e.stageProcessor.manager, e.repo)
+			pinned.stageProcessor = NewStageProcessor(e.stageProcessor.manager, pinnedRepo)
 		}
 		return fn(pinned)
 	})

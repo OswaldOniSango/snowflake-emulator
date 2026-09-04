@@ -511,3 +511,139 @@ func TestIsTableFunctionCall(t *testing.T) {
 		})
 	}
 }
+
+// TestRewriteContextualTableReferences_CTEAliasesAreNotQualified pins that a
+// CTE's own alias is never mistaken for a physical table needing
+// DATABASE.SCHEMA_ qualification, while real tables referenced inside or
+// alongside the CTE still are.
+func TestRewriteContextualTableReferences_CTEAliasesAreNotQualified(t *testing.T) {
+	executionContext := ExecutionContext{Database: "TEST_DB", Schema: "PUBLIC"}
+
+	tests := []struct {
+		name string
+		sql  string
+		want string
+	}{
+		{
+			name: "a standalone CTE's own name is left alone",
+			sql:  "WITH test AS (SELECT 1 AS x) SELECT * FROM test",
+			want: "WITH test AS (SELECT 1 AS x) SELECT * FROM test",
+		},
+		{
+			name: "a real table referenced inside the CTE body is still qualified",
+			sql:  "WITH recent AS (SELECT * FROM orders) SELECT * FROM recent",
+			want: "WITH recent AS (SELECT * FROM TEST_DB.PUBLIC_ORDERS) SELECT * FROM recent",
+		},
+		{
+			name: "a later CTE and the final query can reference an earlier CTE",
+			sql:  "WITH a AS (SELECT * FROM t1), b AS (SELECT * FROM a JOIN t2 ON a.id = t2.id) SELECT * FROM b",
+			want: "WITH a AS (SELECT * FROM TEST_DB.PUBLIC_T1), b AS (SELECT * FROM a JOIN TEST_DB.PUBLIC_T2 ON a.id = t2.id) SELECT * FROM b",
+		},
+		{
+			name: "WITH RECURSIVE names the clause, not a CTE alias",
+			sql:  "WITH RECURSIVE tree AS (SELECT * FROM nodes) SELECT * FROM tree",
+			want: "WITH RECURSIVE tree AS (SELECT * FROM TEST_DB.PUBLIC_NODES) SELECT * FROM tree",
+		},
+		{
+			name: "a CTAS body's CTE aliases are left alone, while a real table inside it is still qualified",
+			sql:  "CREATE TABLE summary AS (WITH counts AS (SELECT id FROM users) SELECT * FROM counts)",
+			want: "CREATE TABLE TEST_DB.PUBLIC_SUMMARY AS (WITH counts AS (SELECT id FROM TEST_DB.PUBLIC_USERS) SELECT * FROM counts)",
+		},
+		{
+			name: "the same, without the outer parentheses around the CTE",
+			sql:  "CREATE TABLE summary AS\nWITH counts AS (SELECT id FROM users)\nSELECT * FROM counts",
+			want: "CREATE TABLE TEST_DB.PUBLIC_SUMMARY AS\nWITH counts AS (SELECT id FROM TEST_DB.PUBLIC_USERS)\nSELECT * FROM counts",
+		},
+		{
+			// A comma or parenthesis inside a string literal must not confuse
+			// the CTE-body boundary the alias scan tracks.
+			name: "a comma inside a string literal in the CTE body does not split it early",
+			sql:  "WITH labeled AS (SELECT 'a, b' AS s FROM t1) SELECT * FROM labeled",
+			want: "WITH labeled AS (SELECT 'a, b' AS s FROM TEST_DB.PUBLIC_T1) SELECT * FROM labeled",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := rewriteContextualTableReferences(tt.sql, executionContext); got != tt.want {
+				t.Errorf("got  %q\nwant %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestRewriteContextualTableReferences_TemporaryTableNameStaysBare pins that a
+// table being created with TEMP/TEMPORARY keeps the name Snowflake gave it.
+// DuckDB refuses to place a TEMP table under an explicit schema at all — "CREATE
+// TEMP TABLE test_db.public_foo" fails with "Schema with name test_db does not
+// exist!" — because every TEMP table lives in DuckDB's own built-in temp
+// catalog regardless of what schema is named, so qualifying it the way a
+// persistent table is qualified would break table creation outright.
+func TestRewriteContextualTableReferences_TemporaryTableNameStaysBare(t *testing.T) {
+	executionContext := ExecutionContext{Database: "TEST_DB", Schema: "PUBLIC"}
+
+	tests := []struct {
+		name string
+		sql  string
+		want string
+	}{
+		{
+			name: "CREATE TEMPORARY TABLE",
+			sql:  "CREATE TEMPORARY TABLE scratch AS SELECT 1 AS x",
+			want: "CREATE TEMPORARY TABLE scratch AS SELECT 1 AS x",
+		},
+		{
+			name: "CREATE TEMP TABLE",
+			sql:  "CREATE TEMP TABLE scratch (id INT)",
+			want: "CREATE TEMP TABLE scratch (id INT)",
+		},
+		{
+			name: "a real table the temp table is built from is still qualified",
+			sql:  "CREATE TEMPORARY TABLE scratch AS SELECT * FROM orders",
+			want: "CREATE TEMPORARY TABLE scratch AS SELECT * FROM TEST_DB.PUBLIC_ORDERS",
+		},
+		{
+			name: "a persistent table's name is unaffected by this exclusion",
+			sql:  "CREATE TABLE permanent AS SELECT 1 AS x",
+			want: "CREATE TABLE TEST_DB.PUBLIC_PERMANENT AS SELECT 1 AS x",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := rewriteContextualTableReferences(tt.sql, executionContext); got != tt.want {
+				t.Errorf("got  %q\nwant %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestRewriteContextualTableReferences_TrailingNewlineDoesNotShiftScanning
+// pins the fix for a real off-by-N bug: skipSpaceAndComments used to compute
+// its skip by comparing string lengths before and after trimLeadingComments,
+// which trims BOTH ends of whatever it is given via strings.TrimSpace. Handed
+// the rest of a statement that itself ends in a trailing newline — the
+// ordinary case for SQL typed into an editor or sent over HTTP — the trimmed
+// trailing newline was counted as though it had been trimmed off the front,
+// shifting every later position by one and reading a CTE alias's own name one
+// character short. A body with nested function-call parentheses is included
+// because the earlier, narrower tests never had any: matchingParen's own
+// depth tracking needs more than one level to be exercised at all.
+func TestRewriteContextualTableReferences_TrailingNewlineDoesNotShiftScanning(t *testing.T) {
+	executionContext := ExecutionContext{Database: "TEST_DB", Schema: "PUBLIC"}
+
+	sql := "with test as (\n" +
+		"SELECT\n" +
+		"    IFF(1 > 0, 'yes', 'no')          AS iff_translates,\n" +
+		"    NVL(NULL, 'fallback')            AS nvl_translates,\n" +
+		"    DATEADD(day, 30, CURRENT_DATE)   AS dateadd_translates\n" +
+		") select * from test;\n" // the trailing newline is the point of this test
+
+	got := rewriteContextualTableReferences(sql, executionContext)
+	if !strings.HasSuffix(strings.TrimSpace(got), "select * from test;") {
+		t.Fatalf("the CTE's own name should stay bare, got %q", got)
+	}
+	if strings.Contains(got, "TEST_DB.PUBLIC_TEST") {
+		t.Fatalf("the CTE alias was qualified as though it were a table, got %q", got)
+	}
+}

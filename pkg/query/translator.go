@@ -2,6 +2,7 @@ package query
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -86,6 +87,14 @@ func (t *Translator) Translate(sql string) (string, error) {
 	// emulator catalog once SQL DDL and metadata creation are unified.
 	sql = translateCreateTableKind(sql)
 
+	// CREATE TABLE ... AS <query> has no column-definition list to protect —
+	// its body is a query like any other, and needs the same function
+	// translation a plain SELECT would get. It is peeled off and translated
+	// on its own; the DDL preamble is left exactly as it arrived here.
+	if preamble, body, ok := splitCreateTableAs(sql); ok {
+		return preamble + t.handleComplexTransformations(t.translateFunctionsLexically(body)), nil
+	}
+
 	// DDL and the SHOW family carry no function calls worth translating, and
 	// a CREATE TABLE body in particular holds type names that must not be
 	// touched. leadingSQL looks past a leading comment, so a commented DDL
@@ -103,6 +112,33 @@ func (t *Translator) Translate(sql string) (string, error) {
 	}
 
 	return t.handleComplexTransformations(t.translateFunctionsLexically(sql)), nil
+}
+
+// createTableAsPattern recognizes the DDL preamble of CREATE TABLE ... AS
+// <query> — the table name may already be DATABASE.SCHEMA_TABLE qualified by
+// the time Translate sees it, since table-name resolution runs earlier in the
+// pipeline. It deliberately does not match a column-definition CREATE TABLE:
+// a "(" right after the name, with no AS before it, does not match "AS\s*"
+// and falls through to the untouched pass-through instead.
+var createTableAsPattern = regexp.MustCompile(
+	`(?is)^CREATE\s+(?:OR\s+REPLACE\s+)?(?:(?:TEMP|TEMPORARY|TRANSIENT)\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?[^\s(;]+\s+AS\s*`,
+)
+
+// splitCreateTableAs separates a CREATE TABLE ... AS <query> statement into
+// its DDL preamble and query body, or reports ok=false for anything else —
+// including a column-definition CREATE TABLE, which has no AS <query> to
+// split off. A leading comment is skipped only to find the split point;
+// preamble still carries it, so nothing about the original text is lost.
+func splitCreateTableAs(sql string) (preamble, body string, ok bool) {
+	trimmed := trimLeadingComments(sql)
+	prefixLen := len(sql) - len(trimmed)
+
+	loc := createTableAsPattern.FindStringIndex(trimmed)
+	if loc == nil {
+		return "", "", false
+	}
+	splitAt := prefixLen + loc[1]
+	return sql[:splitAt], sql[splitAt:], true
 }
 
 // translateCreateTableKind converts Snowflake CREATE TABLE modifiers that

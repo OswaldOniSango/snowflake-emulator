@@ -165,6 +165,98 @@ func TestMergeProcessor_ParseMergeStatement(t *testing.T) {
 			},
 		},
 		{
+			// A regex built on [^)]+ between the VALUES parens has no way to
+			// look past a value that is itself a call with its own closing
+			// paren — CURRENT_TIMESTAMP() truncated the capture right there,
+			// silently dropping the list's own closing paren along with the
+			// updated_at value that should have followed it.
+			name: "InsertValueThatIsItselfAFunctionCall",
+			sql: `MERGE INTO target t USING source s
+                  ON t.id = s.id
+                  WHEN NOT MATCHED THEN INSERT (id, name, updated_at)
+                  VALUES (s.id, s.name, CURRENT_TIMESTAMP())`,
+			want: &MergeStatement{
+				TargetTable: "target",
+				TargetAlias: "t",
+				SourceTable: "source",
+				SourceAlias: "s",
+				OnCondition: "t.id = s.id",
+				WhenClauses: []WhenClause{
+					{
+						IsMatched:  false,
+						Action:     MergeActionInsert,
+						InsertCols: []string{"id", "name", "updated_at"},
+						InsertVals: []string{"s.id", "s.name", "CURRENT_TIMESTAMP()"},
+					},
+				},
+			},
+		},
+		{
+			// The same shape without a column list, and formatted across
+			// several lines the way a hand-written procedure body reads.
+			name: "InsertNoColumnListWithAFunctionCallValue",
+			sql: `MERGE INTO target t USING source s
+                  ON t.id = s.id
+                  WHEN NOT MATCHED THEN
+                      INSERT
+                      VALUES (
+                          s.id,
+                          CURRENT_TIMESTAMP()
+                      )`,
+			want: &MergeStatement{
+				TargetTable: "target",
+				TargetAlias: "t",
+				SourceTable: "source",
+				SourceAlias: "s",
+				OnCondition: "t.id = s.id",
+				WhenClauses: []WhenClause{
+					{
+						IsMatched:  false,
+						Action:     MergeActionInsert,
+						InsertVals: []string{"s.id", "CURRENT_TIMESTAMP()"},
+					},
+				},
+			},
+		},
+		{
+			// (.+) without (?s) cannot cross a newline, so a SET clause with
+			// each assignment on its own line — again, ordinary formatting —
+			// had everything after the first line silently dropped: only
+			// t.name survived, t.updated_at vanished with no error at all.
+			name: "UpdateSetWithEachAssignmentOnItsOwnLine",
+			sql: `MERGE INTO target t USING source s
+                  ON t.id = s.id
+                  WHEN MATCHED THEN
+                      UPDATE SET
+                          t.name = s.name,
+                          t.updated_at = CURRENT_TIMESTAMP()
+
+                  WHEN NOT MATCHED THEN INSERT (id) VALUES (s.id)`,
+			want: &MergeStatement{
+				TargetTable: "target",
+				TargetAlias: "t",
+				SourceTable: "source",
+				SourceAlias: "s",
+				OnCondition: "t.id = s.id",
+				WhenClauses: []WhenClause{
+					{
+						IsMatched: true,
+						Action:    MergeActionUpdate,
+						SetClauses: []SetClause{
+							{Column: "t.name", Value: "s.name"},
+							{Column: "t.updated_at", Value: "CURRENT_TIMESTAMP()"},
+						},
+					},
+					{
+						IsMatched:  false,
+						Action:     MergeActionInsert,
+						InsertCols: []string{"id"},
+						InsertVals: []string{"s.id"},
+					},
+				},
+			},
+		},
+		{
 			name:    "InvalidMerge_MissingTarget",
 			sql:     "MERGE INTO",
 			wantErr: true,
@@ -405,10 +497,17 @@ func TestResolveMergeTables(t *testing.T) {
 		},
 	}
 
+	handler, _, cleanup := setupMergeProcessorTest(t)
+	defer cleanup()
+	ctx := context.Background()
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			stmt := &MergeStatement{TargetTable: tt.target, SourceTable: tt.source}
-			got := resolveMergeTables(stmt, tt.executionContext)
+			got, err := handler.resolveMergeTables(ctx, stmt, tt.executionContext)
+			if err != nil {
+				t.Fatalf("resolveMergeTables() error = %v", err)
+			}
 
 			if got.TargetTable != tt.wantTarget {
 				t.Errorf("TargetTable = %q, want %q", got.TargetTable, tt.wantTarget)
@@ -420,5 +519,38 @@ func TestResolveMergeTables(t *testing.T) {
 				t.Error("resolveMergeTables mutated its argument; it must return a copy")
 			}
 		})
+	}
+}
+
+// TestResolveMergeTables_TemporaryTableIsLeftBare pins the bug this method was
+// changed to fix: a name that already resolved to a temporary table — a
+// procedure's own mangled __PROC_TEMP_... name, or a plain CREATE TEMPORARY
+// TABLE used directly in a MERGE — was qualified a second time into
+// TEST_DB.PUBLIC___PROC_TEMP_..., a name nothing had ever created.
+func TestResolveMergeTables_TemporaryTableIsLeftBare(t *testing.T) {
+	handler, executor, cleanup := setupMergeProcessorTest(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	if _, err := executor.repo.CreateDatabase(ctx, "TEST_DB", ""); err != nil {
+		t.Fatalf("CreateDatabase() error = %v", err)
+	}
+	executionContext := ExecutionContext{Database: "TEST_DB", Schema: "PUBLIC"}
+	if _, err := executor.ExecuteWithContext(ctx, executionContext,
+		"CREATE TEMPORARY TABLE scratch_source AS SELECT 1 AS id"); err != nil {
+		t.Fatalf("failed to create the temp table: %v", err)
+	}
+
+	stmt := &MergeStatement{TargetTable: "merge_target", SourceTable: "scratch_source"}
+	got, err := handler.resolveMergeTables(ctx, stmt, executionContext)
+	if err != nil {
+		t.Fatalf("resolveMergeTables() error = %v", err)
+	}
+
+	if got.SourceTable != "scratch_source" {
+		t.Errorf("SourceTable = %q, want the temp table's bare name unchanged", got.SourceTable)
+	}
+	if got.TargetTable != "TEST_DB.PUBLIC_MERGE_TARGET" {
+		t.Errorf("TargetTable = %q, an ordinary table should still be qualified", got.TargetTable)
 	}
 }

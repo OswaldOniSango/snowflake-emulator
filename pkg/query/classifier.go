@@ -195,7 +195,26 @@ func (c *Classifier) isQueryStatement(upperSQL string) bool {
 		strings.HasPrefix(upperSQL, "SHOW") ||
 		strings.HasPrefix(upperSQL, "DESCRIBE") ||
 		strings.HasPrefix(upperSQL, "DESC") ||
-		strings.HasPrefix(upperSQL, "EXPLAIN")
+		strings.HasPrefix(upperSQL, "EXPLAIN") ||
+		startsWithCTEQuery(upperSQL)
+}
+
+// startsWithCTEQuery reports whether upperSQL opens with a WITH clause whose
+// trailing statement is a SELECT.
+//
+// None of the prefixes above ever match "WITH cte AS (...) SELECT ...", so
+// without this it fell through every check in Classify — the DDL prefixes,
+// COPY, MERGE, transaction control — and landed on the DML default: executed
+// through ExecuteWithContext for a rows-affected count instead of run as the
+// query it is. Standard SQL also allows a WITH clause to precede INSERT,
+// UPDATE, DELETE or MERGE; those already classify correctly by falling
+// through to that same default, so only a trailing SELECT is recognized here.
+func startsWithCTEQuery(upperSQL string) bool {
+	if !strings.HasPrefix(upperSQL, "WITH") {
+		return false
+	}
+	_, queryStart := cteAliases(upperSQL)
+	return queryStart >= 0 && strings.HasPrefix(upperSQL[queryStart:], "SELECT")
 }
 
 // IsCreateStage checks if the SQL creates a named stage.

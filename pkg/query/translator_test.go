@@ -1188,3 +1188,100 @@ FROM t`,
 		})
 	}
 }
+
+// TestTranslator_CreateTableAsSelectTranslatesItsBody pins that CREATE TABLE
+// ... AS <query> is not simply passed through the way a column-definition
+// CREATE TABLE is. The AS <query> body is a full statement in its own right —
+// exactly the query a plain SELECT would need translated — while the DDL
+// preamble, and the table name within it, are left exactly as given here:
+// qualification already happened earlier in the pipeline, before Translate
+// ever sees the statement.
+func TestTranslator_CreateTableAsSelectTranslatesItsBody(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "a simple rename in the body",
+			input:    "CREATE TABLE t AS SELECT IFF(1 > 0, 'yes', 'no') AS a",
+			expected: "CREATE TABLE t AS SELECT IF(1 > 0, 'yes', 'no') AS a",
+		},
+		{
+			name:     "a marker-based rewrite in the body",
+			input:    "CREATE TABLE t AS SELECT DATEADD(day, 30, CURRENT_DATE) AS a",
+			expected: "CREATE TABLE t AS SELECT (CAST(CURRENT_DATE AS DATE) + interval (30) day) AS a",
+		},
+		{
+			name: "several functions in one body",
+			input: "CREATE TABLE t AS (\nSELECT\n    IFF(1 > 0, 'yes', 'no')          AS iff_translates,\n" +
+				"    NVL(NULL, 'fallback')            AS nvl_translates,\n" +
+				"    DATEADD(day, 30, CURRENT_DATE)   AS dateadd_translates\n)",
+			expected: "CREATE TABLE t AS (\nSELECT\n    IF(1 > 0, 'yes', 'no')          AS iff_translates,\n" +
+				"    COALESCE(NULL, 'fallback')            AS nvl_translates,\n" +
+				"    (CAST(CURRENT_DATE AS DATE) + interval (30) day)   AS dateadd_translates\n)",
+		},
+		{
+			name:     "CREATE TEMPORARY TABLE AS is recognized too",
+			input:    "CREATE TEMPORARY TABLE t AS SELECT IFF(1 > 0, 'yes', 'no') AS a",
+			expected: "CREATE TEMPORARY TABLE t AS SELECT IF(1 > 0, 'yes', 'no') AS a",
+		},
+		{
+			name:     "CREATE OR REPLACE TABLE AS is recognized too",
+			input:    "CREATE OR REPLACE TABLE t AS SELECT IFF(1 > 0, 'yes', 'no') AS a",
+			expected: "CREATE OR REPLACE TABLE t AS SELECT IF(1 > 0, 'yes', 'no') AS a",
+		},
+		{
+			name:     "CREATE TABLE IF NOT EXISTS AS is recognized too",
+			input:    "CREATE TABLE IF NOT EXISTS t AS SELECT IFF(1 > 0, 'yes', 'no') AS a",
+			expected: "CREATE TABLE IF NOT EXISTS t AS SELECT IF(1 > 0, 'yes', 'no') AS a",
+		},
+		{
+			name:     "the table name is left as already qualified",
+			input:    "CREATE TABLE TEST_DB.PUBLIC_T AS SELECT IFF(1 > 0, 'yes', 'no') AS a",
+			expected: "CREATE TABLE TEST_DB.PUBLIC_T AS SELECT IF(1 > 0, 'yes', 'no') AS a",
+		},
+		{
+			name:     "a WITH clause in the body translates too",
+			input:    "CREATE TABLE t AS WITH counts AS (SELECT IFF(1 > 0, 1, 0) AS a) SELECT * FROM counts",
+			expected: "CREATE TABLE t AS WITH counts AS (SELECT IF(1 > 0, 1, 0) AS a) SELECT * FROM counts",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			translator := NewTranslator()
+			result, err := translator.Translate(tt.input)
+			if err != nil {
+				t.Fatalf("Translate() error = %v", err)
+			}
+			if diff := cmp.Diff(tt.expected, result); diff != "" {
+				t.Errorf("Translate() mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// TestTranslator_ColumnDefinitionCreateTableIsStillPassedThrough pins that the
+// ordinary column-definition CREATE TABLE — with no AS <query> — keeps being
+// passed through untouched, so a type name is never mistaken for a function
+// call to translate.
+func TestTranslator_ColumnDefinitionCreateTableIsStillPassedThrough(t *testing.T) {
+	tests := []string{
+		"CREATE TABLE t (id INT, amount DECIMAL(10,2))",
+		"CREATE TEMPORARY TABLE t (id INT)",
+		"CREATE TABLE IF NOT EXISTS t (id INT)",
+	}
+
+	for _, input := range tests {
+		t.Run(input, func(t *testing.T) {
+			result, err := NewTranslator().Translate(input)
+			if err != nil {
+				t.Fatalf("Translate() error = %v", err)
+			}
+			if result != input {
+				t.Errorf("Translate(%q) = %q, want it unchanged", input, result)
+			}
+		})
+	}
+}
