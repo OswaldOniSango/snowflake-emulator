@@ -12,6 +12,7 @@ import { createExplorer } from "./explorer";
 import { renderGrid, renderNotice } from "./grid";
 import { checkHealth } from "./health";
 import { createContextPicker } from "./context-picker";
+import { createDockCollapseToggle } from "./dock-collapse";
 import { changesCatalog, createCatalog } from "./catalog";
 import { createExportControls } from "./export";
 import { createCompletionSource } from "./completion";
@@ -146,7 +147,7 @@ function main(): void {
   pick(root, "shortcut").textContent = isApplePlatform() ? "⌘↵" : "Ctrl+↵";
   pick(root, "theme").append(createThemeToggle());
   const exportControls = createExportControls(() => shownResult);
-  pick(root, "dock-head").append(exportControls);
+  pick(root, "dock-head").append(exportControls, createDockCollapseToggle(dock));
   pick(root, "limitations").append(createLimitationsButton());
 
   // Completion reads whatever the cache last loaded, so a namespace that has
