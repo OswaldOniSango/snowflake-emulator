@@ -35,8 +35,17 @@ func NewProcedureProcessor(repo *metadata.Repository, executor *Executor) *Proce
 }
 
 // Create parses CREATE PROCEDURE and stores it in the catalog.
+//
+// IsCreateProcedure — which dispatches here — already looks past a leading
+// comment, matching leadingSQL's normal use elsewhere. The regex below has to
+// do the same: it is anchored at the very start of the string, so a comment
+// describing the procedure, sitting right above it with no semicolon of its
+// own to end a prior statement — the console's splitter then folds it into
+// this same statement — left "CREATE" nowhere near position 0 and the whole
+// pattern failed to match, misreporting a perfectly ordinary CREATE PROCEDURE
+// as unsupported syntax.
 func (p *ProcedureProcessor) Create(ctx context.Context, executionContext ExecutionContext, sql string) (*ExecResult, error) {
-	match := createProcedurePattern.FindStringSubmatch(strings.TrimSpace(sql))
+	match := createProcedurePattern.FindStringSubmatch(trimLeadingComments(sql))
 	if match == nil {
 		return nil, fmt.Errorf("unsupported CREATE PROCEDURE syntax")
 	}
@@ -73,7 +82,7 @@ func (p *ProcedureProcessor) Create(ctx context.Context, executionContext Execut
 
 // Drop parses DROP PROCEDURE and removes it from the catalog.
 func (p *ProcedureProcessor) Drop(ctx context.Context, executionContext ExecutionContext, sql string) (*ExecResult, error) {
-	match := dropProcedurePattern.FindStringSubmatch(strings.TrimSpace(sql))
+	match := dropProcedurePattern.FindStringSubmatch(trimLeadingComments(sql))
 	if match == nil {
 		return nil, fmt.Errorf("unsupported DROP PROCEDURE syntax")
 	}
@@ -93,7 +102,7 @@ func (p *ProcedureProcessor) Drop(ctx context.Context, executionContext Executio
 
 // Call executes a stored SQL procedure and returns its RETURN or final SELECT result.
 func (p *ProcedureProcessor) Call(ctx context.Context, executionContext ExecutionContext, sql string) (*Result, error) {
-	match := callProcedurePattern.FindStringSubmatch(strings.TrimSpace(sql))
+	match := callProcedurePattern.FindStringSubmatch(trimLeadingComments(sql))
 	if match == nil {
 		return nil, fmt.Errorf("unsupported CALL syntax")
 	}

@@ -29,7 +29,7 @@ func NewStageProcessor(manager *stage.Manager, repo *metadata.Repository) *Stage
 
 // Create persists a named internal stage and creates its storage directory.
 func (p *StageProcessor) Create(ctx context.Context, executionContext ExecutionContext, sql string) (*ExecResult, error) {
-	match := createStagePattern.FindStringSubmatch(strings.TrimSpace(sql))
+	match := createStagePattern.FindStringSubmatch(trimLeadingComments(sql))
 	if match == nil {
 		return nil, fmt.Errorf("unsupported CREATE STAGE syntax; only named internal stages are supported")
 	}
@@ -68,7 +68,7 @@ func (p *StageProcessor) Create(ctx context.Context, executionContext ExecutionC
 
 // Drop removes a named internal stage and its files.
 func (p *StageProcessor) Drop(ctx context.Context, executionContext ExecutionContext, sql string) (*ExecResult, error) {
-	match := dropStagePattern.FindStringSubmatch(strings.TrimSpace(sql))
+	match := dropStagePattern.FindStringSubmatch(trimLeadingComments(sql))
 	if match == nil {
 		return nil, fmt.Errorf("unsupported DROP STAGE syntax")
 	}
@@ -94,7 +94,7 @@ func (p *StageProcessor) Drop(ctx context.Context, executionContext ExecutionCon
 
 // List returns the files stored under a named internal stage.
 func (p *StageProcessor) List(ctx context.Context, executionContext ExecutionContext, sql string) (*Result, error) {
-	match := listStagePattern.FindStringSubmatch(strings.TrimSpace(sql))
+	match := listStagePattern.FindStringSubmatch(trimLeadingComments(sql))
 	if match == nil {
 		return nil, fmt.Errorf("unsupported LIST syntax")
 	}

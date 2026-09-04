@@ -435,6 +435,81 @@ func TestProcedureExceptionWhenOther(t *testing.T) {
 	}
 }
 
+// TestCreateProcedureAllowsALeadingComment pins the fix for a statement the
+// console's own splitter produces routinely: a comment describing the
+// procedure, with no semicolon of its own, sits right above the CREATE and
+// is folded into the same statement text. IsCreateProcedure already looks
+// past a leading comment to dispatch here, but Create's own regex was
+// anchored at the very start of the string — with the comment still there,
+// "CREATE" was nowhere near position 0, and a perfectly ordinary CREATE
+// PROCEDURE was rejected as unsupported syntax.
+func TestCreateProcedureAllowsALeadingComment(t *testing.T) {
+	executor, repo := setupTestExecutor(t)
+	ctx := context.Background()
+
+	database, err := repo.CreateDatabase(ctx, "COMMENT_DB", "")
+	if err != nil {
+		t.Fatalf("CreateDatabase() error = %v", err)
+	}
+	if _, err := repo.GetSchemaByName(ctx, database.ID, "PUBLIC"); err != nil {
+		t.Fatalf("GetSchemaByName() error = %v", err)
+	}
+	executionContext := ExecutionContext{Database: "COMMENT_DB", Schema: "PUBLIC"}
+
+	createSQL := `-- Greets whoever is asked about.
+-- Kept simple on purpose.
+CREATE PROCEDURE greet(name VARCHAR)
+RETURNS VARCHAR
+LANGUAGE SQL
+AS $$
+BEGIN
+    RETURN 'Hello, ' || :name;
+END
+$$`
+	if _, err := executor.ExecuteWithContext(ctx, executionContext, createSQL); err != nil {
+		t.Fatalf("CREATE PROCEDURE error = %v", err)
+	}
+
+	result, err := executor.QueryWithContext(ctx, executionContext, "CALL greet('World')")
+	if err != nil {
+		t.Fatalf("CALL error = %v", err)
+	}
+	if len(result.Rows) != 1 || result.Rows[0][0] != "Hello, World" {
+		t.Fatalf("CALL result = %#v, want Hello, World", result.Rows)
+	}
+}
+
+// TestDropAndCallProcedureAllowALeadingCommentToo covers DROP PROCEDURE and
+// CALL, which parse a statement the same anchored way CREATE PROCEDURE does.
+func TestDropAndCallProcedureAllowALeadingCommentToo(t *testing.T) {
+	executor, repo := setupTestExecutor(t)
+	ctx := context.Background()
+
+	database, err := repo.CreateDatabase(ctx, "COMMENT_DB2", "")
+	if err != nil {
+		t.Fatalf("CreateDatabase() error = %v", err)
+	}
+	if _, err := repo.GetSchemaByName(ctx, database.ID, "PUBLIC"); err != nil {
+		t.Fatalf("GetSchemaByName() error = %v", err)
+	}
+	executionContext := ExecutionContext{Database: "COMMENT_DB2", Schema: "PUBLIC"}
+
+	if _, err := executor.ExecuteWithContext(ctx, executionContext,
+		"CREATE PROCEDURE noop() RETURNS VARCHAR LANGUAGE SQL AS $$ BEGIN RETURN 'ok'; END $$"); err != nil {
+		t.Fatalf("CREATE PROCEDURE error = %v", err)
+	}
+
+	if _, err := executor.QueryWithContext(ctx, executionContext,
+		"-- calling it\nCALL noop()"); err != nil {
+		t.Fatalf("commented CALL error = %v", err)
+	}
+
+	if _, err := executor.ExecuteWithContext(ctx, executionContext,
+		"-- cleaning up\nDROP PROCEDURE noop()"); err != nil {
+		t.Fatalf("commented DROP PROCEDURE error = %v", err)
+	}
+}
+
 func TestParseProcedureScriptRejectsMalformedBlocks(t *testing.T) {
 	tests := []struct {
 		name string
