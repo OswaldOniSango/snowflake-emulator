@@ -16,6 +16,12 @@ import (
 // with no more specific mapping.
 const sqlStateInternalError = "XX000"
 
+// sqlRowCountVariable is the name Snowflake's own SQLROWCOUNT is spelled
+// with. Unlike SQLCODE/SQLSTATE/SQLERRM — which only exist once an exception
+// handler is running — SQLROWCOUNT is readable from the very start of a
+// procedure, so it is seeded to 0 rather than left undeclared.
+const sqlRowCountVariable = "SQLROWCOUNT"
+
 var procedureTemporaryTablePattern = regexp.MustCompile(`(?i)^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:TEMP|TEMPORARY)\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?\s+([A-Za-z_][A-Za-z0-9_$]*)`)
 
 type procedureInterpreter struct {
@@ -37,7 +43,7 @@ func newProcedureInterpreter(executor *Executor, executionContext ExecutionConte
 		executor:         executor,
 		executionContext: executionContext,
 		procedureName:    procedureName,
-		variables:        make(map[string]any),
+		variables:        map[string]any{sqlRowCountVariable: int64(0)},
 		temporaryTables:  make(map[string]string),
 		invocationID:     strings.ReplaceAll(uuid.NewString(), "-", ""),
 	}
@@ -122,11 +128,19 @@ func (i *procedureInterpreter) executeStatement(ctx context.Context, statement p
 			result, err := i.executor.QueryWithContext(ctx, i.executionContext, sql)
 			return procedureExecution{result: result}, err
 		}
-		_, err = i.executor.ExecuteWithContext(ctx, i.executionContext, sql)
-		if err == nil && droppedTemporaryTable != "" {
+		execResult, err := i.executor.ExecuteWithContext(ctx, i.executionContext, sql)
+		if err != nil {
+			return procedureExecution{}, err
+		}
+		// SQLROWCOUNT reflects the most recent DML/DDL, the same way Snowflake's
+		// does — a plain query updates it too in Snowflake only via SELECT
+		// INTO, a form this interpreter does not have, so the query branch
+		// above leaves it untouched.
+		i.variables[sqlRowCountVariable] = execResult.RowsAffected
+		if droppedTemporaryTable != "" {
 			delete(i.temporaryTables, droppedTemporaryTable)
 		}
-		return procedureExecution{}, err
+		return procedureExecution{}, nil
 	case procedureAssignmentStatement:
 		if _, exists := i.variables[statement.Name]; !exists {
 			return procedureExecution{}, fmt.Errorf("variable %s is not declared", statement.Name)
