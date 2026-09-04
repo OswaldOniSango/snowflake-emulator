@@ -26,7 +26,7 @@ func NewTaskProcessor(repo *metadata.Repository, executor *Executor) *TaskProces
 }
 
 func (p *TaskProcessor) Create(ctx context.Context, executionContext ExecutionContext, sql string) (*ExecResult, error) {
-	match := createTaskPattern.FindStringSubmatch(strings.TrimSpace(sql))
+	match := createTaskPattern.FindStringSubmatch(trimLeadingComments(sql))
 	if match == nil {
 		return nil, fmt.Errorf("unsupported CREATE TASK syntax")
 	}
@@ -52,7 +52,7 @@ func (p *TaskProcessor) Create(ctx context.Context, executionContext ExecutionCo
 }
 
 func (p *TaskProcessor) Alter(ctx context.Context, executionContext ExecutionContext, sql string) (*ExecResult, error) {
-	match := alterTaskPattern.FindStringSubmatch(strings.TrimSpace(sql))
+	match := alterTaskPattern.FindStringSubmatch(trimLeadingComments(sql))
 	if match == nil {
 		return nil, fmt.Errorf("unsupported ALTER TASK syntax")
 	}
@@ -71,7 +71,7 @@ func (p *TaskProcessor) Alter(ctx context.Context, executionContext ExecutionCon
 }
 
 func (p *TaskProcessor) Drop(ctx context.Context, executionContext ExecutionContext, sql string) (*ExecResult, error) {
-	match := dropTaskPattern.FindStringSubmatch(strings.TrimSpace(sql))
+	match := dropTaskPattern.FindStringSubmatch(trimLeadingComments(sql))
 	if match == nil {
 		return nil, fmt.Errorf("unsupported DROP TASK syntax")
 	}
@@ -111,7 +111,7 @@ func (p *TaskProcessor) Show(ctx context.Context) (*Result, error) {
 }
 
 func (p *TaskProcessor) Execute(ctx context.Context, executionContext ExecutionContext, sql string) (*ExecResult, error) {
-	match := executeTaskPattern.FindStringSubmatch(strings.TrimSpace(sql))
+	match := executeTaskPattern.FindStringSubmatch(trimLeadingComments(sql))
 	if match == nil {
 		return nil, fmt.Errorf("unsupported EXECUTE TASK syntax")
 	}

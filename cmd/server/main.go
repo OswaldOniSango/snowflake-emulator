@@ -40,6 +40,16 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to open database: %v", err)
 	}
+	// A TEMP table lives in DuckDB's own built-in temp catalog, which is
+	// scoped to the physical connection that created it — not to the database
+	// file, and not shared across connections. database/sql pools connections
+	// by default, so a CREATE TEMPORARY TABLE on one pooled connection could
+	// be invisible to a SELECT that happens to land on another; measured
+	// under concurrent load, roughly a third of reads failed that way. Since
+	// writes are already serialized through connMgr's own mutex, capping the
+	// pool at one connection costs nothing writes were not already paying,
+	// and it is what makes every TEMP table actually visible to every request.
+	db.SetMaxOpenConns(1)
 	defer func() {
 		if err := db.Close(); err != nil {
 			log.Printf("Failed to close database: %v", err)

@@ -190,3 +190,20 @@ func TestStreamUsesExecutionContextForShortNames(t *testing.T) {
 		t.Fatalf("short stream SELECT rows = %#v", result.Rows)
 	}
 }
+
+// TestCreateAndDropStreamAllowALeadingComment mirrors the fix already pinned
+// for CREATE PROCEDURE: a comment folded into the same statement text as the
+// CREATE or DROP that follows it, the shape the console's own splitter
+// produces when a comment sits right above a statement with no semicolon of
+// its own to end a prior one.
+func TestCreateAndDropStreamAllowALeadingComment(t *testing.T) {
+	executor, ctx := setupStreamTest(t)
+
+	if _, err := executor.Execute(ctx,
+		"-- tracks inserts into EVENTS\nCREATE STREAM STREAM_DB.PUBLIC.EVENTS_STREAM ON TABLE STREAM_DB.PUBLIC.EVENTS"); err != nil {
+		t.Fatalf("commented CREATE STREAM error = %v", err)
+	}
+	if _, err := executor.Execute(ctx, "-- no longer needed\nDROP STREAM STREAM_DB.PUBLIC.EVENTS_STREAM"); err != nil {
+		t.Fatalf("commented DROP STREAM error = %v", err)
+	}
+}

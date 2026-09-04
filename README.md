@@ -299,13 +299,19 @@ configured. Procedure bodies support multiple SQL statements, `DECLARE`
 variables with `DEFAULT` values, scalar assignments with `:=`, searched
 execution through `CASE`, conditional branches with `IF/ELSE`, variable
 bindings, dynamic object names through `IDENTIFIER(:variable)`, and `RETURN`
-values. A top-level `EXCEPTION WHEN OTHER THEN` handler can inspect the
-emulator-provided `SQLCODE`, `SQLSTATE`, and `SQLERRM` diagnostic variables. SQL
-executed inside a procedure uses the procedure call's database and schema
-context. Dynamic identifiers currently support simple unquoted object names;
-qualified/quoted names remain limited. During a `CALL`, temporary tables use a
-single pinned DuckDB connection, remain isolated from concurrent calls, and are
-cleaned up when the invocation finishes.
+values. `SQLROWCOUNT` holds the row count of the most recent DML or `MERGE`,
+readable from the start of the procedure (it starts at `0`); a top-level
+`EXCEPTION WHEN OTHER THEN` handler can additionally inspect the
+emulator-provided `SQLCODE`, `SQLSTATE`, and `SQLERRM` diagnostic variables,
+and `SQLROWCOUNT` is not reset by the exception, so the handler still sees
+what the last successful statement affected. Inside a plain SQL statement a
+variable is written `:name`; a bare `name` is only substituted in a `RETURN`
+expression or the right-hand side of an assignment. SQL executed inside a
+procedure uses the procedure call's database and schema context. Dynamic
+identifiers currently support simple unquoted object names; qualified/quoted
+names remain limited. During a `CALL`, temporary tables use a single pinned
+DuckDB connection, remain isolated from concurrent calls, and are cleaned up
+when the invocation finishes.
 
 ### Append-Only Streams
 
@@ -450,8 +456,11 @@ The emulator supports standard SQL operations with automatic Snowflake-to-DuckDB
 | Category | Operations | Description |
 |----------|------------|-------------|
 | **Query** | `SELECT`, `SHOW`, `DESCRIBE`, `EXPLAIN` | Read operations with full result set support |
+| **Query** | `WITH ... SELECT` | Common table expressions, chained and referencing one another, ahead of any statement type |
 | **DML** | `INSERT`, `UPDATE`, `DELETE` | Data manipulation with rows affected count |
 | **DDL** | `CREATE TABLE`, `DROP TABLE`, `ALTER TABLE` | Schema management |
+| **DDL** | `CREATE TABLE ... AS <query>`, including a `WITH` clause | Function translation runs on the query body, not just a bare `SELECT` |
+| **DDL** | `CREATE [OR REPLACE] TEMPORARY TABLE ... AS <query>` | A true DuckDB TEMP table, visible to every statement in the session |
 | **DDL** | `CREATE DATABASE`, `DROP DATABASE` | Database management |
 | **DDL** | `CREATE SCHEMA`, `DROP SCHEMA` | Schema namespace management |
 | **DDL** | `CREATE [OR REPLACE] STAGE`, `DROP STAGE` | Named internal stages |
@@ -566,6 +575,7 @@ are not supported or have limited support:
 - Stream change tracking for `UPDATE` and `DELETE`
 - Stream consumption semantics, retention, and stale-state handling
 - User-defined functions
+- Snowflake's `FROM VALUES (...)` table literal with implicit `column1`/`column2` naming, which is not valid DuckDB syntax at all — `FROM (VALUES (1, 'Alice'), (2, 'Bob')) AS t(column1, column2)` reaches the same result unmodified
 
 ## Contributing
 

@@ -33,7 +33,7 @@ func NewStreamProcessor(repo *metadata.Repository, executor *Executor) *StreamPr
 
 // Create parses CREATE STREAM and stores the source-table offset.
 func (p *StreamProcessor) Create(ctx context.Context, executionContext ExecutionContext, sql string) (*ExecResult, error) {
-	match := createStreamPattern.FindStringSubmatch(strings.TrimSpace(sql))
+	match := createStreamPattern.FindStringSubmatch(trimLeadingComments(sql))
 	if match == nil {
 		return nil, fmt.Errorf("unsupported CREATE STREAM syntax")
 	}
@@ -74,7 +74,7 @@ func (p *StreamProcessor) Create(ctx context.Context, executionContext Execution
 
 // Drop parses DROP STREAM and removes its catalog definition.
 func (p *StreamProcessor) Drop(ctx context.Context, executionContext ExecutionContext, sql string) (*ExecResult, error) {
-	match := dropStreamPattern.FindStringSubmatch(strings.TrimSpace(sql))
+	match := dropStreamPattern.FindStringSubmatch(trimLeadingComments(sql))
 	if match == nil {
 		return nil, fmt.Errorf("unsupported DROP STREAM syntax")
 	}

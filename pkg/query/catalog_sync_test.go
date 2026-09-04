@@ -152,3 +152,36 @@ func TestCreateSchemaSQLRequiresDatabaseContext(t *testing.T) {
 		t.Fatalf("CREATE SCHEMA without database error = %v", err)
 	}
 }
+
+// TestCreateAndDropSQLAllowALeadingComment pins the fix for a statement the
+// console's own splitter produces routinely: a comment describing the object,
+// with no semicolon of its own, ends up folded into the same statement text
+// as the CREATE or DROP that follows it. Classify already looks past a
+// leading comment to route the statement here; these regexes, anchored at
+// the very start of the string, did not.
+func TestCreateAndDropSQLAllowALeadingComment(t *testing.T) {
+	executor, repo := setupTestExecutor(t)
+	ctx := context.Background()
+
+	if _, err := repo.CreateDatabase(ctx, "COMMENT_DB", ""); err != nil {
+		t.Fatalf("CreateDatabase() error = %v", err)
+	}
+	executionContext := ExecutionContext{Database: "COMMENT_DB", Schema: "PUBLIC"}
+
+	if _, err := executor.ExecuteWithContext(ctx, executionContext,
+		"-- analytics objects live here\nCREATE SCHEMA analytics"); err != nil {
+		t.Fatalf("commented CREATE SCHEMA error = %v", err)
+	}
+	if _, err := executor.ExecuteWithContext(ctx, executionContext,
+		"-- raw user data\nCREATE TABLE users (id INTEGER)"); err != nil {
+		t.Fatalf("commented CREATE TABLE error = %v", err)
+	}
+	if _, err := executor.ExecuteWithContext(ctx, executionContext,
+		"-- no longer needed\nDROP TABLE users"); err != nil {
+		t.Fatalf("commented DROP TABLE error = %v", err)
+	}
+	if _, err := executor.ExecuteWithContext(ctx, executionContext,
+		"-- cleanup\nDROP SCHEMA analytics"); err != nil {
+		t.Fatalf("commented DROP SCHEMA error = %v", err)
+	}
+}

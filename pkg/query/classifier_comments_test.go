@@ -112,3 +112,74 @@ func TestObjectHelpersIgnoreLeadingComments(t *testing.T) {
 		})
 	}
 }
+
+// TestClassifyRecognizesCTEQueries pins the fix for a statement that used to
+// fall through every check in Classify: none of the SELECT/CALL/SHOW prefixes
+// match "WITH cte AS (...) SELECT ...", nor do the DDL prefixes, COPY, MERGE
+// or transaction control — so it landed on the DML default and ran through
+// ExecuteWithContext for a rows-affected count, discarding the actual result
+// set the same way an unrecognized comment once did.
+func TestClassifyRecognizesCTEQueries(t *testing.T) {
+	classifier := NewClassifier()
+
+	tests := []struct {
+		name      string
+		sql       string
+		wantQuery bool
+	}{
+		{
+			name:      "a single CTE feeding a SELECT",
+			sql:       "WITH cte AS (SELECT 1 AS x) SELECT * FROM cte",
+			wantQuery: true,
+		},
+		{
+			name:      "lower-case with is recognized too",
+			sql:       "with cte as (select 1 as x) select * from cte",
+			wantQuery: true,
+		},
+		{
+			name:      "several chained CTEs, the shape the multi-CTE summary query uses",
+			sql:       "WITH a AS (SELECT 1 AS x), b AS (SELECT * FROM a) SELECT * FROM b",
+			wantQuery: true,
+		},
+		{
+			name:      "WITH RECURSIVE feeding a SELECT",
+			sql:       "WITH RECURSIVE tree AS (SELECT 1 AS x) SELECT * FROM tree",
+			wantQuery: true,
+		},
+		{
+			name:      "a trailing newline does not change the answer",
+			sql:       "WITH cte AS (SELECT 1 AS x) SELECT * FROM cte\n",
+			wantQuery: true,
+		},
+		{
+			name:      "a CTE feeding an INSERT is DML, not a query",
+			sql:       "WITH cte AS (SELECT 1 AS x) INSERT INTO t SELECT * FROM cte",
+			wantQuery: false,
+		},
+		{
+			name:      "a CTE feeding an UPDATE is DML, not a query",
+			sql:       "WITH cte AS (SELECT 1 AS x) UPDATE t SET a = 1",
+			wantQuery: false,
+		},
+		{
+			name:      "a CTE feeding a DELETE is DML, not a query",
+			sql:       "WITH cte AS (SELECT 1 AS x) DELETE FROM t",
+			wantQuery: false,
+		},
+		{
+			name:      "a bare WITH with nothing recognizable after it is not mistaken for a query",
+			sql:       "WITH 1 AS x",
+			wantQuery: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := classifier.Classify(tt.sql)
+			if result.IsQuery != tt.wantQuery {
+				t.Errorf("IsQuery = %v, want %v (Type = %v)", result.IsQuery, tt.wantQuery, result.Type)
+			}
+		})
+	}
+}

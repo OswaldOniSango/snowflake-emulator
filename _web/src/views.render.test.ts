@@ -29,8 +29,26 @@ function host(): HTMLElement {
   return element;
 }
 
+/**
+ * The upload button opens a detached file input and reacts to its "change"
+ * event, so a test drives that same flow: capture the input `chooseStageFile`
+ * creates and feed it a file, as if the user had picked one.
+ */
+function stubChosenFile(file: File): void {
+  const create = document.createElement.bind(document);
+  vi.spyOn(document, "createElement").mockImplementation((tag: string) => {
+    const element = create(tag);
+    if (tag === "input") {
+      Object.defineProperty(element, "files", { value: [file], configurable: true });
+      element.click = () => element.dispatchEvent(new Event("change"));
+    }
+    return element;
+  });
+}
+
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
   document.body.replaceChildren();
 });
 
@@ -109,6 +127,68 @@ describe("createExplorer", () => {
     expect(parent.querySelector('[aria-label="Upload file to LOAD_STAGE"]')).not.toBeNull();
     expect(parent.querySelector('[aria-label="Upload file to USERS"]')).toBeNull();
   });
+
+  async function openLoadStage(parent: HTMLElement): Promise<void> {
+    vi.stubGlobal("fetch", async (input: string) => {
+      if (input.endsWith("/objects")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ objects: [{ name: "LOAD_STAGE", kind: "stage" }] }),
+        };
+      }
+      if (input.endsWith("/schemas")) {
+        return { ok: true, status: 200, json: async () => [{ name: "PUBLIC" }] };
+      }
+      if (input.includes("/files")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ name: "data.csv", size: 3, last_modified: "2026-01-01T00:00:00Z" }),
+        };
+      }
+      return { ok: true, status: 200, json: async () => [{ name: "TEST_DB" }] };
+    });
+
+    createExplorer({ parent, context: () => ({ database: "TEST_DB", schema: "PUBLIC" }), onInsert: () => {} });
+    await settle();
+    parent.querySelector<HTMLButtonElement>('[role="treeitem"]')?.click();
+    await settle();
+    parent.querySelectorAll<HTMLButtonElement>('[role="treeitem"]')[1]?.click();
+    await settle();
+  }
+
+  it("shows a dismissable message once the upload finishes, instead of it sticking around forever", async () => {
+    const parent = host();
+    await openLoadStage(parent);
+    stubChosenFile(new File(["a,b"], "data.csv", { type: "text/csv" }));
+
+    parent.querySelector<HTMLButtonElement>('[aria-label="Upload file to LOAD_STAGE"]')?.click();
+    await settle();
+
+    const feedback = parent.querySelector(".explorer-feedback");
+    expect(feedback?.textContent).toContain("data.csv uploaded to @LOAD_STAGE");
+
+    parent.querySelector<HTMLButtonElement>('[aria-label="Dismiss"]')?.click();
+
+    expect(parent.querySelector(".explorer-feedback")).toBeNull();
+  });
+
+  it("clears a lingering upload message when the tree is refreshed", async () => {
+    const parent = host();
+    await openLoadStage(parent);
+    stubChosenFile(new File(["a,b"], "data.csv", { type: "text/csv" }));
+
+    parent.querySelector<HTMLButtonElement>('[aria-label="Upload file to LOAD_STAGE"]')?.click();
+    await settle();
+    expect(parent.querySelector(".explorer-feedback")).not.toBeNull();
+
+    parent.querySelector<HTMLButtonElement>('[aria-label="Refresh objects"]')?.click();
+    await settle();
+
+    expect(parent.querySelector(".explorer-feedback")).toBeNull();
+  });
+
 });
 
 describe("createWarehousesView", () => {

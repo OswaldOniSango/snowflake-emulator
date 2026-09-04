@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"testing"
+	"time"
 
 	_ "github.com/duckdb/duckdb-go/v2"
 	"github.com/google/go-cmp/cmp"
@@ -147,6 +148,74 @@ func TestManagerWithConnectionIsolatesTemporaryTables(t *testing.T) {
 	}
 	if !seen[10] || !seen[20] {
 		t.Fatalf("isolated temporary table results = %v", seen)
+	}
+}
+
+// TestNestedWithConnectionReusesTheAlreadyPinnedConnection pins the fix for a
+// deadlock: recursive execution — a stored procedure calling another one is
+// the real-world case — used to check out a second physical connection on
+// every nested WithConnection call, since Manager.WithConnection always went
+// back to the pool rather than noticing it was already running on one
+// connection. That silently worked with an unbounded pool, which is exactly
+// why it went unnoticed, but the emulator now caps the pool at a single
+// connection (temp tables are scoped to the connection that creates them, so
+// every request has to share one — see cmd/server/main.go), and under that
+// cap the same code deadlocked: the only connection was the one the outer
+// call was still holding when the nested call tried to check out another.
+func TestNestedWithConnectionReusesTheAlreadyPinnedConnection(t *testing.T) {
+	db := setupTestDuckDB(t)
+	db.SetMaxOpenConns(1)
+	mgr := NewManager(db)
+
+	err := mgr.WithConnection(context.Background(), func(outer *Manager) error {
+		done := make(chan error, 1)
+		go func() {
+			done <- outer.WithConnection(context.Background(), func(inner *Manager) error {
+				_, err := inner.Exec(context.Background(), "SELECT 1")
+				return err
+			})
+		}()
+
+		select {
+		case err := <-done:
+			return err
+		case <-time.After(5 * time.Second):
+			t.Fatal("nested WithConnection deadlocked instead of reusing the pinned connection")
+			return nil
+		}
+	})
+	if err != nil {
+		t.Fatalf("WithConnection() error = %v", err)
+	}
+}
+
+// TestNestedWithConnectionSeesWhatTheOuterCallJustCreated pins the other half
+// of the same fix: reusing the connection is not just about avoiding
+// deadlock, it is what makes a nested call see a TEMP table the outer call
+// just made, which a second, different connection never would.
+func TestNestedWithConnectionSeesWhatTheOuterCallJustCreated(t *testing.T) {
+	db := setupTestDuckDB(t)
+	db.SetMaxOpenConns(1)
+	mgr := NewManager(db)
+	ctx := context.Background()
+
+	err := mgr.WithConnection(ctx, func(outer *Manager) error {
+		if _, err := outer.Exec(ctx, "CREATE TEMPORARY TABLE from_outer AS SELECT 1 AS x"); err != nil {
+			return err
+		}
+		return outer.WithConnection(ctx, func(inner *Manager) error {
+			var got int
+			if err := inner.QueryRow(ctx, "SELECT x FROM from_outer").Scan(&got); err != nil {
+				return err
+			}
+			if got != 1 {
+				t.Errorf("got = %d, want 1", got)
+			}
+			return nil
+		})
+	})
+	if err != nil {
+		t.Fatalf("WithConnection() error = %v", err)
 	}
 }
 

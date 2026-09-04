@@ -143,3 +143,26 @@ func TestTaskConsumesStream(t *testing.T) {
 		t.Fatalf("stream rows after task = %#v, error = %v", pending, err)
 	}
 }
+
+// TestCreateAlterAndDropTaskAllowALeadingComment mirrors the fix already
+// pinned for CREATE PROCEDURE: a comment folded into the same statement text
+// as the statement that follows it, the shape the console's own splitter
+// produces when a comment sits right above a statement with no semicolon of
+// its own to end a prior one.
+func TestCreateAlterAndDropTaskAllowALeadingComment(t *testing.T) {
+	executor, ctx, executionContext := setupTaskTest(t)
+	if _, err := executor.ExecuteWithContext(ctx, executionContext, "CREATE TABLE task_log (message VARCHAR)"); err != nil {
+		t.Fatalf("CREATE TABLE error = %v", err)
+	}
+
+	if _, err := executor.ExecuteWithContext(ctx, executionContext,
+		"-- logs on a schedule\nCREATE TASK log_task WAREHOUSE = TASK_WH SCHEDULE = '1 MINUTE' AS INSERT INTO task_log VALUES ('executed')"); err != nil {
+		t.Fatalf("commented CREATE TASK error = %v", err)
+	}
+	if _, err := executor.ExecuteWithContext(ctx, executionContext, "-- turn it on\nALTER TASK log_task RESUME"); err != nil {
+		t.Fatalf("commented ALTER TASK error = %v", err)
+	}
+	if _, err := executor.ExecuteWithContext(ctx, executionContext, "-- done with it\nDROP TASK log_task"); err != nil {
+		t.Fatalf("commented DROP TASK error = %v", err)
+	}
+}

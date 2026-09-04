@@ -104,3 +104,23 @@ func TestStageProcessorRejectsUnsupportedSyntax(t *testing.T) {
 		})
 	}
 }
+
+// TestCreateAndDropStageAllowALeadingComment mirrors the fix already pinned
+// for CREATE PROCEDURE: a comment folded into the same statement text as the
+// CREATE or DROP that follows it, the shape the console's own splitter
+// produces when a comment sits right above a statement with no semicolon of
+// its own to end a prior one.
+func TestCreateAndDropStageAllowALeadingComment(t *testing.T) {
+	executor, _, _ := setupStageProcessorTest(t)
+	ctx := context.Background()
+	executionContext := ExecutionContext{Database: "STAGE_DB", Schema: "PUBLIC"}
+
+	if _, err := executor.ExecuteWithContext(ctx, executionContext,
+		"-- CSV drop point\nCREATE STAGE lessons"); err != nil {
+		t.Fatalf("commented CREATE STAGE error = %v", err)
+	}
+	if _, err := executor.ExecuteWithContext(ctx, executionContext,
+		"-- no longer needed\nDROP STAGE lessons"); err != nil {
+		t.Fatalf("commented DROP STAGE error = %v", err)
+	}
+}

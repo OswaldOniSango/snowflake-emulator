@@ -12,6 +12,7 @@ import { createExplorer } from "./explorer";
 import { renderGrid, renderNotice } from "./grid";
 import { checkHealth } from "./health";
 import { createContextPicker } from "./context-picker";
+import { createDockCollapseToggle } from "./dock-collapse";
 import { changesCatalog, createCatalog } from "./catalog";
 import { createExportControls } from "./export";
 import { createCompletionSource } from "./completion";
@@ -19,7 +20,7 @@ import { createHistoryView } from "./history";
 import { createWarehousesView } from "./warehouses";
 import { createLimitationsButton } from "./limitations";
 import { createThemeToggle } from "./theme";
-import { splitStatements, statementAt } from "./statements";
+import { splitStatements, statementAt, type Statement as StatementRange } from "./statements";
 import { renderTranslation } from "./translation";
 import {
   loadWorkspace,
@@ -146,7 +147,7 @@ function main(): void {
   pick(root, "shortcut").textContent = isApplePlatform() ? "⌘↵" : "Ctrl+↵";
   pick(root, "theme").append(createThemeToggle());
   const exportControls = createExportControls(() => shownResult);
-  pick(root, "dock-head").append(exportControls);
+  pick(root, "dock-head").append(exportControls, createDockCollapseToggle(dock));
   pick(root, "limitations").append(createLimitationsButton());
 
   // Completion reads whatever the cache last loaded, so a namespace that has
@@ -217,6 +218,21 @@ function main(): void {
     return statementAt(editor.value(), editor.cursorOffset())?.text ?? "";
   }
 
+  /** Same as statementToRun, but keeping the offsets so the run can be highlighted. */
+  function statementToRunRange(): StatementRange | null {
+    const range = editor.selectionRange();
+    if (!range) {
+      return statementAt(editor.value(), editor.cursorOffset());
+    }
+    const raw = editor.value().slice(range.from, range.to);
+    const text = raw.trim();
+    if (!text) {
+      return null;
+    }
+    const leading = raw.length - raw.trimStart().length;
+    return { text, start: range.from + leading, end: range.from + leading + text.length };
+  }
+
   function updateRunAll(): void {
     const count = splitStatements(editor.value()).length;
     runAllButton.hidden = count < 2;
@@ -224,11 +240,12 @@ function main(): void {
   }
 
   async function run(): Promise<void> {
-    await execute([statementToRun()].filter(Boolean));
+    const statement = statementToRunRange();
+    await execute(statement ? [statement] : []);
   }
 
   async function runAll(): Promise<void> {
-    await execute(splitStatements(editor.value()).map((statement) => statement.text));
+    await execute(splitStatements(editor.value()));
   }
 
   /**
@@ -236,7 +253,7 @@ function main(): void {
    * A failure stops the run: the statements after it were written expecting the
    * earlier ones to have happened.
    */
-  async function execute(statements: string[]): Promise<void> {
+  async function execute(statements: StatementRange[]): Promise<void> {
     if (running || statements.length === 0) {
       if (statements.length === 0) {
         setStatus("idle", "Idle", "nothing to run");
@@ -261,15 +278,16 @@ function main(): void {
         if (statements.length > 1) {
           setStatus("run", "Running", `${index + 1} of ${statements.length}`);
         }
+        editor.highlightRunning({ from: statement.start, to: statement.end });
 
-        const result = await runStatement(statement, context, fetch, (handle) => {
+        const result = await runStatement(statement.text, context, fetch, (handle) => {
           runningHandle = handle;
         });
         elapsed += result.elapsedMs;
 
         // A statement that created or dropped an object has just invalidated
         // what completion is offering.
-        if (changesCatalog(statement)) {
+        if (changesCatalog(statement.text)) {
           void catalog.refresh();
         }
 
@@ -316,6 +334,7 @@ function main(): void {
       runButton.disabled = false;
       runAllButton.disabled = false;
       cancelButton.hidden = true;
+      editor.highlightRunning(null);
       showTab("results");
     }
   }
@@ -396,6 +415,9 @@ function main(): void {
     shownResult = null;
     resultsPane = renderNotice("info", "Run a statement to see results here");
     setStatus("idle", "Idle", "no statement submitted");
+    // The highlighted range belongs to the buffer just left, not the one
+    // about to be shown.
+    editor.highlightRunning(null);
   }
 
   function switchTo(id: string): void {
