@@ -310,7 +310,58 @@ func (e *Executor) rewriteTablesWithContext(ctx context.Context, executionContex
 	if rewriteErr != nil {
 		return "", rewriteErr
 	}
-	return result, nil
+	return e.rewriteFunctionCallsWithContext(ctx, executionContext, result)
+}
+
+// rewriteFunctionCallsWithContext qualifies calls to user-defined functions
+// the same way table references are qualified, so an unqualified call like
+// AREA(3, 4) resolves to the physical MACRO CREATE FUNCTION backs it with.
+// A builtin like COUNT or UPPER is never touched: the check is membership in
+// the small set of functions actually defined for this database.schema,
+// fetched once so a statement with several ordinary function calls costs one
+// round trip rather than one per call.
+func (e *Executor) rewriteFunctionCallsWithContext(ctx context.Context, executionContext ExecutionContext, sql string) (string, error) {
+	if executionContext.Database == "" || executionContext.Schema == "" {
+		return sql, nil
+	}
+	names, err := e.repo.ListFunctionNames(ctx, executionContext.Database, executionContext.Schema)
+	if err != nil {
+		return "", err
+	}
+	if len(names) == 0 {
+		return sql, nil
+	}
+	known := make(map[string]bool, len(names))
+	for _, name := range names {
+		known[strings.ToUpper(name)] = true
+	}
+
+	var out strings.Builder
+	out.Grow(len(sql))
+	for i := 0; i < len(sql); {
+		if end, skipped := skipNonCode(sql, i); skipped {
+			out.WriteString(sql[i:end])
+			i = end
+			continue
+		}
+		if !isIdentifierStart(sql[i]) {
+			out.WriteByte(sql[i])
+			i++
+			continue
+		}
+		end := i + 1
+		for end < len(sql) && isIdentifierPart(sql[end]) {
+			end++
+		}
+		name := sql[i:end]
+		if known[strings.ToUpper(name)] && callFollows(sql, end) && !isQualified(sql, i) {
+			out.WriteString(BuildTableName(executionContext.Database, executionContext.Schema, name))
+		} else {
+			out.WriteString(name)
+		}
+		i = end
+	}
+	return out.String(), nil
 }
 
 func (e *Executor) resolveTableReference(ctx context.Context, executionContext ExecutionContext, name string) (string, bool, error) {
