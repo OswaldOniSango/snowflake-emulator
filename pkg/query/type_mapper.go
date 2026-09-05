@@ -15,6 +15,8 @@ const (
 	// Column names shared by the SHOW result sets.
 	columnCreatedOn = "created_on"
 	columnName      = "name"
+	columnDatabase  = "database_name"
+	columnSchema    = "schema_name"
 )
 
 // TypeMapper provides DuckDB to Snowflake type mapping functionality.

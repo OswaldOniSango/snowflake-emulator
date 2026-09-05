@@ -667,6 +667,7 @@ func TestRestAPIv2Handler_ListSchemaObjects(t *testing.T) {
 	run("CREATE TABLE users (id INTEGER)")
 	run("CREATE TABLE orders_staging (id INTEGER)")
 	run("CREATE STREAM users_stream ON TABLE users")
+	run("CREATE VIEW active_users AS SELECT id FROM users")
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v2/databases/TEST_DB/schemas/PUBLIC/objects", nil)
@@ -692,6 +693,68 @@ func TestRestAPIv2Handler_ListSchemaObjects(t *testing.T) {
 	if diff := cmp.Diff([]string{"USERS_STREAM"}, byKind["stream"]); diff != "" {
 		t.Errorf("streams mismatch (-want +got):\n%s", diff)
 	}
+	if diff := cmp.Diff([]string{"ACTIVE_USERS"}, byKind["view"]); diff != "" {
+		t.Errorf("views mismatch (-want +got):\n%s", diff)
+	}
+	viewCount := 0
+	for _, object := range resp.Objects {
+		if object.Name == "ACTIVE_USERS" {
+			viewCount++
+			if object.Kind != "view" {
+				t.Errorf("ACTIVE_USERS kind = %q, want view", object.Kind)
+			}
+		}
+	}
+	if viewCount != 1 {
+		t.Errorf("ACTIVE_USERS appears %d times, want once", viewCount)
+	}
+
+	t.Run("table routes exclude views", func(t *testing.T) {
+		params := map[string]string{"database": "TEST_DB", "schema": "PUBLIC"}
+		recorder := httptest.NewRecorder()
+		handler.ListTables(recorder, withURLParams(httptest.NewRequest(http.MethodGet, "/tables", nil), params))
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("ListTables status = %d, body %s", recorder.Code, recorder.Body.String())
+		}
+		var tables types.ListTablesResponse
+		if err := json.Unmarshal(recorder.Body.Bytes(), &tables); err != nil {
+			t.Fatalf("decode tables: %v", err)
+		}
+		for _, table := range tables {
+			if table.Name == "ACTIVE_USERS" {
+				t.Fatal("view leaked into table listing")
+			}
+		}
+
+		viewParams := map[string]string{"database": "TEST_DB", "schema": "PUBLIC", "table": "ACTIVE_USERS"}
+		requests := []struct {
+			name   string
+			method string
+			body   string
+			call   func(http.ResponseWriter, *http.Request)
+		}{
+			{name: "get", method: http.MethodGet, call: handler.GetTable},
+			{name: "alter", method: http.MethodPut, body: `{"comment":"not a table"}`, call: handler.AlterTable},
+			{name: "delete", method: http.MethodDelete, call: handler.DeleteTable},
+		}
+		for _, request := range requests {
+			t.Run(request.name, func(t *testing.T) {
+				recorder := httptest.NewRecorder()
+				httpRequest := httptest.NewRequest(request.method, "/tables/ACTIVE_USERS", strings.NewReader(request.body))
+				request.call(recorder, withURLParams(httpRequest, viewParams))
+				if recorder.Code != http.StatusNotFound {
+					t.Errorf("status = %d, want %d (body %s)", recorder.Code, http.StatusNotFound, recorder.Body.String())
+				}
+			})
+		}
+
+		queryBody := `{"statement":"SELECT * FROM active_users","database":"TEST_DB","schema":"PUBLIC"}`
+		recorder = httptest.NewRecorder()
+		router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/api/v2/statements", strings.NewReader(queryBody)))
+		if recorder.Code != http.StatusOK || strings.Contains(recorder.Body.String(), "does not exist") {
+			t.Fatalf("table DELETE route damaged view: status %d body %s", recorder.Code, recorder.Body.String())
+		}
+	})
 
 	for _, object := range resp.Objects {
 		if strings.HasPrefix(object.Name, "_METADATA") {

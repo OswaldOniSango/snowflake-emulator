@@ -141,7 +141,7 @@ func (p *StageProcessor) Show(ctx context.Context) (*Result, error) {
 		}
 		rows = append(rows, []interface{}{item.CreatedAt, item.Name, database.Name, schemaMetadata.Name, item.StageType, item.Comment})
 	}
-	columns := []string{columnCreatedOn, columnName, "database_name", "schema_name", "type", "comment"}
+	columns := []string{columnCreatedOn, columnName, columnDatabase, columnSchema, "type", "comment"}
 	return &Result{Columns: columns, ColumnTypes: textColumnMetadata(columns), Rows: rows, TotalRows: len(rows)}, nil
 }
 

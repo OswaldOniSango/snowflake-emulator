@@ -46,7 +46,7 @@ export interface Explorer {
   refresh(): Promise<void>;
 }
 
-const KIND_ORDER = ["table", "stream", "procedure", "task", "stage"];
+const KIND_ORDER = ["table", "view", "stream", "procedure", "task", "stage"];
 
 export function createExplorer(options: ExplorerOptions): Explorer {
   let databases: DatabaseNode[] = [];

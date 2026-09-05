@@ -265,7 +265,7 @@ export interface Schema {
 /** One entry in a schema's contents. */
 export interface SchemaObject {
   name: string;
-  /** "table", "stream", "procedure", "task" or "stage". */
+  /** "table", "view", "stream", "procedure", "task" or "stage". */
   kind: string;
   detail?: string;
 }

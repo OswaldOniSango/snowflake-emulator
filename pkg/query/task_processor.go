@@ -106,7 +106,7 @@ func (p *TaskProcessor) Show(ctx context.Context) (*Result, error) {
 		}
 		rows = append(rows, []interface{}{task.CreatedAt, task.Name, database.Name, schema.Name, task.Warehouse, task.Schedule, task.State, task.Definition, task.LastExecutedAt, task.LastCompletedAt, task.LastError})
 	}
-	columns := []string{columnCreatedOn, columnName, "database_name", "schema_name", "warehouse", "schedule", "state", "definition", "last_executed_on", "last_completed_on", "last_error"}
+	columns := []string{columnCreatedOn, columnName, columnDatabase, columnSchema, "warehouse", "schedule", "state", "definition", "last_executed_on", "last_completed_on", "last_error"}
 	return &Result{Columns: columns, ColumnTypes: textColumnMetadata(columns), Rows: rows}, nil
 }
 
