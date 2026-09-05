@@ -476,6 +476,7 @@ The emulator supports standard SQL operations with automatic Snowflake-to-DuckDB
 |----------|------------|-------------|
 | **Query** | `SELECT`, `SHOW`, `DESCRIBE`, `EXPLAIN` | Read operations with full result set support |
 | **Query** | `WITH ... SELECT` | Common table expressions, chained and referencing one another, ahead of any statement type |
+| **Query** | `FROM VALUES (...) [AS alias[(cols)]]` | Inline table literal, auto-aliased with `column1`, `column2`, ... when the alias or its column list is left out |
 | **DML** | `INSERT`, `UPDATE`, `DELETE` | Data manipulation with rows affected count |
 | **DDL** | `CREATE TABLE`, `DROP TABLE`, `ALTER TABLE` | Schema management |
 | **DDL** | `CREATE TABLE ... AS <query>`, including a `WITH` clause | Function translation runs on the query body, not just a bare `SELECT` |
@@ -486,7 +487,7 @@ The emulator supports standard SQL operations with automatic Snowflake-to-DuckDB
 | **Transaction** | `BEGIN`, `COMMIT`, `ROLLBACK` | Transaction control |
 | **Data Loading** | `LIST @stage`, `COPY INTO` | Upload and load CSV or JSON files from named internal stages |
 | **Upsert** | `MERGE INTO` | Conditional insert/update/delete operations |
-| **Procedures** | `CREATE [OR REPLACE] PROCEDURE`, `CALL`, `SHOW PROCEDURES`, `DROP PROCEDURE` | `LANGUAGE SQL` procedures with variables, assignments, dynamic `IDENTIFIER`, `CASE`, `IF/ELSE`, top-level `EXCEPTION`, and `RETURN` |
+| **Procedures** | `CREATE [OR REPLACE] PROCEDURE`, `CALL`, `SHOW PROCEDURES`, `DROP PROCEDURE` | `LANGUAGE SQL` procedures with `DECLARE` and inline `LET` variables, assignments, dynamic `IDENTIFIER`, `CASE`, `IF/ELSE`, top-level `EXCEPTION`, and `RETURN` |
 | **Streams** | `CREATE [OR REPLACE] STREAM`, `SHOW STREAMS`, `DROP STREAM`, `SELECT FROM stream` | Append-only insert tracking |
 | **Tasks** | `CREATE [OR REPLACE] TASK`, `ALTER TASK ... RESUME/SUSPEND`, `EXECUTE TASK`, `SHOW TASKS`, `DROP TASK` | Manual execution and automatic second/minute/hour interval schedules; task bodies may execute SQL or call a procedure |
 | **Functions** | `CREATE [OR REPLACE] FUNCTION`, `SHOW FUNCTIONS`, `DROP FUNCTION` | Single-expression `LANGUAGE SQL` scalar UDFs, backed by a real DuckDB `MACRO` — usable inline in `SELECT`, `WHERE`, and from inside a procedure |
@@ -592,10 +593,9 @@ are not supported or have limited support:
 - Task graphs, task dependencies, `USING CRON` schedules, and Pipes
 - External stages (S3, Azure, GCS)
 - Stored procedures and functions with JavaScript, Python, or Java
-- Advanced Snowflake Scripting (`LET`, loops, nested exception scopes, qualified/quoted dynamic identifiers, and procedure overloading)
+- Advanced Snowflake Scripting (loops, nested exception scopes, qualified/quoted dynamic identifiers, and procedure overloading)
 - Advanced stream semantics beyond append-only `INSERT` tracking (`UPDATE`/`DELETE`, retention, and stale-state handling)
 - User-defined table functions (UDTFs), and SQL functions with a procedural (multi-statement) body — a function's body is one expression, backed directly by a DuckDB `MACRO`
-- Snowflake's `FROM VALUES (...)` table literal with implicit `column1`/`column2` naming, which is not valid DuckDB syntax at all — `FROM (VALUES (1, 'Alice'), (2, 'Bob')) AS t(column1, column2)` reaches the same result unmodified
 
 ## Contributing
 

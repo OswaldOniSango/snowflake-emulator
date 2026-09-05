@@ -141,6 +141,8 @@ func (i *procedureInterpreter) executeStatement(ctx context.Context, statement p
 			delete(i.temporaryTables, droppedTemporaryTable)
 		}
 		return procedureExecution{}, nil
+	case procedureLetStatement:
+		return i.executeLet(ctx, statement)
 	case procedureAssignmentStatement:
 		if _, exists := i.variables[statement.Name]; !exists {
 			return procedureExecution{}, fmt.Errorf("variable %s is not declared", statement.Name)
@@ -186,6 +188,21 @@ func (i *procedureInterpreter) executeStatement(ctx context.Context, statement p
 	default:
 		return procedureExecution{}, fmt.Errorf("unsupported procedure statement %T", statement)
 	}
+}
+
+// executeLet declares a variable inline in the executable body, the same way
+// a top-of-procedure DECLARE does, but usable anywhere a statement is —
+// including inside an IF or CASE branch.
+func (i *procedureInterpreter) executeLet(ctx context.Context, statement procedureLetStatement) (procedureExecution, error) {
+	if _, exists := i.variables[statement.Name]; exists {
+		return procedureExecution{}, fmt.Errorf("variable %s is already defined", statement.Name)
+	}
+	value, err := i.evaluateScalar(ctx, statement.Expression, true)
+	if err != nil {
+		return procedureExecution{}, fmt.Errorf("failed to evaluate LET %s: %w", statement.Name, err)
+	}
+	i.variables[statement.Name] = value
+	return procedureExecution{}, nil
 }
 
 func (i *procedureInterpreter) rewriteTemporaryTableReferences(sql string) (string, string) {
