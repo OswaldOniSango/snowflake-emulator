@@ -120,6 +120,24 @@ type Procedure struct {
 	Owner      string
 }
 
+// Function represents a Snowflake SQL scalar user-defined function.
+// Arguments contains the JSON-encoded argument definitions. Unlike a
+// Procedure's Body, which the emulator's own interpreter runs statement by
+// statement, Body here is a single SQL expression backed by a real DuckDB
+// MACRO of the same name — DuckDB evaluates it directly as part of an
+// ordinary query, so no interpreter is involved.
+type Function struct {
+	ID         string
+	SchemaID   string
+	Name       string
+	Arguments  string
+	ReturnType string
+	Body       string
+	Comment    string
+	CreatedAt  time.Time
+	Owner      string
+}
+
 // Stream represents an append-only Snowflake stream over a source table.
 // Offset stores the highest DuckDB rowid visible when the stream was created.
 type Stream struct {
@@ -285,6 +303,18 @@ func (r *Repository) initMetadataTables(ctx context.Context) error {
 			arguments TEXT NOT NULL,
 			return_type VARCHAR NOT NULL,
 			language VARCHAR NOT NULL,
+			body TEXT NOT NULL,
+			comment VARCHAR,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			owner VARCHAR,
+			UNIQUE(schema_id, name)
+		)`,
+		`CREATE TABLE IF NOT EXISTS _metadata_functions (
+			id VARCHAR PRIMARY KEY,
+			schema_id VARCHAR NOT NULL,
+			name VARCHAR NOT NULL,
+			arguments TEXT NOT NULL,
+			return_type VARCHAR NOT NULL,
 			body TEXT NOT NULL,
 			comment VARCHAR,
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

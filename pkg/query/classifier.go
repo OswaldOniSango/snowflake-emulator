@@ -261,6 +261,24 @@ func (c *Classifier) IsShowProcedures(sql string) bool {
 	return strings.HasPrefix(leadingSQL(sql), "SHOW PROCEDURES")
 }
 
+// IsCreateFunction checks if the SQL creates a SQL scalar user-defined function.
+func (c *Classifier) IsCreateFunction(sql string) bool {
+	upperSQL := leadingSQL(sql)
+	return strings.HasPrefix(upperSQL, "CREATE FUNCTION") ||
+		strings.HasPrefix(upperSQL, "CREATE OR REPLACE FUNCTION")
+}
+
+// IsDropFunction checks if the SQL drops a user-defined function.
+func (c *Classifier) IsDropFunction(sql string) bool {
+	return strings.HasPrefix(leadingSQL(sql), "DROP FUNCTION")
+}
+
+// IsShowFunctions checks if the SQL lists user-defined functions.
+func (c *Classifier) IsShowFunctions(sql string) bool {
+	return strings.HasPrefix(leadingSQL(sql), "SHOW FUNCTIONS") ||
+		strings.HasPrefix(leadingSQL(sql), "SHOW USER FUNCTIONS")
+}
+
 // IsCreateStream checks if the SQL creates a stream.
 func (c *Classifier) IsCreateStream(sql string) bool {
 	upperSQL := leadingSQL(sql)
