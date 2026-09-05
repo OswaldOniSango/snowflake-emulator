@@ -52,12 +52,16 @@ func setupRestAPIv2Handler(t *testing.T) (*RestAPIv2Handler, *chi.Mux) {
 	}
 
 	executor := query.NewExecutor(connMgr, repo)
+	executor.Configure(query.WithWarehouseValidator(func(context.Context, string) error { return nil }))
 	stageMgr := stage.NewManager(repo, t.TempDir())
 	executor.Configure(query.WithStageManager(stageMgr))
 	stmtMgr := query.NewStatementManager(1 * time.Hour)
 
 	handler := NewRestAPIv2Handler(executor, stmtMgr, repo)
 	handler.stageMgr = stageMgr
+	if _, err := handler.warehouseMgr.CreateWarehouse(context.Background(), "COMPUTE_WH", "X-SMALL", ""); err != nil {
+		t.Fatalf("failed to create test warehouse: %v", err)
+	}
 
 	// Setup router
 	r := chi.NewRouter()
@@ -661,6 +665,13 @@ func TestRestAPIv2Handler_ListSchemaObjects(t *testing.T) {
 		if rec.Code != http.StatusOK {
 			t.Fatalf("%s: status %d, body %s", statement, rec.Code, rec.Body.String())
 		}
+		var response types.StatementResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+			t.Fatalf("%s: decode response: %v", statement, err)
+		}
+		if response.SQLState != types.SQLState00000 {
+			t.Fatalf("%s failed: %s", statement, response.Message)
+		}
 	}
 
 	// Created with SQL, which is exactly what _metadata_tables does not record.
@@ -668,6 +679,7 @@ func TestRestAPIv2Handler_ListSchemaObjects(t *testing.T) {
 	run("CREATE TABLE orders_staging (id INTEGER)")
 	run("CREATE STREAM users_stream ON TABLE users")
 	run("CREATE VIEW active_users AS SELECT id FROM users")
+	run("CREATE DYNAMIC TABLE user_snapshot TARGET_LAG = '1 MINUTE' WAREHOUSE = COMPUTE_WH AS SELECT id FROM users")
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v2/databases/TEST_DB/schemas/PUBLIC/objects", nil)
@@ -696,6 +708,9 @@ func TestRestAPIv2Handler_ListSchemaObjects(t *testing.T) {
 	if diff := cmp.Diff([]string{"ACTIVE_USERS"}, byKind["view"]); diff != "" {
 		t.Errorf("views mismatch (-want +got):\n%s", diff)
 	}
+	if diff := cmp.Diff([]string{"USER_SNAPSHOT"}, byKind["dynamic_table"]); diff != "" {
+		t.Errorf("dynamic tables mismatch (-want +got):\n%s", diff)
+	}
 	viewCount := 0
 	for _, object := range resp.Objects {
 		if object.Name == "ACTIVE_USERS" {
@@ -709,7 +724,7 @@ func TestRestAPIv2Handler_ListSchemaObjects(t *testing.T) {
 		t.Errorf("ACTIVE_USERS appears %d times, want once", viewCount)
 	}
 
-	t.Run("table routes exclude views", func(t *testing.T) {
+	t.Run("table routes exclude views and dynamic tables", func(t *testing.T) {
 		params := map[string]string{"database": "TEST_DB", "schema": "PUBLIC"}
 		recorder := httptest.NewRecorder()
 		handler.ListTables(recorder, withURLParams(httptest.NewRequest(http.MethodGet, "/tables", nil), params))
@@ -721,8 +736,8 @@ func TestRestAPIv2Handler_ListSchemaObjects(t *testing.T) {
 			t.Fatalf("decode tables: %v", err)
 		}
 		for _, table := range tables {
-			if table.Name == "ACTIVE_USERS" {
-				t.Fatal("view leaked into table listing")
+			if table.Name == "ACTIVE_USERS" || table.Name == "USER_SNAPSHOT" {
+				t.Fatalf("non-table object %s leaked into table listing", table.Name)
 			}
 		}
 

@@ -7,6 +7,7 @@ export const LIMITATIONS: readonly string[] = [
   "Distributed processing / Clustering",
   "Time Travel / Zero-Copy Cloning",
   "Task graphs, task dependencies, USING CRON schedules, and Pipes",
+  "Automatic/incremental dynamic-table refresh and dynamic-table dependency graphs",
   "External stages (S3, Azure, GCS)",
   "Stored procedures and functions with JavaScript, Python, or Java",
   "Advanced Snowflake Scripting (loops, nested exception scopes, qualified/quoted dynamic identifiers, and procedure overloading)",

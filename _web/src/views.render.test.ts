@@ -155,6 +155,25 @@ describe("createExplorer", () => {
     expect([...parent.querySelectorAll(".node .nm")].map((node) => node.textContent)).toContain("ACTIVE_USERS");
   });
 
+  it("renders dynamic tables in their own object group", async () => {
+    vi.stubGlobal("fetch", async (input: string) => {
+      if (input.endsWith("/objects")) {
+        return { ok: true, status: 200, json: async () => ({ objects: [{ name: "USER_SUMMARY", kind: "dynamic_table", detail: "1 MINUTE" }] }) };
+      }
+      if (input.endsWith("/schemas")) return { ok: true, status: 200, json: async () => [{ name: "PUBLIC" }] };
+      return { ok: true, status: 200, json: async () => [{ name: "TEST_DB" }] };
+    });
+    const parent = host();
+    createExplorer({ parent, context: () => ({ database: "TEST_DB", schema: "PUBLIC" }), onInsert: () => {} });
+    await settle();
+    parent.querySelector<HTMLButtonElement>('[role="treeitem"]')?.click();
+    await settle();
+    parent.querySelectorAll<HTMLButtonElement>('[role="treeitem"]')[1]?.click();
+    await settle();
+    expect([...parent.querySelectorAll(".group-label")].map((node) => node.textContent)).toContain("Dynamic tables");
+    expect([...parent.querySelectorAll(".node .nm")].map((node) => node.textContent)).toContain("USER_SUMMARY");
+  });
+
   async function openLoadStage(parent: HTMLElement): Promise<void> {
     vi.stubGlobal("fetch", async (input: string) => {
       if (input.endsWith("/objects")) {

@@ -334,6 +334,23 @@ func (c *Classifier) IsShowViews(sql string) bool {
 	return strings.HasPrefix(leadingSQL(sql), "SHOW VIEWS")
 }
 
+func (c *Classifier) IsCreateDynamicTable(sql string) bool {
+	upperSQL := leadingSQL(sql)
+	return strings.HasPrefix(upperSQL, "CREATE DYNAMIC TABLE") || strings.HasPrefix(upperSQL, "CREATE OR REPLACE DYNAMIC TABLE")
+}
+
+func (c *Classifier) IsAlterDynamicTable(sql string) bool {
+	return strings.HasPrefix(leadingSQL(sql), "ALTER DYNAMIC TABLE")
+}
+
+func (c *Classifier) IsDropDynamicTable(sql string) bool {
+	return strings.HasPrefix(leadingSQL(sql), "DROP DYNAMIC TABLE")
+}
+
+func (c *Classifier) IsShowDynamicTables(sql string) bool {
+	return strings.HasPrefix(leadingSQL(sql), "SHOW DYNAMIC TABLES")
+}
+
 // isTransactionStatement checks if the SQL is a transaction control statement.
 func (c *Classifier) isTransactionStatement(upperSQL string) bool {
 	return strings.HasPrefix(upperSQL, "BEGIN") ||

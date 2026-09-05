@@ -480,6 +480,7 @@ The emulator supports standard SQL operations with automatic Snowflake-to-DuckDB
 | **DML** | `INSERT`, `UPDATE`, `DELETE` | Data manipulation with rows affected count |
 | **DDL** | `CREATE TABLE`, `DROP TABLE`, `ALTER TABLE` | Schema management |
 | **DDL** | `CREATE [OR REPLACE] VIEW`, basic `SHOW VIEWS`, `DROP VIEW [IF EXISTS]` | Ordinary DuckDB-backed views, including qualified names |
+| **DDL** | `CREATE [OR REPLACE] DYNAMIC TABLE`, `SHOW DYNAMIC TABLES`, `ALTER DYNAMIC TABLE ... REFRESH`, `DROP DYNAMIC TABLE [IF EXISTS]` | Manually refreshed DuckDB-backed materializations |
 | **DDL** | `CREATE TABLE ... AS <query>`, including a `WITH` clause | Function translation runs on the query body, not just a bare `SELECT` |
 | **DDL** | `CREATE [OR REPLACE] TEMPORARY TABLE ... AS <query>` | A true DuckDB TEMP table, visible to every statement in the session |
 | **DDL** | `CREATE DATABASE`, `DROP DATABASE` | Database management |
@@ -509,6 +510,24 @@ not supported by this feature.
 worksheet context and returns the basic columns `name`, `database_name`,
 `schema_name`, and `kind`. Snowflake's additional filtering and scoping variants
 (`LIKE` and `IN`) and its wider result shape are not yet emulated.
+
+Dynamic tables persist their defining query, `TARGET_LAG`, warehouse, and last
+successful refresh time. Creation materializes the query immediately; refresh
+is explicit in this MVP:
+
+```sql
+CREATE DYNAMIC TABLE user_summary
+  TARGET_LAG = '1 MINUTE'
+  WAREHOUSE = COMPUTE_WH
+AS SELECT region, COUNT(*) AS users FROM users GROUP BY region;
+
+ALTER DYNAMIC TABLE user_summary REFRESH;
+SHOW DYNAMIC TABLES;
+```
+
+This is a DuckDB-backed approximation. `TARGET_LAG` is metadata only: automatic
+or incremental refresh, dependency graphs, suspend/resume, refresh history,
+and Snowflake's scheduling guarantees are not implemented yet.
 
 </details>
 
@@ -602,6 +621,7 @@ are not supported or have limited support:
 - Distributed processing / Clustering
 - Time Travel / Zero-Copy Cloning
 - Task graphs, task dependencies, `USING CRON` schedules, and Pipes
+- Automatic/incremental dynamic-table refresh and dynamic-table dependency graphs
 - External stages (S3, Azure, GCS)
 - Stored procedures and functions with JavaScript, Python, or Java
 - Advanced Snowflake Scripting (loops, nested exception scopes, qualified/quoted dynamic identifiers, and procedure overloading)

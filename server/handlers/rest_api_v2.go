@@ -1197,6 +1197,16 @@ func (h *RestAPIv2Handler) ListSchemaObjects(w http.ResponseWriter, r *http.Requ
 	}
 
 	objects := make([]types.SchemaObject, 0)
+	dynamicTables, err := h.repo.ListDynamicTables(ctx, schema.ID)
+	if err != nil {
+		h.sendError(w, http.StatusInternalServerError, err.Error(), types.SQLState42000)
+		return
+	}
+	dynamicNames := make(map[string]bool, len(dynamicTables))
+	for _, table := range dynamicTables {
+		dynamicNames[table.Name] = true
+		objects = append(objects, types.SchemaObject{Name: table.Name, Kind: "dynamic_table", Detail: table.TargetLag})
+	}
 
 	tables, err := h.repo.ListPhysicalTables(ctx, database.Name, schema.Name)
 	if err != nil {
@@ -1204,6 +1214,9 @@ func (h *RestAPIv2Handler) ListSchemaObjects(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	for _, name := range tables {
+		if dynamicNames[name] {
+			continue
+		}
 		objects = append(objects, types.SchemaObject{Name: name, Kind: "table"})
 	}
 
