@@ -46,7 +46,7 @@ export interface Explorer {
   refresh(): Promise<void>;
 }
 
-const KIND_ORDER = ["table", "stream", "procedure", "task", "stage"];
+const KIND_ORDER = ["table", "view", "dynamic_table", "stream", "procedure", "task", "stage"];
 
 export function createExplorer(options: ExplorerOptions): Explorer {
   let databases: DatabaseNode[] = [];
@@ -452,6 +452,7 @@ function note(text: string, depth = 0): HTMLElement {
 }
 
 function plural(kind: string): string {
+	if (kind === "dynamic_table") return "Dynamic tables";
   return kind === "stage" ? "Stages" : `${kind.charAt(0).toUpperCase()}${kind.slice(1)}s`;
 }
 

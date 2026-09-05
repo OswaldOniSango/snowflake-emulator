@@ -227,6 +227,95 @@ func TestProcedureSupportsDeclareAssignmentCaseAndIf(t *testing.T) {
 	}
 }
 
+func TestProcedureSupportsLetDeclarations(t *testing.T) {
+	executor, repo := setupTestExecutor(t)
+	ctx := context.Background()
+
+	database, err := repo.CreateDatabase(ctx, "LET_DB", "")
+	if err != nil {
+		t.Fatalf("CreateDatabase() error = %v", err)
+	}
+	if _, err := repo.GetSchemaByName(ctx, database.ID, "PUBLIC"); err != nil {
+		t.Fatalf("GetSchemaByName() error = %v", err)
+	}
+	executionContext := ExecutionContext{Database: "LET_DB", Schema: "PUBLIC"}
+
+	// LET declares mid-body, in each of its forms — untyped :=, typed :=, and
+	// typed DEFAULT — and, once declared, a LET variable can be reassigned
+	// the same way a DECLARE'd one can. A LET inside an IF branch checks that
+	// it is a statement usable anywhere one is, not only at the top.
+	createSQL := `CREATE PROCEDURE describe_order(quantity INTEGER)
+		RETURNS VARCHAR
+		LANGUAGE SQL
+		AS $$
+		BEGIN
+			LET unit_price := 9.5;
+			LET currency VARCHAR := 'USD';
+			LET tax_rate FLOAT DEFAULT 0.1;
+			LET total := unit_price * quantity;
+			total := total + (total * tax_rate);
+
+			IF (quantity > 10) THEN
+				LET note VARCHAR := 'bulk order';
+				RETURN note || ': ' || total || ' ' || currency;
+			END IF;
+
+			RETURN 'total: ' || total || ' ' || currency;
+		END;
+		$$`
+	if _, err := executor.ExecuteWithContext(ctx, executionContext, createSQL); err != nil {
+		t.Fatalf("CREATE PROCEDURE error = %v", err)
+	}
+
+	tests := []struct {
+		quantity int
+		want     string
+	}{
+		{quantity: 2, want: "total: 20.9 USD"},
+		{quantity: 20, want: "bulk order: 209 USD"},
+	}
+	for _, tt := range tests {
+		result, err := executor.QueryWithContext(ctx, executionContext, fmt.Sprintf("CALL describe_order(%d)", tt.quantity))
+		if err != nil {
+			t.Fatalf("CALL describe_order(%d) error = %v", tt.quantity, err)
+		}
+		if len(result.Rows) != 1 || result.Rows[0][0] != tt.want {
+			t.Fatalf("CALL describe_order(%d) rows = %#v, want %q", tt.quantity, result.Rows, tt.want)
+		}
+	}
+}
+
+func TestProcedureLetRejectsRedeclaringTheSameName(t *testing.T) {
+	executor, repo := setupTestExecutor(t)
+	ctx := context.Background()
+
+	database, err := repo.CreateDatabase(ctx, "LET_REDECLARE_DB", "")
+	if err != nil {
+		t.Fatalf("CreateDatabase() error = %v", err)
+	}
+	if _, err := repo.GetSchemaByName(ctx, database.ID, "PUBLIC"); err != nil {
+		t.Fatalf("GetSchemaByName() error = %v", err)
+	}
+	executionContext := ExecutionContext{Database: "LET_REDECLARE_DB", Schema: "PUBLIC"}
+
+	createSQL := `CREATE PROCEDURE redeclare()
+		RETURNS VARCHAR
+		LANGUAGE SQL
+		AS $$
+		BEGIN
+			LET x := 1;
+			LET x := 2;
+			RETURN x;
+		END;
+		$$`
+	if _, err := executor.ExecuteWithContext(ctx, executionContext, createSQL); err != nil {
+		t.Fatalf("CREATE PROCEDURE error = %v", err)
+	}
+	if _, err := executor.QueryWithContext(ctx, executionContext, "CALL redeclare()"); err == nil {
+		t.Fatal("CALL redeclare() returned nil error for a variable declared twice")
+	}
+}
+
 func TestProcedureSupportsDynamicTemporaryAndTransientTables(t *testing.T) {
 	executor, repo := setupTestExecutor(t)
 	ctx := context.Background()
@@ -701,6 +790,8 @@ func TestParseProcedureScriptRejectsMalformedBlocks(t *testing.T) {
 		{name: "missing end if", body: "BEGIN IF (TRUE) THEN RETURN 'bad'; END"},
 		{name: "missing end case", body: "BEGIN CASE (1) WHEN 1 THEN RETURN 'bad'; END"},
 		{name: "default without expression", body: "DECLARE value VARCHAR DEFAULT; BEGIN RETURN value; END"},
+		{name: "let without a value", body: "BEGIN LET x INTEGER; RETURN x; END"},
+		{name: "let without a name", body: "BEGIN LET := 1; RETURN 1; END"},
 		{name: "invalid exception handler", body: "BEGIN RETURN 'ok'; EXCEPTION WHEN SQLSTATE THEN RETURN 'bad'; END"},
 	}
 	for _, tt := range tests {

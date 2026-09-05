@@ -261,6 +261,24 @@ func (c *Classifier) IsShowProcedures(sql string) bool {
 	return strings.HasPrefix(leadingSQL(sql), "SHOW PROCEDURES")
 }
 
+// IsCreateFunction checks if the SQL creates a SQL scalar user-defined function.
+func (c *Classifier) IsCreateFunction(sql string) bool {
+	upperSQL := leadingSQL(sql)
+	return strings.HasPrefix(upperSQL, "CREATE FUNCTION") ||
+		strings.HasPrefix(upperSQL, "CREATE OR REPLACE FUNCTION")
+}
+
+// IsDropFunction checks if the SQL drops a user-defined function.
+func (c *Classifier) IsDropFunction(sql string) bool {
+	return strings.HasPrefix(leadingSQL(sql), "DROP FUNCTION")
+}
+
+// IsShowFunctions checks if the SQL lists user-defined functions.
+func (c *Classifier) IsShowFunctions(sql string) bool {
+	return strings.HasPrefix(leadingSQL(sql), "SHOW FUNCTIONS") ||
+		strings.HasPrefix(leadingSQL(sql), "SHOW USER FUNCTIONS")
+}
+
 // IsCreateStream checks if the SQL creates a stream.
 func (c *Classifier) IsCreateStream(sql string) bool {
 	upperSQL := leadingSQL(sql)
@@ -297,6 +315,40 @@ func (c *Classifier) IsExecuteTask(sql string) bool {
 
 func (c *Classifier) IsShowTasks(sql string) bool {
 	return strings.HasPrefix(leadingSQL(sql), "SHOW TASKS")
+}
+
+// IsCreateView checks if the SQL creates an ordinary view.
+func (c *Classifier) IsCreateView(sql string) bool {
+	upperSQL := leadingSQL(sql)
+	return strings.HasPrefix(upperSQL, "CREATE VIEW") ||
+		strings.HasPrefix(upperSQL, "CREATE OR REPLACE VIEW")
+}
+
+// IsDropView checks if the SQL drops an ordinary view.
+func (c *Classifier) IsDropView(sql string) bool {
+	return strings.HasPrefix(leadingSQL(sql), "DROP VIEW")
+}
+
+// IsShowViews checks if the SQL lists ordinary views.
+func (c *Classifier) IsShowViews(sql string) bool {
+	return strings.HasPrefix(leadingSQL(sql), "SHOW VIEWS")
+}
+
+func (c *Classifier) IsCreateDynamicTable(sql string) bool {
+	upperSQL := leadingSQL(sql)
+	return strings.HasPrefix(upperSQL, "CREATE DYNAMIC TABLE") || strings.HasPrefix(upperSQL, "CREATE OR REPLACE DYNAMIC TABLE")
+}
+
+func (c *Classifier) IsAlterDynamicTable(sql string) bool {
+	return strings.HasPrefix(leadingSQL(sql), "ALTER DYNAMIC TABLE")
+}
+
+func (c *Classifier) IsDropDynamicTable(sql string) bool {
+	return strings.HasPrefix(leadingSQL(sql), "DROP DYNAMIC TABLE")
+}
+
+func (c *Classifier) IsShowDynamicTables(sql string) bool {
+	return strings.HasPrefix(leadingSQL(sql), "SHOW DYNAMIC TABLES")
 }
 
 // isTransactionStatement checks if the SQL is a transaction control statement.

@@ -10,7 +10,10 @@ import (
 	"github.com/nnnkkk7/snowflake-emulator/pkg/metadata"
 )
 
-const transientTableType = "TRANSIENT"
+const (
+	baseTableType      = "BASE TABLE"
+	transientTableType = "TRANSIENT"
+)
 
 var (
 	createSchemaSQLPattern = regexp.MustCompile(`(?is)^\s*CREATE\s+(OR\s+REPLACE\s+)?SCHEMA\s+(IF\s+NOT\s+EXISTS\s+)?([^\s;]+)(?:\s+COMMENT\s*=\s*'((?:''|[^'])*)')?\s*;?\s*$`)
@@ -97,7 +100,7 @@ func (e *Executor) registerSQLTable(ctx context.Context, executionContext Execut
 		return nil
 	}
 	tableName := strings.ToUpper(match[2])
-	tableType := "BASE TABLE"
+	tableType := baseTableType
 	switch strings.ToUpper(match[1]) {
 	case "TEMP", "TEMPORARY":
 		return nil

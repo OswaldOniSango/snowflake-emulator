@@ -6,29 +6,34 @@ The Go gopher was designed by the awesome [Renee French](https://reneefrench.blo
 
 # Snowflake Emulator
 
-A lightweight, open-source Snowflake emulator built with Go and DuckDB, designed for local development and testing.
+A lightweight, open-source Snowflake emulator built with Go and DuckDB for
+learning, local experimentation, and development without requiring a paid
+Snowflake account.
 
 [![CI](https://github.com/OswaldOniSango/snowflake-emulator/actions/workflows/ci.yaml/badge.svg)](https://github.com/OswaldOniSango/snowflake-emulator/actions/workflows/ci.yaml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Go Reference](https://pkg.go.dev/badge/github.com/nnnkkk7/snowflake-emulator.svg)](https://pkg.go.dev/github.com/nnnkkk7/snowflake-emulator)
-[![GitHub Stars](https://img.shields.io/github/stars/nnnkkk7/snowflake-emulator?style=social)](https://github.com/nnnkkk7/snowflake-emulator)
+[![Latest Release](https://img.shields.io/github/v/release/OswaldOniSango/snowflake-emulator)](https://github.com/OswaldOniSango/snowflake-emulator/releases/latest)
+[![GitHub Stars](https://img.shields.io/github/stars/OswaldOniSango/snowflake-emulator?style=social)](https://github.com/OswaldOniSango/snowflake-emulator)
 
 ⭐ Like it? Give us a star!
 
 ## TL;DR
 
 ```bash
-docker run -p 8080:8080 ghcr.io/nnnkkk7/snowflake-emulator:latest
+docker run -p 8080:8080 ghcr.io/oswaldonisango/snowflake-emulator:latest
 ```
 
 ```go
 dsn := "user:pass@localhost:8080/TEST_DB/PUBLIC?account=test&protocol=http"
 db, _ := sql.Open("snowflake", dsn)
-rows, _ := db.Query("SELECT IFF(1>0,'yes','no')")  // Snowflake SQL works!
+rows, _ := db.Query("SELECT IFF(1>0,'yes','no')")  // Supported Snowflake syntax works locally
 ```
 
 ## Use Cases
 
+- Study Snowflake concepts locally without a paid cloud account
+- Practice with tables, procedures, streams, tasks, and internal stages from a browser
 - Run integration tests locally without Snowflake credentials (Go via gosnowflake, or any language via REST API)
 - Cheap & fast CI smoke tests for Snowflake SQL
 - Validate Snowflake-ish SQL behavior before hitting real Snowflake
@@ -37,9 +42,10 @@ rows, _ := db.Query("SELECT IFF(1>0,'yes','no')")  // Snowflake SQL works!
 
 ## Overview
 
-Snowflake Emulator provides a [Snowflake](https://www.snowflake.com/)-compatible SQL interface backed by DuckDB for local development and testing:
+Snowflake Emulator provides a learning-oriented subset of the
+[Snowflake](https://www.snowflake.com/) SQL interface backed by DuckDB:
 
-- **Local & CI workflows** - Run Snowflake-compatible SQL with no external dependencies
+- **Local & CI workflows** - Run supported Snowflake-style SQL with no external dependencies
 - **Snowflake-compatible access** - [`gosnowflake`](https://github.com/snowflakedb/gosnowflake) driver support and REST API v2
 - **SQL execution** - Snowflake → DuckDB translation
 
@@ -48,15 +54,17 @@ Snowflake Emulator provides a [Snowflake](https://www.snowflake.com/)-compatible
 <details>
 <summary><b>Platform Support</b></summary>
 
-| Platform | Docker | Binary |
-|----------|--------|--------|
-| Linux x86_64 (amd64) | ✅ | ✅ |
-| Linux ARM64 | ✅ | - |
-| macOS x86_64 | ✅ | - |
-| macOS ARM64 (Apple Silicon) | ✅ | - |
-| Windows (WSL2) | ✅ | - |
+| Platform | Docker |
+|----------|--------|
+| Linux x86_64 (amd64) | ✅ |
+| Linux ARM64 | ✅ |
+| macOS x86_64 | ✅ |
+| macOS ARM64 (Apple Silicon) | ✅ |
+| Windows (WSL2) | ✅ |
 
-> **Note**: Binary releases are only available for Linux x86_64. This is due to DuckDB requiring CGO, which makes cross-compilation complex. For all other platforms, Docker is recommended.
+> **Note**: Published Docker images support Linux AMD64 and ARM64. Docker
+> Desktop runs those images on supported macOS and Windows hosts. Prebuilt
+> standalone binaries are not currently published.
 
 </details>
 
@@ -66,16 +74,27 @@ Docker is the recommended installation method for all platforms.
 
 ```bash
 # Pull the image
-docker pull ghcr.io/nnnkkk7/snowflake-emulator:latest
+docker pull ghcr.io/oswaldonisango/snowflake-emulator:latest
 
 # Run with in-memory database
-docker run -p 8080:8080 ghcr.io/nnnkkk7/snowflake-emulator:latest
+docker run -p 8080:8080 ghcr.io/oswaldonisango/snowflake-emulator:latest
 
 # Run with persistent storage
 docker run -p 8080:8080 -v snowflake-data:/data \
   -e DB_PATH=/data/snowflake.db \
-  ghcr.io/nnnkkk7/snowflake-emulator:latest
+  -e STAGE_DIR=/data/stages \
+  ghcr.io/oswaldonisango/snowflake-emulator:latest
 ```
+
+Use `latest` for the newest stable image, or pin a version for reproducible
+environments:
+
+```bash
+docker pull ghcr.io/oswaldonisango/snowflake-emulator:0.2.0
+```
+
+Published versions are listed in
+[GitHub Releases](https://github.com/OswaldOniSango/snowflake-emulator/releases).
 
 #### Build and Run Local Changes with Docker
 
@@ -103,7 +122,7 @@ docker run --rm \
 Open `http://localhost:8080` in a browser. Press `Ctrl+C` to stop the
 container; `--rm` removes the stopped container automatically.
 
-### Build from Source (Linux x86_64)
+### Build from Source
 
 Prerequisites:
 
@@ -111,7 +130,7 @@ Prerequisites:
 - GCC (for DuckDB CGO)
 
 ```bash
-git clone https://github.com/nnnkkk7/snowflake-emulator.git
+git clone https://github.com/OswaldOniSango/snowflake-emulator.git
 cd snowflake-emulator
 CGO_ENABLED=1 go build -o snowflake-emulator ./cmd/server
 ```
@@ -434,7 +453,7 @@ go run ./example/gosnowflake
 | `/api/v2/databases/{db}` | GET, PUT, DELETE | Get/Alter/Drop database |
 | `/api/v2/databases/{db}/schemas` | GET, POST | List/Create schemas |
 | `/api/v2/databases/{db}/schemas/{schema}` | GET, DELETE | Get/Drop schema |
-| `/api/v2/databases/{db}/schemas/{schema}/objects` | GET | List everything a schema contains (tables, streams, procedures, tasks, stages) |
+| `/api/v2/databases/{db}/schemas/{schema}/objects` | GET | List everything a schema contains (tables, views, streams, procedures, tasks, stages) |
 | `/api/v2/databases/{db}/schemas/{schema}/tables` | GET, POST | List/Create tables |
 | `/api/v2/databases/{db}/schemas/{schema}/tables/{table}` | GET, PUT, DELETE | Get/Alter/Drop table |
 | `/api/v2/databases/{db}/schemas/{schema}/stages` | GET, POST | List/Create named internal stages |
@@ -457,8 +476,11 @@ The emulator supports standard SQL operations with automatic Snowflake-to-DuckDB
 |----------|------------|-------------|
 | **Query** | `SELECT`, `SHOW`, `DESCRIBE`, `EXPLAIN` | Read operations with full result set support |
 | **Query** | `WITH ... SELECT` | Common table expressions, chained and referencing one another, ahead of any statement type |
+| **Query** | `FROM VALUES (...) [AS alias[(cols)]]` | Inline table literal, auto-aliased with `column1`, `column2`, ... when the alias or its column list is left out |
 | **DML** | `INSERT`, `UPDATE`, `DELETE` | Data manipulation with rows affected count |
 | **DDL** | `CREATE TABLE`, `DROP TABLE`, `ALTER TABLE` | Schema management |
+| **DDL** | `CREATE [OR REPLACE] VIEW`, basic `SHOW VIEWS`, `DROP VIEW [IF EXISTS]` | Ordinary DuckDB-backed views, including qualified names |
+| **DDL** | `CREATE [OR REPLACE] DYNAMIC TABLE`, `SHOW DYNAMIC TABLES`, `ALTER DYNAMIC TABLE ... REFRESH`, `DROP DYNAMIC TABLE [IF EXISTS]` | Manually refreshed DuckDB-backed materializations |
 | **DDL** | `CREATE TABLE ... AS <query>`, including a `WITH` clause | Function translation runs on the query body, not just a bare `SELECT` |
 | **DDL** | `CREATE [OR REPLACE] TEMPORARY TABLE ... AS <query>` | A true DuckDB TEMP table, visible to every statement in the session |
 | **DDL** | `CREATE DATABASE`, `DROP DATABASE` | Database management |
@@ -467,8 +489,10 @@ The emulator supports standard SQL operations with automatic Snowflake-to-DuckDB
 | **Transaction** | `BEGIN`, `COMMIT`, `ROLLBACK` | Transaction control |
 | **Data Loading** | `LIST @stage`, `COPY INTO` | Upload and load CSV or JSON files from named internal stages |
 | **Upsert** | `MERGE INTO` | Conditional insert/update/delete operations |
-| **Procedures** | `CREATE [OR REPLACE] PROCEDURE`, `CALL`, `SHOW PROCEDURES`, `DROP PROCEDURE` | `LANGUAGE SQL` procedures with variables, assignments, dynamic `IDENTIFIER`, `CASE`, `IF/ELSE`, top-level `EXCEPTION`, and `RETURN` |
+| **Procedures** | `CREATE [OR REPLACE] PROCEDURE`, `CALL`, `SHOW PROCEDURES`, `DROP PROCEDURE` | `LANGUAGE SQL` procedures with `DECLARE` and inline `LET` variables, assignments, dynamic `IDENTIFIER`, `CASE`, `IF/ELSE`, top-level `EXCEPTION`, and `RETURN` |
 | **Streams** | `CREATE [OR REPLACE] STREAM`, `SHOW STREAMS`, `DROP STREAM`, `SELECT FROM stream` | Append-only insert tracking |
+| **Tasks** | `CREATE [OR REPLACE] TASK`, `ALTER TASK ... RESUME/SUSPEND`, `EXECUTE TASK`, `SHOW TASKS`, `DROP TASK` | Manual execution and automatic second/minute/hour interval schedules; task bodies may execute SQL or call a procedure |
+| **Functions** | `CREATE [OR REPLACE] FUNCTION`, `SHOW FUNCTIONS`, `DROP FUNCTION` | Single-expression `LANGUAGE SQL` scalar UDFs, backed by a real DuckDB `MACRO` — usable inline in `SELECT`, `WHERE`, and from inside a procedure |
 
 **Parameter Binding**: Supports positional placeholder substitution (`:1`, `:2`, `?`).
 
@@ -476,6 +500,34 @@ Schemas and persistent/transient tables created through SQL are synchronized
 with the emulator catalog, so they are visible through the REST object explorer.
 Temporary tables remain connection-scoped and are not stored in the global
 catalog.
+
+Ordinary views are persisted by DuckDB and synchronized with the emulator
+catalog. Their query body is evaluated when selected, like a regular view;
+Snowflake secure, recursive, materialized, and dynamic view/table variants are
+not supported by this feature.
+
+`SHOW VIEWS` resolves against the active database and schema from the session or
+worksheet context and returns the basic columns `name`, `database_name`,
+`schema_name`, and `kind`. Snowflake's additional filtering and scoping variants
+(`LIKE` and `IN`) and its wider result shape are not yet emulated.
+
+Dynamic tables persist their defining query, `TARGET_LAG`, warehouse, and last
+successful refresh time. Creation materializes the query immediately; refresh
+is explicit in this MVP:
+
+```sql
+CREATE DYNAMIC TABLE user_summary
+  TARGET_LAG = '1 MINUTE'
+  WAREHOUSE = COMPUTE_WH
+AS SELECT region, COUNT(*) AS users FROM users GROUP BY region;
+
+ALTER DYNAMIC TABLE user_summary REFRESH;
+SHOW DYNAMIC TABLES;
+```
+
+This is a DuckDB-backed approximation. `TARGET_LAG` is metadata only: automatic
+or incremental refresh, dependency graphs, suspend/resume, refresh history,
+and Snowflake's scheduling guarantees are not implemented yet.
 
 </details>
 
@@ -568,18 +620,21 @@ are not supported or have limited support:
 - Authentication/Authorization (skipped in dev mode)
 - Distributed processing / Clustering
 - Time Travel / Zero-Copy Cloning
-- Tasks and Pipes
+- Task graphs, task dependencies, `USING CRON` schedules, and Pipes
+- Automatic/incremental dynamic-table refresh and dynamic-table dependency graphs
 - External stages (S3, Azure, GCS)
-- Stored procedures with JavaScript, Python, or Java
-- Advanced Snowflake Scripting (`LET`, loops, nested exception scopes, qualified/quoted dynamic identifiers, and procedure overloading)
-- Stream change tracking for `UPDATE` and `DELETE`
-- Stream consumption semantics, retention, and stale-state handling
-- User-defined functions
-- Snowflake's `FROM VALUES (...)` table literal with implicit `column1`/`column2` naming, which is not valid DuckDB syntax at all — `FROM (VALUES (1, 'Alice'), (2, 'Bob')) AS t(column1, column2)` reaches the same result unmodified
+- Stored procedures and functions with JavaScript, Python, or Java
+- Advanced Snowflake Scripting (loops, nested exception scopes, qualified/quoted dynamic identifiers, and procedure overloading)
+- Advanced stream semantics beyond append-only `INSERT` tracking (`UPDATE`/`DELETE`, retention, and stale-state handling)
+- User-defined table functions (UDTFs), and SQL functions with a procedural (multi-statement) body — a function's body is one expression, backed directly by a DuckDB `MACRO`
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+Contributions are welcome. Check the
+[open issues](https://github.com/OswaldOniSango/snowflake-emulator/issues), fork
+the repository, create a focused feature branch, add tests, and open a pull
+request against `dev`. You do not need to know every part of Go or Snowflake to
+start: the project is intended to be learned and improved incrementally.
 
 ## Authors and maintainers
 

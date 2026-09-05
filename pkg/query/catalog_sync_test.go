@@ -108,7 +108,7 @@ func TestCreateAndDropTableSQLSynchronizesCatalog(t *testing.T) {
 			name:      "base table with declared columns",
 			statement: "CREATE TABLE users (id INTEGER NOT NULL, name VARCHAR DEFAULT 'unknown')",
 			tableName: "USERS",
-			tableType: "BASE TABLE",
+			tableType: baseTableType,
 		},
 		{
 			name:      "transient table as select",

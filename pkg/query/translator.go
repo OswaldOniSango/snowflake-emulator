@@ -94,6 +94,9 @@ func (t *Translator) Translate(sql string) (string, error) {
 	if preamble, body, ok := splitCreateTableAs(sql); ok {
 		return preamble + t.handleComplexTransformations(t.translateFunctionsLexically(body)), nil
 	}
+	if preamble, body, ok := splitCreateViewAs(sql); ok {
+		return preamble + t.handleComplexTransformations(t.translateFunctionsLexically(body)), nil
+	}
 
 	// DDL and the SHOW family carry no function calls worth translating, and
 	// a CREATE TABLE body in particular holds type names that must not be
@@ -124,6 +127,10 @@ var createTableAsPattern = regexp.MustCompile(
 	`(?is)^CREATE\s+(?:OR\s+REPLACE\s+)?(?:(?:TEMP|TEMPORARY|TRANSIENT)\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?[^\s(;]+\s+AS\s*`,
 )
 
+var createViewAsPattern = regexp.MustCompile(
+	`(?is)^CREATE\s+(?:OR\s+REPLACE\s+)?VIEW\s+[^\s(;]+(?:\s*\([^)]*\))?\s+AS\s*`,
+)
+
 // splitCreateTableAs separates a CREATE TABLE ... AS <query> statement into
 // its DDL preamble and query body, or reports ok=false for anything else —
 // including a column-definition CREATE TABLE, which has no AS <query> to
@@ -134,6 +141,17 @@ func splitCreateTableAs(sql string) (preamble, body string, ok bool) {
 	prefixLen := len(sql) - len(trimmed)
 
 	loc := createTableAsPattern.FindStringIndex(trimmed)
+	if loc == nil {
+		return "", "", false
+	}
+	splitAt := prefixLen + loc[1]
+	return sql[:splitAt], sql[splitAt:], true
+}
+
+func splitCreateViewAs(sql string) (preamble, body string, ok bool) {
+	trimmed := trimLeadingComments(sql)
+	prefixLen := len(sql) - len(trimmed)
+	loc := createViewAsPattern.FindStringIndex(trimmed)
 	if loc == nil {
 		return "", "", false
 	}
@@ -203,7 +221,128 @@ func (t *Translator) handleComplexTransformations(sql string) string {
 	// Handle DATEDIFF: __DATEDIFF__(part, start, end) → DATE_DIFF('part', start, end)
 	sql = t.transformDATEDIFF(sql)
 
+	// FROM VALUES (...) [AS alias[(cols)]] needs an explicit column-aliased AS
+	// clause for DuckDB, which Snowflake's default column1/column2 naming
+	// does not require.
+	sql = translateFromValues(sql)
+
 	return sql
+}
+
+// translateFromValues finds every "FROM VALUES (...)" table literal and adds
+// whatever DuckDB needs it to have that Snowflake let the author omit: an AS
+// clause naming the columns. DuckDB accepts the clause bare — no extra
+// parentheses around VALUES — as long as an alias with an explicit column
+// list follows it; without one, "FROM VALUES (...)" alone is a syntax error,
+// and "FROM VALUES (...) AS t" bare still falls back to DuckDB's own col0,
+// col1 naming instead of Snowflake's column1, column2. Both are fixed by
+// inserting the column list Snowflake implies from the first row's width.
+func translateFromValues(sql string) string {
+	pos := 0
+	for {
+		fromIdx := findKeyword(sql, "FROM", pos)
+		if fromIdx < 0 {
+			return sql
+		}
+		afterFrom := fromIdx + len("FROM")
+
+		valuesIdx := skipSpaceAndComments(sql, afterFrom)
+		name, afterValues := readIdentifierAt(sql, valuesIdx)
+		if !strings.EqualFold(name, "VALUES") {
+			pos = afterFrom
+			continue
+		}
+
+		rewritten, resumeAt, changed := rewriteValuesTableLiteral(sql, afterValues)
+		if !changed {
+			pos = afterValues
+			continue
+		}
+		sql = rewritten
+		pos = resumeAt
+	}
+}
+
+// rewriteValuesTableLiteral inserts the column list a VALUES table literal
+// needs, starting the scan for its rows at afterValues (just past the VALUES
+// keyword). It reports the unchanged sql and changed=false when there is
+// nothing to add — an explicit AS alias(cols) is already there, or the text
+// at afterValues does not actually start a row list, such as VALUES used as
+// an ordinary table name.
+func rewriteValuesTableLiteral(sql string, afterValues int) (rewritten string, resumeAt int, changed bool) {
+	firstRowColumns, rowsEnd, ok := skipValuesRows(sql, afterValues)
+	if !ok {
+		return sql, afterValues, false
+	}
+
+	afterRows := skipSpaceAndComments(sql, rowsEnd)
+	keyword, afterKeyword := readIdentifierAt(sql, afterRows)
+	if !strings.EqualFold(keyword, "AS") {
+		insertion := " AS t(" + syntheticValueColumns(firstRowColumns) + ")"
+		return sql[:rowsEnd] + insertion + sql[rowsEnd:], rowsEnd + len(insertion), true
+	}
+
+	afterAs := skipSpaceAndComments(sql, afterKeyword)
+	alias, afterAlias := readIdentifierAt(sql, afterAs)
+	if alias == "" {
+		// Malformed ("... AS" with nothing after it) — leave it for the
+		// database to reject with its own error.
+		return sql, afterKeyword, false
+	}
+
+	if next := skipSpaceAndComments(sql, afterAlias); next < len(sql) && sql[next] == '(' {
+		// Already has its own column list.
+		return sql, afterAlias, false
+	}
+
+	insertion := "(" + syntheticValueColumns(firstRowColumns) + ")"
+	return sql[:afterAlias] + insertion + sql[afterAlias:], afterAlias + len(insertion), true
+}
+
+// skipValuesRows scans one or more comma-separated, parenthesized rows
+// starting at i, returning the first row's column count and the index just
+// past the last row. ok is false when there is no row list at i at all —
+// VALUES was not followed by "(", so it is not this construct.
+func skipValuesRows(sql string, i int) (firstRowColumns int, end int, ok bool) {
+	i = skipSpaceAndComments(sql, i)
+	if i >= len(sql) || sql[i] != '(' {
+		return 0, i, false
+	}
+	closeParen := matchingParen(sql, i)
+	if closeParen < 0 {
+		return 0, i, false
+	}
+	firstRowColumns = len(splitSQL(sql[i+1:closeParen], ','))
+	end = closeParen + 1
+
+	for {
+		next := skipSpaceAndComments(sql, end)
+		if next >= len(sql) || sql[next] != ',' {
+			return firstRowColumns, end, true
+		}
+		afterComma := skipSpaceAndComments(sql, next+1)
+		if afterComma >= len(sql) || sql[afterComma] != '(' {
+			return firstRowColumns, end, true
+		}
+		rowClose := matchingParen(sql, afterComma)
+		if rowClose < 0 {
+			return firstRowColumns, end, true
+		}
+		end = rowClose + 1
+	}
+}
+
+// syntheticValueColumns names n columns the way Snowflake's implicit VALUES
+// naming does: column1, column2, and so on.
+func syntheticValueColumns(n int) string {
+	if n < 1 {
+		n = 1
+	}
+	names := make([]string, n)
+	for i := range names {
+		names[i] = fmt.Sprintf("column%d", i+1)
+	}
+	return strings.Join(names, ", ")
 }
 
 // transformMarkedFunction transforms a marked function using a custom transformer.

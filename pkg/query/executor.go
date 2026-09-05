@@ -35,16 +35,18 @@ const defaultRowLimit = 1000
 
 // Executor executes SQL queries against DuckDB with Snowflake SQL translation.
 type Executor struct {
-	mgr                *connection.Manager
-	repo               *metadata.Repository
-	translator         *Translator
-	copyProcessor      *CopyProcessor
-	mergeProcessor     *MergeProcessor
-	procedureProcessor *ProcedureProcessor
-	streamProcessor    *StreamProcessor
-	taskProcessor      *TaskProcessor
-	stageProcessor     *StageProcessor
-	warehouseValidator func(context.Context, string) error
+	mgr                   *connection.Manager
+	repo                  *metadata.Repository
+	translator            *Translator
+	copyProcessor         *CopyProcessor
+	mergeProcessor        *MergeProcessor
+	procedureProcessor    *ProcedureProcessor
+	functionProcessor     *FunctionProcessor
+	streamProcessor       *StreamProcessor
+	taskProcessor         *TaskProcessor
+	dynamicTableProcessor *DynamicTableProcessor
+	stageProcessor        *StageProcessor
+	warehouseValidator    func(context.Context, string) error
 }
 
 // ExecutorOption configures an Executor.
@@ -87,8 +89,10 @@ func NewExecutor(mgr *connection.Manager, repo *metadata.Repository, opts ...Exe
 		translator: NewTranslator(),
 	}
 	e.procedureProcessor = NewProcedureProcessor(repo, e)
+	e.functionProcessor = NewFunctionProcessor(repo, e)
 	e.streamProcessor = NewStreamProcessor(repo, e)
 	e.taskProcessor = NewTaskProcessor(repo, e)
+	e.dynamicTableProcessor = NewDynamicTableProcessor(repo, e)
 	for _, opt := range opts {
 		opt(e)
 	}
@@ -122,6 +126,7 @@ func (e *Executor) withPinnedConnection(ctx context.Context, fn func(*Executor) 
 		if e.stageProcessor != nil {
 			pinned.stageProcessor = NewStageProcessor(e.stageProcessor.manager, pinnedRepo)
 		}
+		pinned.dynamicTableProcessor.mu = e.dynamicTableProcessor.mu
 		return fn(pinned)
 	})
 }
@@ -221,6 +226,56 @@ func (e *Executor) QueryWithContext(ctx context.Context, executionContext Execut
 	}, nil
 }
 
+// executeObjectDefinition dispatches CREATE/DROP/ALTER/EXECUTE for the object
+// types owned by their own processor — procedures, functions, streams, and
+// tasks — so ExecuteWithContext's own branching stays under the complexity
+// ceiling as the set of supported object types grows.
+func (e *Executor) executeObjectDefinition(ctx context.Context, executionContext ExecutionContext, sql string, classifier *Classifier) (*ExecResult, bool, error) {
+	switch {
+	case classifier.IsCreateProcedure(sql):
+		result, err := e.procedureProcessor.Create(ctx, executionContext, sql)
+		return result, true, err
+	case classifier.IsDropProcedure(sql):
+		result, err := e.procedureProcessor.Drop(ctx, executionContext, sql)
+		return result, true, err
+	case classifier.IsCreateFunction(sql):
+		result, err := e.functionProcessor.Create(ctx, executionContext, sql)
+		return result, true, err
+	case classifier.IsDropFunction(sql):
+		result, err := e.functionProcessor.Drop(ctx, executionContext, sql)
+		return result, true, err
+	case classifier.IsCreateStream(sql):
+		result, err := e.streamProcessor.Create(ctx, executionContext, sql)
+		return result, true, err
+	case classifier.IsDropStream(sql):
+		result, err := e.streamProcessor.Drop(ctx, executionContext, sql)
+		return result, true, err
+	case classifier.IsCreateTask(sql):
+		result, err := e.taskProcessor.Create(ctx, executionContext, sql)
+		return result, true, err
+	case classifier.IsAlterTask(sql):
+		result, err := e.taskProcessor.Alter(ctx, executionContext, sql)
+		return result, true, err
+	case classifier.IsDropTask(sql):
+		result, err := e.taskProcessor.Drop(ctx, executionContext, sql)
+		return result, true, err
+	case classifier.IsExecuteTask(sql):
+		result, err := e.taskProcessor.Execute(ctx, executionContext, sql)
+		return result, true, err
+	case classifier.IsCreateDynamicTable(sql):
+		result, err := e.dynamicTableProcessor.Create(ctx, executionContext, sql)
+		return result, true, err
+	case classifier.IsAlterDynamicTable(sql):
+		result, err := e.dynamicTableProcessor.Refresh(ctx, executionContext, sql)
+		return result, true, err
+	case classifier.IsDropDynamicTable(sql):
+		result, err := e.dynamicTableProcessor.Drop(ctx, executionContext, sql)
+		return result, true, err
+	default:
+		return nil, false, nil
+	}
+}
+
 func (e *Executor) queryWithProcessor(ctx context.Context, executionContext ExecutionContext, sql string, classifier *Classifier) (*Result, bool, error) {
 	if classifier.IsCall(sql) {
 		result, err := e.procedureProcessor.Call(ctx, executionContext, sql)
@@ -228,6 +283,10 @@ func (e *Executor) queryWithProcessor(ctx context.Context, executionContext Exec
 	}
 	if classifier.IsShowProcedures(sql) {
 		result, err := e.procedureProcessor.Show(ctx, sql)
+		return result, true, err
+	}
+	if classifier.IsShowFunctions(sql) {
+		result, err := e.functionProcessor.Show(ctx)
 		return result, true, err
 	}
 	if classifier.IsShowStreams(sql) {
@@ -243,6 +302,14 @@ func (e *Executor) queryWithProcessor(ctx context.Context, executionContext Exec
 			return nil, true, fmt.Errorf("stage processor not configured")
 		}
 		result, err := e.stageProcessor.Show(ctx)
+		return result, true, err
+	}
+	if classifier.IsShowViews(sql) {
+		result, err := e.showViews(ctx, executionContext, sql)
+		return result, true, err
+	}
+	if classifier.IsShowDynamicTables(sql) {
+		result, err := e.dynamicTableProcessor.Show(ctx, executionContext, sql)
 		return result, true, err
 	}
 	if classifier.IsListStage(sql) {
@@ -441,35 +508,14 @@ func (e *Executor) ExecuteWithContext(ctx context.Context, executionContext Exec
 	}
 	// Use classifier to detect DDL statements that need metadata tracking
 	classifier := NewClassifier()
-	if classifier.IsCreateProcedure(sql) {
-		return e.procedureProcessor.Create(ctx, executionContext, sql)
+	if err := e.dynamicTableProcessor.RejectOrdinaryMutation(ctx, executionContext, sql); err != nil {
+		return nil, err
 	}
-	if classifier.IsDropProcedure(sql) {
-		return e.procedureProcessor.Drop(ctx, executionContext, sql)
+	if result, handled, err := e.executeObjectDefinition(ctx, executionContext, sql, classifier); handled {
+		return result, err
 	}
-	if classifier.IsCreateStream(sql) {
-		return e.streamProcessor.Create(ctx, executionContext, sql)
-	}
-	if classifier.IsDropStream(sql) {
-		return e.streamProcessor.Drop(ctx, executionContext, sql)
-	}
-	if classifier.IsCreateTask(sql) {
-		return e.taskProcessor.Create(ctx, executionContext, sql)
-	}
-	if classifier.IsAlterTask(sql) {
-		return e.taskProcessor.Alter(ctx, executionContext, sql)
-	}
-	if classifier.IsDropTask(sql) {
-		return e.taskProcessor.Drop(ctx, executionContext, sql)
-	}
-	if classifier.IsExecuteTask(sql) {
-		return e.taskProcessor.Execute(ctx, executionContext, sql)
-	}
-	if classifier.IsCreateSchema(sql) {
-		return e.executeCreateSchema(ctx, executionContext, sql)
-	}
-	if classifier.IsDropSchema(sql) {
-		return e.executeDropSchema(ctx, executionContext, sql)
+	if result, handled, err := e.executeCatalogStatement(ctx, executionContext, sql, classifier); handled {
+		return result, err
 	}
 	if result, handled, err := e.executeStageStatement(ctx, executionContext, sql, classifier); handled {
 		return result, err
@@ -512,6 +558,25 @@ func (e *Executor) ExecuteWithContext(ctx context.Context, executionContext Exec
 
 	// Execute regular SQL statement
 	return e.executeRawWithContext(ctx, executionContext, sql)
+}
+
+func (e *Executor) executeCatalogStatement(ctx context.Context, executionContext ExecutionContext, sql string, classifier *Classifier) (*ExecResult, bool, error) {
+	switch {
+	case classifier.IsCreateSchema(sql):
+		result, err := e.executeCreateSchema(ctx, executionContext, sql)
+		return result, true, err
+	case classifier.IsDropSchema(sql):
+		result, err := e.executeDropSchema(ctx, executionContext, sql)
+		return result, true, err
+	case classifier.IsCreateView(sql):
+		result, err := e.executeCreateView(ctx, executionContext, sql)
+		return result, true, err
+	case classifier.IsDropView(sql):
+		result, err := e.executeDropView(ctx, executionContext, sql)
+		return result, true, err
+	default:
+		return nil, false, nil
+	}
 }
 
 // executeRaw executes a SQL statement without classification or processor delegation.

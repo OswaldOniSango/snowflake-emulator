@@ -287,7 +287,7 @@ type TranslationRewrite struct {
 type SchemaObject struct {
 	Name string `json:"name"`
 
-	// Kind is "table", "stream", "procedure", "task" or "stage".
+	// Kind is "table", "view", "stream", "procedure", "task" or "stage".
 	Kind string `json:"kind"`
 
 	// Detail is a short, human-readable qualifier: a stream's source table, a
