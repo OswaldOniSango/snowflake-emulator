@@ -169,6 +169,21 @@ type Task struct {
 	Owner           string
 }
 
+// DynamicTable represents a materialized query refreshed on demand.
+type DynamicTable struct {
+	ID                 string
+	SchemaID           string
+	Name               string
+	TargetLag          string
+	Warehouse          string
+	Definition         string
+	DefinitionDatabase string
+	DefinitionSchema   string
+	CreatedAt          time.Time
+	LastRefreshedAt    *time.Time
+	Owner              string
+}
+
 // NewRepository creates a new metadata repository.
 // It initializes metadata tables if they don't exist.
 func NewRepository(mgr *connection.Manager) (*Repository, error) {
@@ -349,6 +364,20 @@ func (r *Repository) initMetadataTables(ctx context.Context) error {
 			owner VARCHAR,
 			UNIQUE(schema_id, name)
 		)`,
+		`CREATE TABLE IF NOT EXISTS _metadata_dynamic_tables (
+			id VARCHAR PRIMARY KEY,
+			schema_id VARCHAR NOT NULL,
+			name VARCHAR NOT NULL,
+			target_lag VARCHAR NOT NULL,
+			warehouse VARCHAR NOT NULL,
+			definition TEXT NOT NULL,
+			definition_database VARCHAR NOT NULL DEFAULT '',
+			definition_schema VARCHAR NOT NULL DEFAULT '',
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			last_refreshed_at TIMESTAMP,
+			owner VARCHAR,
+			UNIQUE(schema_id, name)
+		)`,
 	}
 
 	for _, query := range queries {
@@ -365,6 +394,8 @@ func (r *Repository) initMetadataTables(ctx context.Context) error {
 		`ALTER TABLE _metadata_query_history ADD COLUMN IF NOT EXISTS database_name VARCHAR`,
 		`ALTER TABLE _metadata_query_history ADD COLUMN IF NOT EXISTS schema_name VARCHAR`,
 		`ALTER TABLE _metadata_query_history ADD COLUMN IF NOT EXISTS warehouse VARCHAR`,
+		`ALTER TABLE _metadata_dynamic_tables ADD COLUMN IF NOT EXISTS definition_database VARCHAR`,
+		`ALTER TABLE _metadata_dynamic_tables ADD COLUMN IF NOT EXISTS definition_schema VARCHAR`,
 	}
 	for _, query := range migrations {
 		if _, err := r.mgr.Exec(ctx, query); err != nil {
@@ -979,7 +1010,7 @@ func (r *Repository) GetTableByName(ctx context.Context, schemaID, name string) 
 // catalog table but are intentionally excluded from this table-only API.
 func (r *Repository) ListTables(ctx context.Context, schemaID string) ([]*Table, error) {
 	query := `SELECT id, schema_id, name, table_type, comment, created_at, owner, clustering_key, column_definitions
-	          FROM _metadata_tables WHERE schema_id = ? AND table_type <> 'VIEW' ORDER BY name`
+	          FROM _metadata_tables WHERE schema_id = ? AND table_type NOT IN ('VIEW', 'DYNAMIC TABLE') ORDER BY name`
 	return r.listCatalogTables(ctx, query, schemaID)
 }
 
@@ -1040,7 +1071,7 @@ func (r *Repository) listCatalogTables(ctx context.Context, query, schemaID stri
 // to share the same metadata storage.
 func (r *Repository) GetOrdinaryTableByName(ctx context.Context, schemaID, name string) (*Table, error) {
 	table, err := r.GetTableByName(ctx, schemaID, name)
-	if err != nil || table.TableType == "VIEW" {
+	if err != nil || table.TableType == "VIEW" || table.TableType == "DYNAMIC TABLE" {
 		return nil, fmt.Errorf("table %s not found", name)
 	}
 	return table, nil
@@ -1702,4 +1733,204 @@ func (r *Repository) TableIsTemporary(ctx context.Context, name string) (bool, e
 		return false, fmt.Errorf("failed to check whether %s is a temporary table: %w", name, err)
 	}
 	return true, nil
+}
+
+// UpsertDynamicTable records the definition of a materialized dynamic table.
+func (r *Repository) UpsertDynamicTable(ctx context.Context, schemaID, name, targetLag, warehouse, definition, definitionDatabase, definitionSchema string) (*DynamicTable, error) {
+	id := uuid.New().String()
+	_, err := r.mgr.Exec(ctx, `INSERT INTO _metadata_dynamic_tables
+		(id, schema_id, name, target_lag, warehouse, definition, definition_database, definition_schema, created_at, owner)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, '')
+		ON CONFLICT (schema_id, name) DO UPDATE SET
+			target_lag = EXCLUDED.target_lag, warehouse = EXCLUDED.warehouse,
+			definition = EXCLUDED.definition, definition_database = EXCLUDED.definition_database,
+			definition_schema = EXCLUDED.definition_schema, created_at = EXCLUDED.created_at`,
+		id, schemaID, strings.ToUpper(name), targetLag, strings.ToUpper(warehouse), definition, definitionDatabase, definitionSchema)
+	if err != nil {
+		return nil, fmt.Errorf("failed to register dynamic table: %w", err)
+	}
+	return r.GetDynamicTableByName(ctx, schemaID, name)
+}
+
+// GetDynamicTableByName retrieves a dynamic table definition.
+func (r *Repository) GetDynamicTableByName(ctx context.Context, schemaID, name string) (*DynamicTable, error) {
+	row := r.mgr.QueryRow(ctx, `SELECT id, schema_id, name, target_lag, warehouse, definition, COALESCE(definition_database, ''), COALESCE(definition_schema, ''),
+		created_at, last_refreshed_at, owner FROM _metadata_dynamic_tables WHERE schema_id = ? AND name = ?`,
+		schemaID, strings.ToUpper(name))
+	var value DynamicTable
+	var createdAt sql.NullTime
+	var refreshedAt sql.NullTime
+	var owner sql.NullString
+	if err := row.Scan(&value.ID, &value.SchemaID, &value.Name, &value.TargetLag, &value.Warehouse,
+		&value.Definition, &value.DefinitionDatabase, &value.DefinitionSchema, &createdAt, &refreshedAt, &owner); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("dynamic table %s not found", name)
+		}
+		return nil, fmt.Errorf("failed to get dynamic table: %w", err)
+	}
+	if createdAt.Valid {
+		value.CreatedAt = createdAt.Time
+	}
+	if refreshedAt.Valid {
+		value.LastRefreshedAt = &refreshedAt.Time
+	}
+	if owner.Valid {
+		value.Owner = owner.String
+	}
+	return &value, nil
+}
+
+// ListDynamicTables lists dynamic tables in one schema, or all schemas when schemaID is empty.
+func (r *Repository) ListDynamicTables(ctx context.Context, schemaID string) ([]*DynamicTable, error) {
+	query := `SELECT id, schema_id, name, target_lag, warehouse, definition, COALESCE(definition_database, ''), COALESCE(definition_schema, ''), created_at, last_refreshed_at, owner FROM _metadata_dynamic_tables`
+	args := []interface{}{}
+	if schemaID != "" {
+		query += sqlWhereSchemaID
+		args = append(args, schemaID)
+	}
+	query += sqlOrderByName
+	rows, err := r.mgr.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list dynamic tables: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	values := make([]*DynamicTable, 0)
+	for rows.Next() {
+		var value DynamicTable
+		var createdAt, refreshedAt sql.NullTime
+		var owner sql.NullString
+		if err := rows.Scan(&value.ID, &value.SchemaID, &value.Name, &value.TargetLag, &value.Warehouse, &value.Definition, &value.DefinitionDatabase, &value.DefinitionSchema, &createdAt, &refreshedAt, &owner); err != nil {
+			return nil, err
+		}
+		if createdAt.Valid {
+			value.CreatedAt = createdAt.Time
+		}
+		if refreshedAt.Valid {
+			value.LastRefreshedAt = &refreshedAt.Time
+		}
+		if owner.Valid {
+			value.Owner = owner.String
+		}
+		values = append(values, &value)
+	}
+	return values, rows.Err()
+}
+
+// MarkDynamicTableRefreshed records a successful refresh.
+func (r *Repository) MarkDynamicTableRefreshed(ctx context.Context, id string) error {
+	_, err := r.mgr.Exec(ctx, `UPDATE _metadata_dynamic_tables SET last_refreshed_at = CURRENT_TIMESTAMP WHERE id = ?`, id)
+	return err
+}
+
+// DeleteDynamicTable removes the persisted definition.
+func (r *Repository) DeleteDynamicTable(ctx context.Context, schemaID, name string) error {
+	_, err := r.mgr.Exec(ctx, `DELETE FROM _metadata_dynamic_tables WHERE schema_id = ? AND name = ?`, schemaID, strings.ToUpper(name))
+	return err
+}
+
+// MaterializeDynamicTable atomically replaces the physical result and both catalog records.
+func (r *Repository) MaterializeDynamicTable(ctx context.Context, schemaID, name, targetLag, warehouse, definition, definitionDatabase, definitionSchema, databaseName, physicalName, materializeSQL string) (*DynamicTable, error) {
+	id := uuid.New().String()
+	err := r.mgr.ExecTx(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, materializeSQL); err != nil {
+			return fmt.Errorf("materialization failed: %w", err)
+		}
+		columns, err := inspectDynamicColumns(ctx, tx, databaseName, physicalName)
+		if err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, `INSERT INTO _metadata_tables
+			(id, schema_id, name, table_type, comment, created_at, owner, clustering_key, column_definitions)
+			VALUES (?, ?, ?, 'DYNAMIC TABLE', '', CURRENT_TIMESTAMP, '', '', ?)
+			ON CONFLICT (schema_id, name) DO UPDATE SET table_type = EXCLUDED.table_type,
+			column_definitions = EXCLUDED.column_definitions, created_at = EXCLUDED.created_at`,
+			uuid.New().String(), schemaID, strings.ToUpper(name), serializeColumnDefs(columns))
+		if err != nil {
+			return fmt.Errorf("failed to register dynamic table object: %w", err)
+		}
+		_, err = tx.ExecContext(ctx, `INSERT INTO _metadata_dynamic_tables
+			(id, schema_id, name, target_lag, warehouse, definition, definition_database, definition_schema, created_at, last_refreshed_at, owner)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, '')
+			ON CONFLICT (schema_id, name) DO UPDATE SET target_lag = EXCLUDED.target_lag,
+			warehouse = EXCLUDED.warehouse, definition = EXCLUDED.definition,
+			definition_database = EXCLUDED.definition_database, definition_schema = EXCLUDED.definition_schema,
+			created_at = EXCLUDED.created_at, last_refreshed_at = EXCLUDED.last_refreshed_at`,
+			id, schemaID, strings.ToUpper(name), targetLag, strings.ToUpper(warehouse), definition, definitionDatabase, definitionSchema)
+		if err != nil {
+			return fmt.Errorf("failed to register dynamic table definition: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return r.GetDynamicTableByName(ctx, schemaID, name)
+}
+
+// RefreshDynamicTable atomically refreshes physical rows, columns, and refresh timestamp.
+func (r *Repository) RefreshDynamicTable(ctx context.Context, value *DynamicTable, databaseName, physicalName, materializeSQL string) error {
+	return r.mgr.ExecTx(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, materializeSQL); err != nil {
+			return fmt.Errorf("materialization failed: %w", err)
+		}
+		columns, err := inspectDynamicColumns(ctx, tx, databaseName, physicalName)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE _metadata_tables SET column_definitions = ? WHERE schema_id = ? AND name = ? AND table_type = 'DYNAMIC TABLE'`, serializeColumnDefs(columns), value.SchemaID, value.Name); err != nil {
+			return err
+		}
+		result, err := tx.ExecContext(ctx, `UPDATE _metadata_dynamic_tables SET last_refreshed_at = CURRENT_TIMESTAMP WHERE id = ?`, value.ID)
+		if err != nil {
+			return err
+		}
+		if affected, _ := result.RowsAffected(); affected != 1 {
+			return fmt.Errorf("dynamic table %s metadata disappeared during refresh", value.Name)
+		}
+		return nil
+	})
+}
+
+// DropDynamicTableAtomic removes the physical table and both records in one transaction.
+func (r *Repository) DropDynamicTableAtomic(ctx context.Context, schemaID, name, dropSQL string) error {
+	return r.mgr.ExecTx(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, dropSQL); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM _metadata_dynamic_tables WHERE schema_id = ? AND name = ?`, schemaID, strings.ToUpper(name)); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM _metadata_tables WHERE schema_id = ? AND name = ? AND table_type = 'DYNAMIC TABLE'`, schemaID, strings.ToUpper(name)); err != nil {
+			return err
+		}
+		return nil
+	})
+}
+
+func inspectDynamicColumns(ctx context.Context, tx *sql.Tx, databaseName, physicalName string) ([]ColumnDef, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT column_name, data_type, is_nullable, column_default FROM duckdb_columns() WHERE schema_name = ? AND table_name = ? ORDER BY column_index`, strings.ToUpper(databaseName), strings.ToUpper(physicalName))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	columns := make([]ColumnDef, 0)
+	for rows.Next() {
+		var column ColumnDef
+		var defaultValue sql.NullString
+		if err := rows.Scan(&column.Name, &column.Type, &column.Nullable, &defaultValue); err != nil {
+			return nil, err
+		}
+		column.Name, column.Type = strings.ToUpper(column.Name), strings.ToUpper(column.Type)
+		if defaultValue.Valid {
+			column.Default = &defaultValue.String
+		}
+		columns = append(columns, column)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(columns) == 0 {
+		return nil, fmt.Errorf("dynamic table %s has no inspectable columns", physicalName)
+	}
+	return columns, nil
 }

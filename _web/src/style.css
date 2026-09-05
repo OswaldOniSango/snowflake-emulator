@@ -790,7 +790,8 @@ table.grid .rn {
 }
 
 .dot.kind-table,
-.dot.kind-view {
+.dot.kind-view,
+.dot.kind-dynamic_table {
   background: var(--ink-3);
 }
 
