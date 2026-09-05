@@ -9,7 +9,7 @@ export const LIMITATIONS: readonly string[] = [
   "Tasks and Pipes",
   "External stages (S3, Azure, GCS)",
   "Stored procedures and functions with JavaScript, Python, or Java",
-  "Advanced Snowflake Scripting (LET, loops, nested exception scopes, qualified/quoted dynamic identifiers, and procedure overloading)",
+  "Advanced Snowflake Scripting (loops, nested exception scopes, qualified/quoted dynamic identifiers, and procedure overloading)",
   "Stream change tracking for UPDATE and DELETE",
   "Stream consumption semantics, retention, and stale-state handling",
   "User-defined table functions (UDTFs), and SQL functions with a procedural (multi-statement) body — a function's body is one expression, backed directly by a DuckDB MACRO",
