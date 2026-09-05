@@ -524,7 +524,15 @@ func (e *Executor) ExecuteWithContext(ctx context.Context, executionContext Exec
 	// For CREATE TABLE, we need to register it in metadata
 	if classifier.IsCreateTable(sql) {
 		originalSQL := sql
-		rewrittenSQL, err := e.rewriteTablesWithContext(ctx, executionContext, sql)
+		// A CTAS body can read from a stream, same as any other SELECT — the
+		// stream name has to become its underlying append-only subquery
+		// before table-name qualification, or it is qualified as though it
+		// were an ordinary table that does not physically exist.
+		rewrittenSQL, err := e.streamProcessor.RewriteReferences(ctx, executionContext, sql)
+		if err != nil {
+			return nil, err
+		}
+		rewrittenSQL, err = e.rewriteTablesWithContext(ctx, executionContext, rewrittenSQL)
 		if err != nil {
 			return nil, err
 		}
