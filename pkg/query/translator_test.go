@@ -1285,3 +1285,104 @@ func TestTranslator_ColumnDefinitionCreateTableIsStillPassedThrough(t *testing.T
 		})
 	}
 }
+
+// TestTranslator_FromValues covers Snowflake's FROM VALUES (...) table
+// literal, which DuckDB accepts bare only when an AS alias with an explicit
+// column list follows — Snowflake defaults to column1, column2 without
+// requiring either, so the translator has to add whatever is missing.
+func TestTranslator_FromValues(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "no AS clause at all gets a synthesized alias and columns",
+			input:    "SELECT * FROM VALUES (1, 'Alice'), (2, 'Bob')",
+			expected: "SELECT * FROM VALUES (1, 'Alice'), (2, 'Bob') AS t(column1, column2)",
+		},
+		{
+			name:     "an alias with no column list gets the columns appended",
+			input:    "SELECT * FROM VALUES (1, 'Alice'), (2, 'Bob') AS t",
+			expected: "SELECT * FROM VALUES (1, 'Alice'), (2, 'Bob') AS t(column1, column2)",
+		},
+		{
+			name:     "an alias that already names its columns is left alone",
+			input:    "SELECT * FROM VALUES (1, 'Alice'), (2, 'Bob') AS t(id, name)",
+			expected: "SELECT * FROM VALUES (1, 'Alice'), (2, 'Bob') AS t(id, name)",
+		},
+		{
+			name:     "column count comes from the first row's width",
+			input:    "SELECT * FROM VALUES (1, 'a', 'x')",
+			expected: "SELECT * FROM VALUES (1, 'a', 'x') AS t(column1, column2, column3)",
+		},
+		{
+			name:     "a single row still gets the same treatment",
+			input:    "SELECT * FROM VALUES (1, 'Alice')",
+			expected: "SELECT * FROM VALUES (1, 'Alice') AS t(column1, column2)",
+		},
+		{
+			name:     "a comma inside a string value does not inflate the column count",
+			input:    "SELECT * FROM VALUES (1, 'a,b')",
+			expected: "SELECT * FROM VALUES (1, 'a,b') AS t(column1, column2)",
+		},
+		{
+			name:     "a nested function call's commas do not inflate the column count",
+			input:    "SELECT * FROM VALUES (1, DATEADD(day, 1, CURRENT_DATE))",
+			expected: "SELECT * FROM VALUES (1, (CAST(CURRENT_DATE AS DATE) + interval (1) day)) AS t(column1, column2)",
+		},
+		{
+			name:     "a clause after the literal is not swallowed by the insertion",
+			input:    "SELECT * FROM VALUES (1, 'a') WHERE column1 = 1",
+			expected: "SELECT * FROM VALUES (1, 'a') AS t(column1, column2) WHERE column1 = 1",
+		},
+		{
+			name:     "works inside a CTE body",
+			input:    "WITH v AS (SELECT * FROM VALUES (1, 'a')) SELECT * FROM v",
+			expected: "WITH v AS (SELECT * FROM VALUES (1, 'a') AS t(column1, column2)) SELECT * FROM v",
+		},
+		{
+			name:     "two VALUES literals in the same statement both get columns",
+			input:    "SELECT * FROM VALUES (1) UNION ALL SELECT * FROM VALUES (2)",
+			expected: "SELECT * FROM VALUES (1) AS t(column1) UNION ALL SELECT * FROM VALUES (2) AS t(column1)",
+		},
+		{
+			name:     "an ordinary INSERT ... VALUES is not FROM VALUES and is left alone",
+			input:    "INSERT INTO t VALUES (1, 'a')",
+			expected: "INSERT INTO t VALUES (1, 'a')",
+		},
+		{
+			name:     "a real table merely named VALUES_TABLE is not mistaken for the literal",
+			input:    "SELECT * FROM VALUES_TABLE",
+			expected: "SELECT * FROM VALUES_TABLE",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := NewTranslator().Translate(tt.input)
+			if err != nil {
+				t.Fatalf("Translate() error = %v", err)
+			}
+			if diff := cmp.Diff(tt.expected, result); diff != "" {
+				t.Errorf("Translate() mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// TestTranslator_FromValuesInCreateTableAs pins that the workaround this
+// feature replaces — CREATE TABLE ... AS SELECT * FROM VALUES ... — keeps
+// working, since the CTAS body is translated on its own path.
+func TestTranslator_FromValuesInCreateTableAs(t *testing.T) {
+	input := "CREATE TABLE t AS SELECT * FROM VALUES (1, 'Alice'), (2, 'Bob')"
+	expected := "CREATE TABLE t AS SELECT * FROM VALUES (1, 'Alice'), (2, 'Bob') AS t(column1, column2)"
+
+	result, err := NewTranslator().Translate(input)
+	if err != nil {
+		t.Fatalf("Translate() error = %v", err)
+	}
+	if diff := cmp.Diff(expected, result); diff != "" {
+		t.Errorf("Translate() mismatch (-want +got):\n%s", diff)
+	}
+}

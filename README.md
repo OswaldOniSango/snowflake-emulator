@@ -457,6 +457,7 @@ The emulator supports standard SQL operations with automatic Snowflake-to-DuckDB
 |----------|------------|-------------|
 | **Query** | `SELECT`, `SHOW`, `DESCRIBE`, `EXPLAIN` | Read operations with full result set support |
 | **Query** | `WITH ... SELECT` | Common table expressions, chained and referencing one another, ahead of any statement type |
+| **Query** | `FROM VALUES (...) [AS alias[(cols)]]` | Inline table literal, auto-aliased with `column1`, `column2`, ... when the alias or its column list is left out |
 | **DML** | `INSERT`, `UPDATE`, `DELETE` | Data manipulation with rows affected count |
 | **DDL** | `CREATE TABLE`, `DROP TABLE`, `ALTER TABLE` | Schema management |
 | **DDL** | `CREATE TABLE ... AS <query>`, including a `WITH` clause | Function translation runs on the query body, not just a bare `SELECT` |
@@ -576,7 +577,6 @@ are not supported or have limited support:
 - Stream change tracking for `UPDATE` and `DELETE`
 - Stream consumption semantics, retention, and stale-state handling
 - User-defined table functions (UDTFs), and SQL functions with a procedural (multi-statement) body — a function's body is one expression, backed directly by a DuckDB `MACRO`
-- Snowflake's `FROM VALUES (...)` table literal with implicit `column1`/`column2` naming, which is not valid DuckDB syntax at all — `FROM (VALUES (1, 'Alice'), (2, 'Bob')) AS t(column1, column2)` reaches the same result unmodified
 
 ## Contributing
 

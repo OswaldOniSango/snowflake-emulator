@@ -13,5 +13,4 @@ export const LIMITATIONS: readonly string[] = [
   "Stream change tracking for UPDATE and DELETE",
   "Stream consumption semantics, retention, and stale-state handling",
   "User-defined table functions (UDTFs), and SQL functions with a procedural (multi-statement) body — a function's body is one expression, backed directly by a DuckDB MACRO",
-  "Snowflake's FROM VALUES (...) table literal with implicit column1/column2 naming, which is not valid DuckDB syntax at all — FROM (VALUES (1, 'Alice'), (2, 'Bob')) AS t(column1, column2) reaches the same result unmodified",
 ];
