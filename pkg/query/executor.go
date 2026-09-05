@@ -41,6 +41,7 @@ type Executor struct {
 	copyProcessor      *CopyProcessor
 	mergeProcessor     *MergeProcessor
 	procedureProcessor *ProcedureProcessor
+	functionProcessor  *FunctionProcessor
 	streamProcessor    *StreamProcessor
 	taskProcessor      *TaskProcessor
 	stageProcessor     *StageProcessor
@@ -87,6 +88,7 @@ func NewExecutor(mgr *connection.Manager, repo *metadata.Repository, opts ...Exe
 		translator: NewTranslator(),
 	}
 	e.procedureProcessor = NewProcedureProcessor(repo, e)
+	e.functionProcessor = NewFunctionProcessor(repo, e)
 	e.streamProcessor = NewStreamProcessor(repo, e)
 	e.taskProcessor = NewTaskProcessor(repo, e)
 	for _, opt := range opts {
@@ -221,6 +223,47 @@ func (e *Executor) QueryWithContext(ctx context.Context, executionContext Execut
 	}, nil
 }
 
+// executeObjectDefinition dispatches CREATE/DROP/ALTER/EXECUTE for the object
+// types owned by their own processor — procedures, functions, streams, and
+// tasks — so ExecuteWithContext's own branching stays under the complexity
+// ceiling as the set of supported object types grows.
+func (e *Executor) executeObjectDefinition(ctx context.Context, executionContext ExecutionContext, sql string, classifier *Classifier) (*ExecResult, bool, error) {
+	switch {
+	case classifier.IsCreateProcedure(sql):
+		result, err := e.procedureProcessor.Create(ctx, executionContext, sql)
+		return result, true, err
+	case classifier.IsDropProcedure(sql):
+		result, err := e.procedureProcessor.Drop(ctx, executionContext, sql)
+		return result, true, err
+	case classifier.IsCreateFunction(sql):
+		result, err := e.functionProcessor.Create(ctx, executionContext, sql)
+		return result, true, err
+	case classifier.IsDropFunction(sql):
+		result, err := e.functionProcessor.Drop(ctx, executionContext, sql)
+		return result, true, err
+	case classifier.IsCreateStream(sql):
+		result, err := e.streamProcessor.Create(ctx, executionContext, sql)
+		return result, true, err
+	case classifier.IsDropStream(sql):
+		result, err := e.streamProcessor.Drop(ctx, executionContext, sql)
+		return result, true, err
+	case classifier.IsCreateTask(sql):
+		result, err := e.taskProcessor.Create(ctx, executionContext, sql)
+		return result, true, err
+	case classifier.IsAlterTask(sql):
+		result, err := e.taskProcessor.Alter(ctx, executionContext, sql)
+		return result, true, err
+	case classifier.IsDropTask(sql):
+		result, err := e.taskProcessor.Drop(ctx, executionContext, sql)
+		return result, true, err
+	case classifier.IsExecuteTask(sql):
+		result, err := e.taskProcessor.Execute(ctx, executionContext, sql)
+		return result, true, err
+	default:
+		return nil, false, nil
+	}
+}
+
 func (e *Executor) queryWithProcessor(ctx context.Context, executionContext ExecutionContext, sql string, classifier *Classifier) (*Result, bool, error) {
 	if classifier.IsCall(sql) {
 		result, err := e.procedureProcessor.Call(ctx, executionContext, sql)
@@ -228,6 +271,10 @@ func (e *Executor) queryWithProcessor(ctx context.Context, executionContext Exec
 	}
 	if classifier.IsShowProcedures(sql) {
 		result, err := e.procedureProcessor.Show(ctx, sql)
+		return result, true, err
+	}
+	if classifier.IsShowFunctions(sql) {
+		result, err := e.functionProcessor.Show(ctx)
 		return result, true, err
 	}
 	if classifier.IsShowStreams(sql) {
@@ -441,29 +488,8 @@ func (e *Executor) ExecuteWithContext(ctx context.Context, executionContext Exec
 	}
 	// Use classifier to detect DDL statements that need metadata tracking
 	classifier := NewClassifier()
-	if classifier.IsCreateProcedure(sql) {
-		return e.procedureProcessor.Create(ctx, executionContext, sql)
-	}
-	if classifier.IsDropProcedure(sql) {
-		return e.procedureProcessor.Drop(ctx, executionContext, sql)
-	}
-	if classifier.IsCreateStream(sql) {
-		return e.streamProcessor.Create(ctx, executionContext, sql)
-	}
-	if classifier.IsDropStream(sql) {
-		return e.streamProcessor.Drop(ctx, executionContext, sql)
-	}
-	if classifier.IsCreateTask(sql) {
-		return e.taskProcessor.Create(ctx, executionContext, sql)
-	}
-	if classifier.IsAlterTask(sql) {
-		return e.taskProcessor.Alter(ctx, executionContext, sql)
-	}
-	if classifier.IsDropTask(sql) {
-		return e.taskProcessor.Drop(ctx, executionContext, sql)
-	}
-	if classifier.IsExecuteTask(sql) {
-		return e.taskProcessor.Execute(ctx, executionContext, sql)
+	if result, handled, err := e.executeObjectDefinition(ctx, executionContext, sql, classifier); handled {
+		return result, err
 	}
 	if classifier.IsCreateSchema(sql) {
 		return e.executeCreateSchema(ctx, executionContext, sql)
