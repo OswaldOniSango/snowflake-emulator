@@ -299,6 +299,23 @@ func (c *Classifier) IsShowTasks(sql string) bool {
 	return strings.HasPrefix(leadingSQL(sql), "SHOW TASKS")
 }
 
+// IsCreateView checks if the SQL creates an ordinary view.
+func (c *Classifier) IsCreateView(sql string) bool {
+	upperSQL := leadingSQL(sql)
+	return strings.HasPrefix(upperSQL, "CREATE VIEW") ||
+		strings.HasPrefix(upperSQL, "CREATE OR REPLACE VIEW")
+}
+
+// IsDropView checks if the SQL drops an ordinary view.
+func (c *Classifier) IsDropView(sql string) bool {
+	return strings.HasPrefix(leadingSQL(sql), "DROP VIEW")
+}
+
+// IsShowViews checks if the SQL lists ordinary views.
+func (c *Classifier) IsShowViews(sql string) bool {
+	return strings.HasPrefix(leadingSQL(sql), "SHOW VIEWS")
+}
+
 // isTransactionStatement checks if the SQL is a transaction control statement.
 func (c *Classifier) isTransactionStatement(upperSQL string) bool {
 	return strings.HasPrefix(upperSQL, "BEGIN") ||

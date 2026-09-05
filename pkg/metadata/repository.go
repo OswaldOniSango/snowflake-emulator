@@ -945,11 +945,22 @@ func (r *Repository) GetTableByName(ctx context.Context, schemaID, name string) 
 	return &table, nil
 }
 
-// ListTables retrieves all tables in a schema.
+// ListTables retrieves table objects in a schema. Views share the underlying
+// catalog table but are intentionally excluded from this table-only API.
 func (r *Repository) ListTables(ctx context.Context, schemaID string) ([]*Table, error) {
 	query := `SELECT id, schema_id, name, table_type, comment, created_at, owner, clustering_key, column_definitions
-	          FROM _metadata_tables WHERE schema_id = ? ORDER BY name`
+	          FROM _metadata_tables WHERE schema_id = ? AND table_type <> 'VIEW' ORDER BY name`
+	return r.listCatalogTables(ctx, query, schemaID)
+}
 
+// ListViews retrieves ordinary views in a schema.
+func (r *Repository) ListViews(ctx context.Context, schemaID string) ([]*Table, error) {
+	query := `SELECT id, schema_id, name, table_type, comment, created_at, owner, clustering_key, column_definitions
+	          FROM _metadata_tables WHERE schema_id = ? AND table_type = 'VIEW' ORDER BY name`
+	return r.listCatalogTables(ctx, query, schemaID)
+}
+
+func (r *Repository) listCatalogTables(ctx context.Context, query, schemaID string) ([]*Table, error) {
 	rows, err := r.mgr.Query(ctx, query, schemaID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list tables: %w", err)
@@ -995,12 +1006,25 @@ func (r *Repository) ListTables(ctx context.Context, schemaID string) ([]*Table,
 	return tables, nil
 }
 
+// GetOrdinaryTableByName retrieves a table while excluding views that happen
+// to share the same metadata storage.
+func (r *Repository) GetOrdinaryTableByName(ctx context.Context, schemaID, name string) (*Table, error) {
+	table, err := r.GetTableByName(ctx, schemaID, name)
+	if err != nil || table.TableType == "VIEW" {
+		return nil, fmt.Errorf("table %s not found", name)
+	}
+	return table, nil
+}
+
 // DropTable deletes a table.
 func (r *Repository) DropTable(ctx context.Context, id string) error {
 	// Get table first to verify it exists
 	table, err := r.GetTable(ctx, id)
 	if err != nil {
 		return err
+	}
+	if table.TableType == "VIEW" {
+		return fmt.Errorf("table with ID %s not found", id)
 	}
 
 	// Get schema and database to construct fully qualified name

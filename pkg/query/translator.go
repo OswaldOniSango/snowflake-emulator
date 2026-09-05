@@ -94,6 +94,9 @@ func (t *Translator) Translate(sql string) (string, error) {
 	if preamble, body, ok := splitCreateTableAs(sql); ok {
 		return preamble + t.handleComplexTransformations(t.translateFunctionsLexically(body)), nil
 	}
+	if preamble, body, ok := splitCreateViewAs(sql); ok {
+		return preamble + t.handleComplexTransformations(t.translateFunctionsLexically(body)), nil
+	}
 
 	// DDL and the SHOW family carry no function calls worth translating, and
 	// a CREATE TABLE body in particular holds type names that must not be
@@ -124,6 +127,10 @@ var createTableAsPattern = regexp.MustCompile(
 	`(?is)^CREATE\s+(?:OR\s+REPLACE\s+)?(?:(?:TEMP|TEMPORARY|TRANSIENT)\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?[^\s(;]+\s+AS\s*`,
 )
 
+var createViewAsPattern = regexp.MustCompile(
+	`(?is)^CREATE\s+(?:OR\s+REPLACE\s+)?VIEW\s+[^\s(;]+(?:\s*\([^)]*\))?\s+AS\s*`,
+)
+
 // splitCreateTableAs separates a CREATE TABLE ... AS <query> statement into
 // its DDL preamble and query body, or reports ok=false for anything else —
 // including a column-definition CREATE TABLE, which has no AS <query> to
@@ -134,6 +141,17 @@ func splitCreateTableAs(sql string) (preamble, body string, ok bool) {
 	prefixLen := len(sql) - len(trimmed)
 
 	loc := createTableAsPattern.FindStringIndex(trimmed)
+	if loc == nil {
+		return "", "", false
+	}
+	splitAt := prefixLen + loc[1]
+	return sql[:splitAt], sql[splitAt:], true
+}
+
+func splitCreateViewAs(sql string) (preamble, body string, ok bool) {
+	trimmed := trimLeadingComments(sql)
+	prefixLen := len(sql) - len(trimmed)
+	loc := createViewAsPattern.FindStringIndex(trimmed)
 	if loc == nil {
 		return "", "", false
 	}

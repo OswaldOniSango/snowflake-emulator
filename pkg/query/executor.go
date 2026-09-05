@@ -245,6 +245,10 @@ func (e *Executor) queryWithProcessor(ctx context.Context, executionContext Exec
 		result, err := e.stageProcessor.Show(ctx)
 		return result, true, err
 	}
+	if classifier.IsShowViews(sql) {
+		result, err := e.showViews(ctx, executionContext, sql)
+		return result, true, err
+	}
 	if classifier.IsListStage(sql) {
 		if e.stageProcessor == nil {
 			return nil, true, fmt.Errorf("stage processor not configured")
@@ -465,11 +469,8 @@ func (e *Executor) ExecuteWithContext(ctx context.Context, executionContext Exec
 	if classifier.IsExecuteTask(sql) {
 		return e.taskProcessor.Execute(ctx, executionContext, sql)
 	}
-	if classifier.IsCreateSchema(sql) {
-		return e.executeCreateSchema(ctx, executionContext, sql)
-	}
-	if classifier.IsDropSchema(sql) {
-		return e.executeDropSchema(ctx, executionContext, sql)
+	if result, handled, err := e.executeCatalogStatement(ctx, executionContext, sql, classifier); handled {
+		return result, err
 	}
 	if result, handled, err := e.executeStageStatement(ctx, executionContext, sql, classifier); handled {
 		return result, err
@@ -512,6 +513,25 @@ func (e *Executor) ExecuteWithContext(ctx context.Context, executionContext Exec
 
 	// Execute regular SQL statement
 	return e.executeRawWithContext(ctx, executionContext, sql)
+}
+
+func (e *Executor) executeCatalogStatement(ctx context.Context, executionContext ExecutionContext, sql string, classifier *Classifier) (*ExecResult, bool, error) {
+	switch {
+	case classifier.IsCreateSchema(sql):
+		result, err := e.executeCreateSchema(ctx, executionContext, sql)
+		return result, true, err
+	case classifier.IsDropSchema(sql):
+		result, err := e.executeDropSchema(ctx, executionContext, sql)
+		return result, true, err
+	case classifier.IsCreateView(sql):
+		result, err := e.executeCreateView(ctx, executionContext, sql)
+		return result, true, err
+	case classifier.IsDropView(sql):
+		result, err := e.executeDropView(ctx, executionContext, sql)
+		return result, true, err
+	default:
+		return nil, false, nil
+	}
 }
 
 // executeRaw executes a SQL statement without classification or processor delegation.

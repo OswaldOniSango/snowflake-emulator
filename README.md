@@ -434,7 +434,7 @@ go run ./example/gosnowflake
 | `/api/v2/databases/{db}` | GET, PUT, DELETE | Get/Alter/Drop database |
 | `/api/v2/databases/{db}/schemas` | GET, POST | List/Create schemas |
 | `/api/v2/databases/{db}/schemas/{schema}` | GET, DELETE | Get/Drop schema |
-| `/api/v2/databases/{db}/schemas/{schema}/objects` | GET | List everything a schema contains (tables, streams, procedures, tasks, stages) |
+| `/api/v2/databases/{db}/schemas/{schema}/objects` | GET | List everything a schema contains (tables, views, streams, procedures, tasks, stages) |
 | `/api/v2/databases/{db}/schemas/{schema}/tables` | GET, POST | List/Create tables |
 | `/api/v2/databases/{db}/schemas/{schema}/tables/{table}` | GET, PUT, DELETE | Get/Alter/Drop table |
 | `/api/v2/databases/{db}/schemas/{schema}/stages` | GET, POST | List/Create named internal stages |
@@ -459,6 +459,7 @@ The emulator supports standard SQL operations with automatic Snowflake-to-DuckDB
 | **Query** | `WITH ... SELECT` | Common table expressions, chained and referencing one another, ahead of any statement type |
 | **DML** | `INSERT`, `UPDATE`, `DELETE` | Data manipulation with rows affected count |
 | **DDL** | `CREATE TABLE`, `DROP TABLE`, `ALTER TABLE` | Schema management |
+| **DDL** | `CREATE [OR REPLACE] VIEW`, basic `SHOW VIEWS`, `DROP VIEW [IF EXISTS]` | Ordinary DuckDB-backed views, including qualified names |
 | **DDL** | `CREATE TABLE ... AS <query>`, including a `WITH` clause | Function translation runs on the query body, not just a bare `SELECT` |
 | **DDL** | `CREATE [OR REPLACE] TEMPORARY TABLE ... AS <query>` | A true DuckDB TEMP table, visible to every statement in the session |
 | **DDL** | `CREATE DATABASE`, `DROP DATABASE` | Database management |
@@ -476,6 +477,16 @@ Schemas and persistent/transient tables created through SQL are synchronized
 with the emulator catalog, so they are visible through the REST object explorer.
 Temporary tables remain connection-scoped and are not stored in the global
 catalog.
+
+Ordinary views are persisted by DuckDB and synchronized with the emulator
+catalog. Their query body is evaluated when selected, like a regular view;
+Snowflake secure, recursive, materialized, and dynamic view/table variants are
+not supported by this feature.
+
+`SHOW VIEWS` resolves against the active database and schema from the session or
+worksheet context and returns the basic columns `name`, `database_name`,
+`schema_name`, and `kind`. Snowflake's additional filtering and scoping variants
+(`LIKE` and `IN`) and its wider result shape are not yet emulated.
 
 </details>
 

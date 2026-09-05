@@ -15,6 +15,7 @@ import (
 // identifier check below and left the whole reference unqualified.
 var contextualTablePatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\b(CREATE\s+(?:OR\s+REPLACE\s+)?(?:(?:TEMP|TEMPORARY|TRANSIENT)\s+)?TABLE(?:\s+IF\s+NOT\s+EXISTS)?\s+)([^\s(;)]+)(\s*\()?`),
+	regexp.MustCompile(`(?i)\b(CREATE\s+(?:OR\s+REPLACE\s+)?VIEW\s+)([^\s(;)]+)(\s*\()?`),
 	regexp.MustCompile(`(?i)\b(INSERT\s+INTO\s+)([^\s(;)]+)(\s*\()?`),
 	regexp.MustCompile(`(?i)\b(UPDATE\s+)([^\s(;)]+)(\s*\()?`),
 	regexp.MustCompile(`(?i)\b(DELETE\s+FROM\s+)([^\s(;)]+)(\s*\()?`),
@@ -22,6 +23,7 @@ var contextualTablePatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\b(JOIN\s+)([^\s(;)]+)(\s*\()?`),
 	regexp.MustCompile(`(?i)\b(ALTER\s+TABLE\s+)([^\s(;)]+)(\s*\()?`),
 	regexp.MustCompile(`(?i)\b(DROP\s+TABLE(?:\s+IF\s+EXISTS)?\s+)([^\s(;)]+)(\s*\()?`),
+	regexp.MustCompile(`(?i)\b(DROP\s+VIEW(?:\s+IF\s+EXISTS)?\s+)([^\s(;)]+)(\s*\()?`),
 	// MERGE resolves two tables. The USING pattern cannot match a JOIN's
 	// USING (col) list, because the capture group rejects a leading "(".
 	regexp.MustCompile(`(?i)\b(DESC(?:RIBE)?\s+TABLE\s+)([^\s(;)]+)(\s*\()?`),

@@ -789,7 +789,8 @@ table.grid .rn {
   background: var(--accent);
 }
 
-.dot.kind-table {
+.dot.kind-table,
+.dot.kind-view {
   background: var(--ink-3);
 }
 

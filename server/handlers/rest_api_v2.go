@@ -703,7 +703,7 @@ func (h *RestAPIv2Handler) GetTable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	table, err := h.repo.GetTableByName(ctx, schema.ID, tableName)
+	table, err := h.repo.GetOrdinaryTableByName(ctx, schema.ID, tableName)
 	if err != nil {
 		h.sendError(w, http.StatusNotFound, "Table not found", types.SQLState02000)
 		return
@@ -743,7 +743,7 @@ func (h *RestAPIv2Handler) DeleteTable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	table, err := h.repo.GetTableByName(ctx, schema.ID, tableName)
+	table, err := h.repo.GetOrdinaryTableByName(ctx, schema.ID, tableName)
 	if err != nil {
 		h.sendError(w, http.StatusNotFound, "Table not found", types.SQLState02000)
 		return
@@ -893,7 +893,7 @@ func (h *RestAPIv2Handler) AlterTable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	table, err := h.repo.GetTableByName(ctx, schema.ID, tableName)
+	table, err := h.repo.GetOrdinaryTableByName(ctx, schema.ID, tableName)
 	if err != nil {
 		h.sendError(w, http.StatusNotFound, "Table not found", types.SQLState02000)
 		return
@@ -1177,8 +1177,8 @@ func (h *RestAPIv2Handler) TranslateStatement(w http.ResponseWriter, r *http.Req
 //
 // It answers with everything a schema contains in one call, so an object
 // explorer can expand a schema without issuing five requests. Tables come from
-// DuckDB rather than the catalog: _metadata_tables only records tables created
-// through the REST API, so a table created with SQL would otherwise be absent.
+// DuckDB remains authoritative for physical tables, while catalog-only object
+// types such as ordinary views are added from their metadata repositories.
 func (h *RestAPIv2Handler) ListSchemaObjects(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	databaseName := chi.URLParam(r, "database")
@@ -1205,6 +1205,12 @@ func (h *RestAPIv2Handler) ListSchemaObjects(w http.ResponseWriter, r *http.Requ
 	}
 	for _, name := range tables {
 		objects = append(objects, types.SchemaObject{Name: name, Kind: "table"})
+	}
+
+	if views, err := h.repo.ListViews(ctx, schema.ID); err == nil {
+		for _, view := range views {
+			objects = append(objects, types.SchemaObject{Name: view.Name, Kind: "view"})
+		}
 	}
 
 	if streams, err := h.repo.ListStreams(ctx, schema.ID); err == nil {
