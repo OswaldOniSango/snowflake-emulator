@@ -29,7 +29,14 @@ type (
 	procedureSQLStatement        struct{ SQL string }
 	procedureAssignmentStatement struct{ Name, Expression string }
 	procedureReturnStatement     struct{ Expression string }
-	procedureIfStatement         struct {
+	// procedureLetStatement declares and initializes a variable inline in the
+	// executable body, unlike a DECLARE, which is a separate section ahead of
+	// BEGIN. DataType is recorded but — the same as procedureDeclaration's —
+	// not enforced; the value is whatever Expression evaluates to.
+	procedureLetStatement struct {
+		Name, DataType, Expression string
+	}
+	procedureIfStatement struct {
 		Condition  string
 		ThenBranch []procedureStatement
 		ElseBranch []procedureStatement
@@ -49,6 +56,7 @@ type procedureCaseStatement struct {
 func (procedureSQLStatement) isProcedureStatement()        {}
 func (procedureAssignmentStatement) isProcedureStatement() {}
 func (procedureReturnStatement) isProcedureStatement()     {}
+func (procedureLetStatement) isProcedureStatement()        {}
 func (procedureIfStatement) isProcedureStatement()         {}
 func (procedureCaseStatement) isProcedureStatement()       {}
 
@@ -167,6 +175,8 @@ func (p *procedureScriptParser) parseStatement() (procedureStatement, error) {
 		return p.parseCase()
 	case p.consumeKeyword("IF"):
 		return p.parseIf()
+	case p.consumeKeyword("LET"):
+		return p.parseLet()
 	case p.consumeKeyword("RETURN"):
 		expression, err := p.readUntilSemicolon()
 		if err != nil {
@@ -194,6 +204,49 @@ func (p *procedureScriptParser) parseStatement() (procedureStatement, error) {
 		return nil, fmt.Errorf("invalid SQL statement: %w", err)
 	}
 	return procedureSQLStatement{SQL: strings.TrimSpace(sql)}, nil
+}
+
+func (p *procedureScriptParser) parseLet() (procedureStatement, error) {
+	text, err := p.readUntilSemicolon()
+	if err != nil {
+		return nil, fmt.Errorf("invalid LET: %w", err)
+	}
+	return parseProcedureLet(text)
+}
+
+// parseProcedureLet parses a LET statement's body, one of:
+//
+//	LET name := expression
+//	LET name type := expression
+//	LET name type DEFAULT expression
+//
+// Snowflake requires a value for LET — unlike DECLARE, there is no bare
+// "LET name type" form — so, unlike parseProcedureDeclaration, a missing
+// separator is itself the error rather than an accepted no-default case.
+func parseProcedureLet(text string) (procedureStatement, error) {
+	text = strings.TrimSpace(text)
+	name, rest := consumeIdentifier(text)
+	if name == "" {
+		return nil, fmt.Errorf("invalid LET %q: variable name is required", text)
+	}
+
+	assignIndex := topLevelIndexOf(rest, ":=")
+	defaultIndex := keywordIndexAtTopLevel(rest, "DEFAULT")
+	separatorIndex, separatorLen := assignIndex, len(":=")
+	if defaultIndex >= 0 && (assignIndex < 0 || defaultIndex < assignIndex) {
+		separatorIndex, separatorLen = defaultIndex, len("DEFAULT")
+	}
+	if separatorIndex < 0 {
+		return nil, fmt.Errorf("invalid LET %s: expected := or DEFAULT with a value", name)
+	}
+
+	dataType := strings.TrimSpace(rest[:separatorIndex])
+	expression := strings.TrimSpace(rest[separatorIndex+separatorLen:])
+	if expression == "" {
+		return nil, fmt.Errorf("invalid LET %s: expression is required", name)
+	}
+
+	return procedureLetStatement{Name: strings.ToUpper(name), DataType: strings.ToUpper(dataType), Expression: expression}, nil
 }
 
 func (p *procedureScriptParser) parseIf() (procedureStatement, error) {
@@ -411,6 +464,32 @@ func keywordIndexAtTopLevel(input, keyword string) int {
 		if !inQuote && depth == 0 && strings.HasPrefix(upper[i:], keyword) &&
 			(i == 0 || !isIdentifierCharacter(rune(input[i-1]))) &&
 			(i+len(keyword) == len(input) || !isIdentifierCharacter(rune(input[i+len(keyword)]))) {
+			return i
+		}
+	}
+	return -1
+}
+
+// topLevelIndexOf returns the index of the first occurrence of substr outside
+// any parentheses or quoted string, or -1 if there is none — the punctuation
+// counterpart to keywordIndexAtTopLevel, for an operator like ":=" that is
+// not a word and so has no identifier boundary to check.
+func topLevelIndexOf(input, substr string) int {
+	depth, inQuote := 0, false
+	for i := 0; i+len(substr) <= len(input); i++ {
+		switch input[i] {
+		case '\'':
+			inQuote = !inQuote
+		case '(':
+			if !inQuote {
+				depth++
+			}
+		case ')':
+			if !inQuote {
+				depth--
+			}
+		}
+		if !inQuote && depth == 0 && input[i:i+len(substr)] == substr {
 			return i
 		}
 	}

@@ -467,7 +467,7 @@ The emulator supports standard SQL operations with automatic Snowflake-to-DuckDB
 | **Transaction** | `BEGIN`, `COMMIT`, `ROLLBACK` | Transaction control |
 | **Data Loading** | `LIST @stage`, `COPY INTO` | Upload and load CSV or JSON files from named internal stages |
 | **Upsert** | `MERGE INTO` | Conditional insert/update/delete operations |
-| **Procedures** | `CREATE [OR REPLACE] PROCEDURE`, `CALL`, `SHOW PROCEDURES`, `DROP PROCEDURE` | `LANGUAGE SQL` procedures with variables, assignments, dynamic `IDENTIFIER`, `CASE`, `IF/ELSE`, top-level `EXCEPTION`, and `RETURN` |
+| **Procedures** | `CREATE [OR REPLACE] PROCEDURE`, `CALL`, `SHOW PROCEDURES`, `DROP PROCEDURE` | `LANGUAGE SQL` procedures with `DECLARE` and inline `LET` variables, assignments, dynamic `IDENTIFIER`, `CASE`, `IF/ELSE`, top-level `EXCEPTION`, and `RETURN` |
 | **Streams** | `CREATE [OR REPLACE] STREAM`, `SHOW STREAMS`, `DROP STREAM`, `SELECT FROM stream` | Append-only insert tracking |
 
 **Parameter Binding**: Supports positional placeholder substitution (`:1`, `:2`, `?`).
@@ -571,7 +571,7 @@ are not supported or have limited support:
 - Tasks and Pipes
 - External stages (S3, Azure, GCS)
 - Stored procedures with JavaScript, Python, or Java
-- Advanced Snowflake Scripting (`LET`, loops, nested exception scopes, qualified/quoted dynamic identifiers, and procedure overloading)
+- Advanced Snowflake Scripting (loops, nested exception scopes, qualified/quoted dynamic identifiers, and procedure overloading)
 - Stream change tracking for `UPDATE` and `DELETE`
 - Stream consumption semantics, retention, and stale-state handling
 - User-defined functions

@@ -9,7 +9,7 @@ export const LIMITATIONS: readonly string[] = [
   "Tasks and Pipes",
   "External stages (S3, Azure, GCS)",
   "Stored procedures with JavaScript, Python, or Java",
-  "Advanced Snowflake Scripting (LET, loops, nested exception scopes, qualified/quoted dynamic identifiers, and procedure overloading)",
+  "Advanced Snowflake Scripting (loops, nested exception scopes, qualified/quoted dynamic identifiers, and procedure overloading)",
   "Stream change tracking for UPDATE and DELETE",
   "Stream consumption semantics, retention, and stale-state handling",
   "User-defined functions",
