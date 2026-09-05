@@ -6,11 +6,10 @@ export const LIMITATIONS: readonly string[] = [
   "Authentication/Authorization (skipped in dev mode)",
   "Distributed processing / Clustering",
   "Time Travel / Zero-Copy Cloning",
-  "Tasks and Pipes",
+  "Task graphs, task dependencies, USING CRON schedules, and Pipes",
   "External stages (S3, Azure, GCS)",
   "Stored procedures and functions with JavaScript, Python, or Java",
   "Advanced Snowflake Scripting (loops, nested exception scopes, qualified/quoted dynamic identifiers, and procedure overloading)",
-  "Stream change tracking for UPDATE and DELETE",
-  "Stream consumption semantics, retention, and stale-state handling",
+  "Advanced stream semantics beyond append-only INSERT tracking (UPDATE/DELETE, retention, and stale-state handling)",
   "User-defined table functions (UDTFs), and SQL functions with a procedural (multi-statement) body — a function's body is one expression, backed directly by a DuckDB MACRO",
 ];
