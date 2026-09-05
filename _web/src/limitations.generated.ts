@@ -8,10 +8,10 @@ export const LIMITATIONS: readonly string[] = [
   "Time Travel / Zero-Copy Cloning",
   "Tasks and Pipes",
   "External stages (S3, Azure, GCS)",
-  "Stored procedures with JavaScript, Python, or Java",
+  "Stored procedures and functions with JavaScript, Python, or Java",
   "Advanced Snowflake Scripting (LET, loops, nested exception scopes, qualified/quoted dynamic identifiers, and procedure overloading)",
   "Stream change tracking for UPDATE and DELETE",
   "Stream consumption semantics, retention, and stale-state handling",
-  "User-defined functions",
+  "User-defined table functions (UDTFs), and SQL functions with a procedural (multi-statement) body — a function's body is one expression, backed directly by a DuckDB MACRO",
   "Snowflake's FROM VALUES (...) table literal with implicit column1/column2 naming, which is not valid DuckDB syntax at all — FROM (VALUES (1, 'Alice'), (2, 'Bob')) AS t(column1, column2) reaches the same result unmodified",
 ];
