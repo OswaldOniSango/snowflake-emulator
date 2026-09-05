@@ -489,6 +489,7 @@ The emulator supports standard SQL operations with automatic Snowflake-to-DuckDB
 | **Procedures** | `CREATE [OR REPLACE] PROCEDURE`, `CALL`, `SHOW PROCEDURES`, `DROP PROCEDURE` | `LANGUAGE SQL` procedures with variables, assignments, dynamic `IDENTIFIER`, `CASE`, `IF/ELSE`, top-level `EXCEPTION`, and `RETURN` |
 | **Streams** | `CREATE [OR REPLACE] STREAM`, `SHOW STREAMS`, `DROP STREAM`, `SELECT FROM stream` | Append-only insert tracking |
 | **Tasks** | `CREATE [OR REPLACE] TASK`, `ALTER TASK ... RESUME/SUSPEND`, `EXECUTE TASK`, `SHOW TASKS`, `DROP TASK` | Manual execution and automatic second/minute/hour interval schedules; task bodies may execute SQL or call a procedure |
+| **Functions** | `CREATE [OR REPLACE] FUNCTION`, `SHOW FUNCTIONS`, `DROP FUNCTION` | Single-expression `LANGUAGE SQL` scalar UDFs, backed by a real DuckDB `MACRO` — usable inline in `SELECT`, `WHERE`, and from inside a procedure |
 
 **Parameter Binding**: Supports positional placeholder substitution (`:1`, `:2`, `?`).
 
@@ -590,10 +591,10 @@ are not supported or have limited support:
 - Time Travel / Zero-Copy Cloning
 - Task graphs, task dependencies, `USING CRON` schedules, and Pipes
 - External stages (S3, Azure, GCS)
-- Stored procedures with JavaScript, Python, or Java
+- Stored procedures and functions with JavaScript, Python, or Java
 - Advanced Snowflake Scripting (`LET`, loops, nested exception scopes, qualified/quoted dynamic identifiers, and procedure overloading)
 - Advanced stream semantics beyond append-only `INSERT` tracking (`UPDATE`/`DELETE`, retention, and stale-state handling)
-- User-defined functions
+- User-defined table functions (UDTFs), and SQL functions with a procedural (multi-statement) body — a function's body is one expression, backed directly by a DuckDB `MACRO`
 - Snowflake's `FROM VALUES (...)` table literal with implicit `column1`/`column2` naming, which is not valid DuckDB syntax at all — `FROM (VALUES (1, 'Alice'), (2, 'Bob')) AS t(column1, column2)` reaches the same result unmodified
 
 ## Contributing
