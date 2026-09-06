@@ -524,11 +524,29 @@ func (e *Executor) ExecuteWithContext(ctx context.Context, executionContext Exec
 	// For CREATE TABLE, we need to register it in metadata
 	if classifier.IsCreateTable(sql) {
 		originalSQL := sql
-		rewrittenSQL, err := e.rewriteTablesWithContext(ctx, executionContext, sql)
+		// A CTAS body can read from a stream, same as any other SELECT — the
+		// stream name has to become its underlying append-only subquery
+		// before table-name qualification, or it is qualified as though it
+		// were an ordinary table that does not physically exist. Snowflake
+		// documents CTAS as one of the DML-like statements that consumes a
+		// stream, the same as INSERT ... SELECT, so a CTAS that succeeds
+		// advances the offset too.
+		rewrittenSQL, consumptions, err := e.streamProcessor.rewriteReferencesForConsumption(ctx, executionContext, sql)
 		if err != nil {
 			return nil, err
 		}
-		return e.executeCreateTable(ctx, executionContext, originalSQL, rewrittenSQL)
+		rewrittenSQL, err = e.rewriteTablesWithContext(ctx, executionContext, rewrittenSQL)
+		if err != nil {
+			return nil, err
+		}
+		result, err := e.executeCreateTable(ctx, executionContext, originalSQL, rewrittenSQL)
+		if err != nil {
+			return nil, err
+		}
+		if err := e.streamProcessor.advanceOffsets(ctx, consumptions); err != nil {
+			return nil, err
+		}
+		return result, nil
 	}
 
 	// For DROP TABLE, we need to remove it from metadata

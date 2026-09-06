@@ -138,6 +138,51 @@ func TestFailedDMLDoesNotAdvanceStreamOffset(t *testing.T) {
 	}
 }
 
+// TestCreateTableAsSelectCanReadFromAStream pins a real bug: unlike a plain
+// SELECT (through QueryWithContext) or an INSERT ... SELECT (through
+// executeRawWithContext), CREATE TABLE ... AS <query> reached DuckDB without
+// ever asking the stream processor to rewrite the stream name into its
+// underlying append-only subquery — leaving the bare stream name to be
+// qualified as though it were an ordinary table, which does not physically
+// exist, and the statement failed with a Catalog Error.
+//
+// Snowflake documents CTAS as one of the DML-like statements that consumes a
+// stream on success, the same as INSERT ... SELECT, so this also pins that a
+// successful CTAS advances the offset rather than leaving it untouched the
+// way a plain SELECT does.
+func TestCreateTableAsSelectCanReadFromAStream(t *testing.T) {
+	executor, ctx := setupStreamTest(t)
+
+	if _, err := executor.Execute(ctx, "CREATE STREAM STREAM_DB.PUBLIC.EVENTS_STREAM ON TABLE STREAM_DB.PUBLIC.EVENTS"); err != nil {
+		t.Fatalf("CREATE STREAM error = %v", err)
+	}
+	if _, err := executor.Execute(ctx, "INSERT INTO STREAM_DB.PUBLIC_EVENTS VALUES (1, 'from stream')"); err != nil {
+		t.Fatalf("source INSERT error = %v", err)
+	}
+
+	executionContext := ExecutionContext{Database: "STREAM_DB", Schema: "PUBLIC"}
+	if _, err := executor.ExecuteWithContext(ctx, executionContext,
+		"CREATE TEMPORARY TABLE consume_stream AS (SELECT * FROM STREAM_DB.PUBLIC.EVENTS_STREAM ORDER BY ID)"); err != nil {
+		t.Fatalf("CREATE TEMPORARY TABLE AS SELECT FROM stream error = %v", err)
+	}
+
+	result, err := executor.QueryWithContext(ctx, executionContext, "SELECT ID, MESSAGE FROM consume_stream")
+	if err != nil {
+		t.Fatalf("SELECT from the resulting table error = %v", err)
+	}
+	if len(result.Rows) != 1 || result.Rows[0][0] != int32(1) || result.Rows[0][1] != "from stream" {
+		t.Fatalf("rows = %#v, want [[1, from stream]]", result.Rows)
+	}
+
+	consumed, err := executor.QueryWithContext(ctx, executionContext, "SELECT * FROM STREAM_DB.PUBLIC.EVENTS_STREAM")
+	if err != nil {
+		t.Fatalf("consumed stream SELECT error = %v", err)
+	}
+	if len(consumed.Rows) != 0 {
+		t.Fatalf("consumed stream returned rows = %#v, want empty — CTAS should have advanced the offset", consumed.Rows)
+	}
+}
+
 func TestStreamShowAndDrop(t *testing.T) {
 	executor, ctx := setupStreamTest(t)
 
