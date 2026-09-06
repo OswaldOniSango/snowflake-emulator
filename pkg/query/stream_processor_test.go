@@ -145,6 +145,11 @@ func TestFailedDMLDoesNotAdvanceStreamOffset(t *testing.T) {
 // underlying append-only subquery — leaving the bare stream name to be
 // qualified as though it were an ordinary table, which does not physically
 // exist, and the statement failed with a Catalog Error.
+//
+// Snowflake documents CTAS as one of the DML-like statements that consumes a
+// stream on success, the same as INSERT ... SELECT, so this also pins that a
+// successful CTAS advances the offset rather than leaving it untouched the
+// way a plain SELECT does.
 func TestCreateTableAsSelectCanReadFromAStream(t *testing.T) {
 	executor, ctx := setupStreamTest(t)
 
@@ -167,6 +172,14 @@ func TestCreateTableAsSelectCanReadFromAStream(t *testing.T) {
 	}
 	if len(result.Rows) != 1 || result.Rows[0][0] != int32(1) || result.Rows[0][1] != "from stream" {
 		t.Fatalf("rows = %#v, want [[1, from stream]]", result.Rows)
+	}
+
+	consumed, err := executor.QueryWithContext(ctx, executionContext, "SELECT * FROM STREAM_DB.PUBLIC.EVENTS_STREAM")
+	if err != nil {
+		t.Fatalf("consumed stream SELECT error = %v", err)
+	}
+	if len(consumed.Rows) != 0 {
+		t.Fatalf("consumed stream returned rows = %#v, want empty — CTAS should have advanced the offset", consumed.Rows)
 	}
 }
 
