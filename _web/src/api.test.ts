@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   isDecimalValue,
   runStatement,
@@ -6,6 +6,7 @@ import {
   translateStatement,
   uploadStageFile,
 } from "./api";
+import { login, logout } from "./auth";
 
 const CONTEXT = { database: "TEST_DB", schema: "PUBLIC" };
 
@@ -14,6 +15,15 @@ function respondWith(body: unknown, ok = true, status = 200): typeof fetch {
 }
 
 describe("runStatement", () => {
+  it("sends the authenticated role and warehouse context", async () => {
+    const authFetch = respondWith({ success: true, data: { token: "t", masterToken: "m", validityInSeconds: 60, sessionInfo: { databaseName: "TEST_DB", schemaName: "PUBLIC", warehouseName: "COMPUTE_WH", roleName: "SYSADMIN" } } });
+    await login({ username: "ADMIN", password: "admin" }, authFetch);
+    const fetchFn = vi.fn(async () => new Response(JSON.stringify({ sqlState: "00000", data: [] }), { status: 200 })) as unknown as typeof fetch;
+    await runStatement("SELECT 1", CONTEXT, fetchFn);
+    expect(JSON.parse(String((fetchFn as unknown as ReturnType<typeof vi.fn>).mock.calls[0]?.[1]?.body))).toMatchObject({ role: "SYSADMIN", warehouse: "COMPUTE_WH" });
+    await logout(respondWith({ success: true }));
+  });
+
   it("returns columns and rows from a successful statement", async () => {
     const result = await runStatement(
       "SELECT 1",
@@ -177,6 +187,14 @@ describe("uploadStageFile", () => {
 });
 
 describe("translateStatement", () => {
+  it("sends the authenticated role and warehouse to translation", async () => {
+    await login({ username: "ADMIN", password: "admin" }, respondWith({ success: true, data: { token: "t", masterToken: "m", validityInSeconds: 60, sessionInfo: { databaseName: "TEST_DB", schemaName: "PUBLIC", warehouseName: "COMPUTE_WH", roleName: "SYSADMIN" } } }));
+    const fetchFn = vi.fn(async () => new Response(JSON.stringify({ translated: "SELECT 1" }), { status: 200 })) as unknown as typeof fetch;
+    await translateStatement("SELECT 1", CONTEXT, fetchFn);
+    expect(JSON.parse(String((fetchFn as unknown as ReturnType<typeof vi.fn>).mock.calls[0]?.[1]?.body))).toMatchObject({ role: "SYSADMIN", warehouse: "COMPUTE_WH" });
+    await logout(respondWith({ success: true }));
+  });
+
   it("returns the translation and what handles the statement", async () => {
     const result = await translateStatement(
       "SELECT IFF(a, 'y', 'n') FROM users",

@@ -1,4 +1,5 @@
 // Typed client for the emulator's REST API v2.
+import { authHeaders, session } from "./auth";
 //
 // Shapes here describe what the emulator actually returns, which is narrower
 // than server/types/rest_api_v2.go declares: rowType carries only name, type
@@ -83,6 +84,13 @@ interface RawResponse {
 
 const ROWS_AFFECTED_COLUMN = "number of rows affected";
 
+function authContext(): { role?: string; warehouse?: string } {
+  const value = session();
+  return value
+    ? { role: value.role, ...(value.warehouse ? { warehouse: value.warehouse } : {}) }
+    : {};
+}
+
 /** The code the emulator returns while a statement is still running. */
 const CODE_PENDING = "333334";
 
@@ -95,7 +103,11 @@ const POLL_INTERVAL_MS = 150;
 /** Asks the emulator to stop a statement. Failing to cancel is not an error
  * worth surfacing: the statement may simply have finished first. */
 export async function cancelStatement(handle: string, fetchFn: typeof fetch = fetch): Promise<void> {
-  await fetchFn(`/api/v2/statements/${encodeURIComponent(handle)}/cancel`, { method: "POST" });
+  const headers = authHeaders();
+  await fetchFn(
+    `/api/v2/statements/${encodeURIComponent(handle)}/cancel`,
+    Object.keys(headers).length === 0 ? { method: "POST" } : { method: "POST", headers },
+  );
 }
 
 /**
@@ -120,8 +132,8 @@ export async function runStatement(
 
   let response = await fetchFn("/api/v2/statements", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ statement, ...context, async: true }),
+    headers: { ...authHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify({ statement, ...context, ...authContext(), async: true }),
   });
 
   let body = (await response.json()) as RawResponse;
@@ -134,7 +146,7 @@ export async function runStatement(
   // a rejection — an empty statement, say — and is dealt with below.
   while (handle && body.code === CODE_PENDING) {
     await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
-    response = await fetchFn(`/api/v2/statements/${encodeURIComponent(handle)}`);
+    response = await fetchFn(`/api/v2/statements/${encodeURIComponent(handle)}`, { headers: authHeaders() });
     body = (await response.json()) as RawResponse;
   }
 
@@ -227,8 +239,8 @@ export async function translateStatement(
 ): Promise<Translation> {
   const response = await fetchFn("/api/v2/translate", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ statement, ...context }),
+    headers: { ...authHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify({ statement, ...context, ...authContext() }),
   });
 
   const body = (await response.json()) as Partial<Translation> & { message?: string };
@@ -289,7 +301,7 @@ export async function uploadStageFile(
   const form = new FormData();
   form.append("file", file, fileName);
   const path = `/api/v2/databases/${encodeURIComponent(database)}/schemas/${encodeURIComponent(schema)}/stages/${encodeURIComponent(stage)}/files`;
-  const response = await fetchFn(path, { method: "POST", body: form });
+  const response = await fetchFn(path, { method: "POST", headers: authHeaders(), body: form });
   const body = (await response.json().catch(() => ({}))) as Partial<StageFile> & {
     message?: string;
   };
@@ -308,7 +320,7 @@ export async function uploadStageFile(
 }
 
 async function getJSON<T>(path: string, fetchFn: typeof fetch): Promise<T> {
-  const response = await fetchFn(path);
+  const response = await fetchFn(path, { headers: authHeaders() });
   if (!response.ok) {
     const body = (await response.json().catch(() => ({}))) as { message?: string };
     throw new StatementError(
@@ -398,6 +410,7 @@ async function warehouseAction(
 ): Promise<void> {
   const response = await fetchFn(`/api/v2/warehouses/${encodeURIComponent(name)}${action}`, {
     method: action === "" ? "DELETE" : "POST",
+    headers: authHeaders(),
   });
   if (!response.ok) {
     const body = (await response.json().catch(() => ({}))) as { message?: string };
@@ -424,7 +437,7 @@ export async function createWarehouse(
 ): Promise<void> {
   const response = await fetchFn("/api/v2/warehouses", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { ...authHeaders(), "Content-Type": "application/json" },
     body: JSON.stringify({ name, size }),
   });
   if (!response.ok) {
@@ -440,7 +453,7 @@ export async function alterWarehouse(
 ): Promise<void> {
   const response = await fetchFn(`/api/v2/warehouses/${encodeURIComponent(name)}`, {
     method: "PUT",
-    headers: { "Content-Type": "application/json" },
+    headers: { ...authHeaders(), "Content-Type": "application/json" },
     body: JSON.stringify(settings),
   });
   if (!response.ok) {
