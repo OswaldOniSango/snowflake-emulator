@@ -13,13 +13,24 @@ func TestRequiresWarehouse(t *testing.T) {
 		sql  string
 		want bool
 	}{
-		{"SELECT 1", true}, {"WITH x AS (SELECT 1) SELECT * FROM x", true}, {"INSERT INTO t VALUES (1)", true},
-		{"UPDATE t SET id = 2", true}, {"DELETE FROM t", true}, {"MERGE INTO t USING s ON t.id = s.id WHEN MATCHED THEN DELETE", true},
-		{"COPY INTO t FROM @s", true}, {"CALL p()", true}, {"CREATE TABLE t AS SELECT 1", true},
-		{"CREATE TEMPORARY TABLE t AS SELECT 1", true}, {"CREATE TRANSIENT TABLE t AS SELECT 1", true},
-		{"CREATE TABLE t (id INT)", false}, {"CREATE VIEW v AS SELECT 1", false}, {"CREATE DYNAMIC TABLE d TARGET_LAG = '1 MINUTE' WAREHOUSE = wh AS SELECT 1", false},
-		{"CREATE OR REPLACE DYNAMIC TABLE d TARGET_LAG = '1 MINUTE' WAREHOUSE = wh AS SELECT 1", false},
-		{"SHOW TABLES", false}, {"EXPLAIN SELECT 1", false}, {"EXECUTE TASK t", false},
+		{sql: "SELECT 1", want: true},
+		{sql: "WITH x AS (SELECT 1) SELECT * FROM x", want: true},
+		{sql: "INSERT INTO t VALUES (1)", want: true},
+		{sql: "UPDATE t SET id = 2", want: true},
+		{sql: "DELETE FROM t", want: true},
+		{sql: "MERGE INTO t USING s ON t.id = s.id WHEN MATCHED THEN DELETE", want: true},
+		{sql: "COPY INTO t FROM @s", want: true},
+		{sql: "CALL p()", want: true},
+		{sql: "CREATE TABLE t AS SELECT 1", want: true},
+		{sql: "CREATE TEMPORARY TABLE t AS SELECT 1", want: true},
+		{sql: "CREATE TRANSIENT TABLE t AS SELECT 1", want: true},
+		{sql: "CREATE TABLE t (id INT)", want: false},
+		{sql: "CREATE VIEW v AS SELECT 1", want: false},
+		{sql: "CREATE DYNAMIC TABLE d TARGET_LAG = '1 MINUTE' WAREHOUSE = wh AS SELECT 1", want: false},
+		{sql: "CREATE OR REPLACE DYNAMIC TABLE d TARGET_LAG = '1 MINUTE' WAREHOUSE = wh AS SELECT 1", want: false},
+		{sql: "SHOW TABLES", want: false},
+		{sql: "EXPLAIN SELECT 1", want: false},
+		{sql: "EXECUTE TASK t", want: false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.sql, func(t *testing.T) {

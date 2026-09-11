@@ -25,7 +25,6 @@ func TestAcquireQueuesFIFOAtWarehouseCapacity(t *testing.T) {
 	admitted := make(chan int, 2)
 	queued := make(chan int, 2)
 	for id := 1; id <= 2; id++ {
-		id := id
 		go func() {
 			lease, acquireErr := m.Acquire(ctx, "learning_wh", func() { queued <- id })
 			if acquireErr != nil {

@@ -84,8 +84,8 @@ func NewPersistentManager(ctx context.Context, repo *metadata.Repository) (*Mana
 	if err != nil {
 		return nil, err
 	}
-	for _, record := range records {
-		v := fromRecord(record)
+	for i := range records {
+		v := fromRecord(&records[i])
 		v.State = StateSuspended
 		v.Running, v.Queued = 0, 0
 		m.warehouses[v.Name] = &runtimeWarehouse{value: v}
@@ -315,7 +315,7 @@ func (m *Manager) StartAutoSuspend(ctx context.Context, interval time.Duration) 
 			case <-ctx.Done():
 				return
 			case <-t.C:
-				if err := m.CheckAutoSuspend(context.Background()); err != nil {
+				if err := m.CheckAutoSuspend(ctx); err != nil {
 					log.Printf("warehouse auto-suspend check failed: %v", err)
 				}
 			}
@@ -387,7 +387,7 @@ func (m *Manager) persist(ctx context.Context, v *Warehouse) error {
 	if m.repo == nil {
 		return nil
 	}
-	return m.repo.UpsertWarehouse(ctx, metadata.WarehouseRecord{
+	return m.repo.UpsertWarehouse(ctx, &metadata.WarehouseRecord{
 		ID:              v.ID,
 		Name:            v.Name,
 		State:           string(v.State),
@@ -403,7 +403,7 @@ func (m *Manager) persist(ctx context.Context, v *Warehouse) error {
 	})
 }
 
-func fromRecord(r metadata.WarehouseRecord) Warehouse {
+func fromRecord(r *metadata.WarehouseRecord) Warehouse {
 	return Warehouse{
 		ID:              r.ID,
 		Name:            r.Name,
