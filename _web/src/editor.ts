@@ -39,12 +39,9 @@ const theme = EditorView.theme({
     fontFamily: "var(--mono)",
   },
   ".cm-activeLine": { backgroundColor: "var(--sunk)" },
-  // The statement currently in flight, so a multi-statement Run All shows
-  // which one the emulator is on without the user having to watch the toolbar.
-  ".cm-runningStatement": { backgroundColor: "var(--warn-soft)" },
-  ".cm-runningStatement.cm-activeLine": {
-    backgroundColor: "color-mix(in srgb, var(--warn-soft) 70%, var(--sunk))",
-  },
+  // Snowflake-style marker for the statement being run. It remains on the
+  // most recently executed statement without obscuring the SQL with a fill.
+  ".cm-runningStatement": { boxShadow: "inset 3px 0 0 var(--ok)" },
   ".cm-activeLineGutter": { backgroundColor: "var(--panel-2)", color: "var(--ink-2)" },
   ".cm-selectionBackground, &.cm-focused .cm-selectionBackground": {
     backgroundColor: "var(--accent-soft)",
@@ -92,7 +89,7 @@ export interface Range {
 
 const runningLineMark = Decoration.line({ class: "cm-runningStatement" });
 
-/** Marks every line the range touches, so a multi-line statement highlights whole. */
+/** Marks every line the range touches, so one bar spans a multi-line statement. */
 function runningLineDecorations(state: EditorState, range: Range): DecorationSet {
   const marks = [];
   const to = Math.min(range.to, state.doc.length);
@@ -152,7 +149,7 @@ export interface Editor {
   selectionRange(): Range | null;
   /** Where the cursor sits, for locating the statement around it. */
   cursorOffset(): number;
-  /** Highlights the given range's lines as the statement in flight, or clears it when null. */
+  /** Marks the given range as the latest statement run, or clears it when null. */
   highlightRunning(range: Range | null): void;
   /** Replaces the selection with text, or inserts it at the cursor. */
   insert(text: string): void;

@@ -334,7 +334,6 @@ function main(): void {
       runButton.disabled = false;
       runAllButton.disabled = false;
       cancelButton.hidden = true;
-      editor.highlightRunning(null);
       showTab("results");
     }
   }
