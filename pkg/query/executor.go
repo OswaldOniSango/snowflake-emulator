@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nnnkkk7/snowflake-emulator/pkg/connection"
+	"github.com/nnnkkk7/snowflake-emulator/pkg/identity"
 	"github.com/nnnkkk7/snowflake-emulator/pkg/metadata"
 	"github.com/nnnkkk7/snowflake-emulator/pkg/stage"
 	"github.com/nnnkkk7/snowflake-emulator/pkg/warehouse"
@@ -49,6 +50,12 @@ type Executor struct {
 	stageProcessor        *StageProcessor
 	warehouseValidator    func(context.Context, string) error
 	warehouseManager      *warehouse.Manager
+	identityService       *identity.Service
+}
+
+// WithIdentityService enables SQL identity catalog management.
+func WithIdentityService(service *identity.Service) ExecutorOption {
+	return func(e *Executor) { e.identityService = service }
 }
 
 // WithWarehouseManager makes warehouse lifecycle and admission govern compute.
@@ -131,6 +138,7 @@ func (e *Executor) withPinnedConnection(ctx context.Context, fn func(*Executor) 
 		pinnedRepo := e.repo.WithManager(mgr)
 		pinned := NewExecutor(mgr, pinnedRepo, WithWarehouseValidator(e.warehouseValidator))
 		pinned.warehouseManager = e.warehouseManager
+		pinned.identityService = e.identityService
 		if e.mergeProcessor != nil {
 			pinned.mergeProcessor = NewMergeProcessor(pinned)
 		}
@@ -152,6 +160,11 @@ func (e *Executor) Query(ctx context.Context, sql string) (*Result, error) {
 
 // QueryWithContext executes a query using Snowflake database/schema context.
 func (e *Executor) QueryWithContext(ctx context.Context, executionContext ExecutionContext, sql string) (*Result, error) {
+	if e.identityService != nil {
+		if result, handled, err := e.queryIdentityStatement(ctx, sql); handled {
+			return result, err
+		}
+	}
 	if e.warehouseManager != nil && isShowWarehouses(sql) {
 		return e.showWarehouses(ctx)
 	}
@@ -539,6 +552,11 @@ func (e *Executor) Execute(ctx context.Context, sql string) (*ExecResult, error)
 
 // ExecuteWithContext executes a statement using Snowflake database/schema context.
 func (e *Executor) ExecuteWithContext(ctx context.Context, executionContext ExecutionContext, sql string) (*ExecResult, error) {
+	if e.identityService != nil {
+		if result, handled, err := e.executeIdentityStatement(ctx, sql); handled {
+			return result, err
+		}
+	}
 	if e.warehouseManager != nil {
 		if result, handled, err := e.executeWarehouseStatement(ctx, sql); handled {
 			return result, err
@@ -908,7 +926,7 @@ func (e *Executor) ExecuteWithHistoryAndContext(ctx context.Context, executionCo
 	startTime := time.Now()
 
 	// Record query start (non-blocking on failure)
-	entry, err := e.repo.RecordQueryStart(ctx, sessionID, queryID, sql)
+	entry, err := e.repo.RecordQueryStart(ctx, sessionID, queryID, RedactSensitiveSQL(sql))
 	if err != nil {
 		log.Printf("Failed to record query start: %v", err)
 	}
@@ -941,7 +959,7 @@ func (e *Executor) QueryWithHistoryAndContext(ctx context.Context, executionCont
 	startTime := time.Now()
 
 	// Record query start (non-blocking on failure)
-	entry, err := e.repo.RecordQueryStart(ctx, sessionID, queryID, sql)
+	entry, err := e.repo.RecordQueryStart(ctx, sessionID, queryID, RedactSensitiveSQL(sql))
 	if err != nil {
 		log.Printf("Failed to record query start: %v", err)
 	}

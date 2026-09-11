@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/google/uuid"
@@ -21,6 +22,7 @@ const (
 	RoleUserAdmin     = "USERADMIN"
 	RoleSysAdmin      = "SYSADMIN"
 	RolePublic        = "PUBLIC"
+	grantTargetUser   = "USER"
 )
 
 var (
@@ -95,6 +97,21 @@ type User struct {
 	Comment            string
 }
 
+// UserChanges is one atomic ALTER USER operation. Nil fields are unchanged.
+type UserChanges struct {
+	Password    *string
+	DefaultRole *string
+	Disabled    *bool
+	Comment     *string
+}
+
+// RoleAssignment describes one direct role grant for SHOW GRANTS output.
+type RoleAssignment struct {
+	RoleName  string
+	GrantedTo string
+	Grantee   string
+}
+
 func NewService(ctx context.Context, repo *metadata.Repository) (*Service, error) {
 	service := &Service{repo: repo}
 	if err := service.bootstrap(ctx); err != nil {
@@ -150,6 +167,11 @@ func (s *Service) Authenticate(ctx context.Context, username, password string) (
 }
 
 func (s *Service) CreateUser(ctx context.Context, name, password, defaultRole, comment string) (*User, error) {
+	return s.CreateUserConfigured(ctx, name, password, defaultRole, false, comment)
+}
+
+// CreateUserConfigured creates the complete user row and default grant in one transaction.
+func (s *Service) CreateUserConfigured(ctx context.Context, name, password, defaultRole string, disabled bool, comment string) (*User, error) {
 	role, err := s.repo.GetRoleRecordByName(ctx, defaultRole)
 	if err != nil {
 		return nil, err
@@ -158,7 +180,7 @@ func (s *Service) CreateUser(ctx context.Context, name, password, defaultRole, c
 	if err != nil {
 		return nil, fmt.Errorf("hash password: %w", err)
 	}
-	user := &metadata.UserRecord{ID: uuid.NewString(), Name: NormalizeName(name), PasswordHash: string(hash), DefaultRoleID: role.ID, Comment: comment}
+	user := &metadata.UserRecord{ID: uuid.NewString(), Name: NormalizeName(name), PasswordHash: string(hash), DefaultRoleID: role.ID, Disabled: disabled, Comment: comment}
 	if err := s.repo.CreateUserWithRoleRecord(ctx, *user); err != nil {
 		return nil, err
 	}
@@ -168,6 +190,35 @@ func (s *Service) CreateUser(ctx context.Context, name, password, defaultRole, c
 	}
 	result := publicUser(*created)
 	return &result, nil
+}
+
+// AlterUser validates all requested values before committing one catalog transaction.
+func (s *Service) AlterUser(ctx context.Context, username string, changes UserChanges) error {
+	user, err := s.repo.GetUserRecordByName(ctx, username)
+	if err != nil {
+		return err
+	}
+	if changes.DefaultRole != nil {
+		role, roleErr := s.repo.GetRoleRecordByName(ctx, *changes.DefaultRole)
+		if roleErr != nil {
+			return roleErr
+		}
+		user.DefaultRoleID = role.ID
+	}
+	if changes.Password != nil {
+		hash, hashErr := bcrypt.GenerateFromPassword([]byte(*changes.Password), bcrypt.DefaultCost)
+		if hashErr != nil {
+			return fmt.Errorf("hash password: %w", hashErr)
+		}
+		user.PasswordHash = string(hash)
+	}
+	if changes.Disabled != nil {
+		user.Disabled = *changes.Disabled
+	}
+	if changes.Comment != nil {
+		user.Comment = *changes.Comment
+	}
+	return s.repo.UpdateUserConfigurationRecord(ctx, *user)
 }
 
 func (s *Service) ListUsers(ctx context.Context) ([]User, error) {
@@ -208,6 +259,15 @@ func (s *Service) SetUserDisabled(ctx context.Context, username string, disabled
 	return s.repo.UpdateUserRecord(ctx, *user)
 }
 
+func (s *Service) SetUserComment(ctx context.Context, username, comment string) error {
+	user, err := s.repo.GetUserRecordByName(ctx, username)
+	if err != nil {
+		return err
+	}
+	user.Comment = comment
+	return s.repo.UpdateUserRecord(ctx, *user)
+}
+
 func (s *Service) SetDefaultRole(ctx context.Context, username, roleName string) error {
 	user, err := s.repo.GetUserRecordByName(ctx, username)
 	if err != nil {
@@ -230,6 +290,107 @@ func (s *Service) DeleteUser(ctx context.Context, username string) error {
 
 func (s *Service) CreateRole(ctx context.Context, name, comment string) (*metadata.RoleRecord, error) {
 	return s.repo.CreateRoleRecord(ctx, NormalizeName(name), comment, false)
+}
+
+// DirectGrantsToUser returns direct assignments plus PUBLIC, which is implicit.
+func (s *Service) DirectGrantsToUser(ctx context.Context, username string) ([]RoleAssignment, error) {
+	user, err := s.repo.GetUserRecordByName(ctx, username)
+	if err != nil {
+		return nil, err
+	}
+	ids, err := s.repo.ListDirectUserRoleIDs(ctx, user.ID)
+	if err != nil {
+		return nil, err
+	}
+	roles, err := s.repo.ListRoleRecords(ctx)
+	if err != nil {
+		return nil, err
+	}
+	wanted := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		wanted[id] = true
+	}
+	assignments := make([]RoleAssignment, 0, len(ids)+1)
+	for _, role := range roles {
+		if wanted[role.ID] || role.Name == RolePublic {
+			assignments = append(assignments, RoleAssignment{RoleName: role.Name, GrantedTo: grantTargetUser, Grantee: user.Name})
+		}
+	}
+	return assignments, nil
+}
+
+// DirectGrantsToRole returns child roles directly granted to a parent role.
+func (s *Service) DirectGrantsToRole(ctx context.Context, roleName string) ([]RoleAssignment, error) {
+	role, err := s.repo.GetRoleRecordByName(ctx, roleName)
+	if err != nil {
+		return nil, err
+	}
+	return s.roleAssignments(ctx, func(grant metadata.RoleGrantRecord) (string, string, bool) {
+		return grant.ChildRoleID, grant.ParentRoleID, grant.ParentRoleID == role.ID
+	})
+}
+
+// DirectGrantsOfRole returns users and roles that directly received a role.
+func (s *Service) DirectGrantsOfRole(ctx context.Context, roleName string) ([]RoleAssignment, error) {
+	role, err := s.repo.GetRoleRecordByName(ctx, roleName)
+	if err != nil {
+		return nil, err
+	}
+	assignments, err := s.roleAssignments(ctx, func(grant metadata.RoleGrantRecord) (string, string, bool) {
+		return role.ID, grant.ParentRoleID, grant.ChildRoleID == role.ID
+	})
+	if err != nil {
+		return nil, err
+	}
+	users, err := s.repo.ListUserRecords(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, user := range users {
+		if role.Name == RolePublic {
+			assignments = append(assignments, RoleAssignment{RoleName: role.Name, GrantedTo: grantTargetUser, Grantee: user.Name})
+			continue
+		}
+		ids, listErr := s.repo.ListDirectUserRoleIDs(ctx, user.ID)
+		if listErr != nil {
+			return nil, listErr
+		}
+		for _, id := range ids {
+			if id == role.ID {
+				assignments = append(assignments, RoleAssignment{RoleName: role.Name, GrantedTo: grantTargetUser, Grantee: user.Name})
+			}
+		}
+	}
+	slices.SortFunc(assignments, func(a, b RoleAssignment) int {
+		return strings.Compare(a.GrantedTo+":"+a.Grantee, b.GrantedTo+":"+b.Grantee)
+	})
+	return assignments, nil
+}
+
+func (s *Service) roleAssignments(ctx context.Context, selectGrant func(metadata.RoleGrantRecord) (string, string, bool)) ([]RoleAssignment, error) {
+	roles, err := s.repo.ListRoleRecords(ctx)
+	if err != nil {
+		return nil, err
+	}
+	byID := make(map[string]string, len(roles))
+	for _, role := range roles {
+		byID[role.ID] = role.Name
+	}
+	grants, err := s.repo.ListRoleGrantRecords(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var result []RoleAssignment
+	for _, grant := range grants {
+		childID, grantee, selected := selectGrant(grant)
+		if selected {
+			result = append(result, RoleAssignment{RoleName: byID[childID], GrantedTo: "ROLE", Grantee: byID[grantee]})
+		}
+	}
+	slices.SortFunc(result, func(a, b RoleAssignment) int {
+		return strings.Compare(a.RoleName+":"+a.Grantee, b.RoleName+":"+b.Grantee)
+	})
+	return result, nil
 }
 
 func (s *Service) GrantRoleToUser(ctx context.Context, roleName, username string) error {
@@ -278,8 +439,8 @@ func (s *Service) GrantRoleToRole(ctx context.Context, childName, parentName str
 	if child.ID == parent.ID {
 		return fmt.Errorf("%w: self grant", ErrRoleCycle)
 	}
-	if child.Name == RolePublic || parent.Name == RolePublic {
-		return fmt.Errorf("%w: PUBLIC hierarchy is reserved", ErrSystemRole)
+	if child.SystemRole || parent.SystemRole {
+		return fmt.Errorf("%w: system role hierarchy is reserved", ErrSystemRole)
 	}
 	err = s.repo.GrantRoleToRoleRecord(ctx, child.ID, parent.ID)
 	if errors.Is(err, metadata.ErrIdentityCycle) {

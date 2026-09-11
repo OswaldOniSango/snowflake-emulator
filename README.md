@@ -501,6 +501,7 @@ The emulator supports standard SQL operations with automatic Snowflake-to-DuckDB
 | **DDL** | `CREATE DATABASE`, `DROP DATABASE` | Database management |
 | **DDL** | `CREATE SCHEMA`, `DROP SCHEMA` | Schema namespace management |
 | **DDL** | `CREATE WAREHOUSE`, `ALTER WAREHOUSE ... RESUME/SUSPEND/SET`, `SHOW WAREHOUSES`, `DROP WAREHOUSE` | Virtual warehouse lifecycle and configuration |
+| **Identity** | `CREATE/ALTER/DROP USER`, `CREATE/DROP ROLE`, `GRANT/REVOKE ROLE`, `SHOW USERS/ROLES/GRANTS` | Persistent local users, direct and inherited roles, and catalog inspection |
 | **DDL** | `CREATE [OR REPLACE] STAGE`, `DROP STAGE` | Named internal stages |
 | **Transaction** | `BEGIN`, `COMMIT`, `ROLLBACK` | Transaction control |
 | **Data Loading** | `LIST @stage`, `COPY INTO` | Upload and load CSV or JSON files from named internal stages |
@@ -642,7 +643,7 @@ again unless the first command used `PURGE = TRUE`.
 This emulator is designed for development and testing. The following features
 are not supported or have limited support:
 
-- Production authentication and object-level authorization — local `gosnowflake` sessions authenticate users and roles, but REST/UI requests remain anonymous and RBAC privilege enforcement is not implemented yet.
+- Production authentication and object-level authorization — local `gosnowflake` sessions authenticate users and roles, but REST/UI requests remain anonymous and object privileges such as `GRANT SELECT` or `GRANT USAGE` are not implemented yet. Identity SQL manages users and role membership only; ownership transfer, secondary roles, and database roles are also outside the current subset.
 - Distributed processing / Clustering
 - Time Travel / Zero-Copy Cloning
 - Task graphs, task dependencies, `USING CRON` schedules, and Pipes

@@ -113,6 +113,7 @@ func main() {
 	executor.Configure(
 		query.WithStageManager(stageMgr),
 		query.WithMergeProcessor(mergeProcessor),
+		query.WithIdentityService(identityService),
 	)
 	warehouseMgr, err := warehouse.NewPersistentManager(context.Background(), repo)
 	if err != nil {
