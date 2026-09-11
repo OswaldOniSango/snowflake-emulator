@@ -20,7 +20,7 @@ func setupTaskTest(t *testing.T) (*Executor, context.Context, ExecutionContext) 
 		t.Fatalf("GetSchemaByName() error = %v", err)
 	}
 	warehouseManager := warehouse.NewManager()
-	if _, err := warehouseManager.CreateWarehouse(ctx, "TASK_WH", "X-SMALL", ""); err != nil {
+	if _, err := warehouseManager.CreateWarehouse(ctx, "TASK_WH", defaultWarehouseSize, ""); err != nil {
 		t.Fatalf("CreateWarehouse() error = %v", err)
 	}
 	executor.Configure(WithWarehouseManager(warehouseManager))

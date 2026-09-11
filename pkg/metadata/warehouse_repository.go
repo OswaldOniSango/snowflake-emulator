@@ -80,16 +80,21 @@ func (r *Repository) ListWarehouseRecords(ctx context.Context) ([]WarehouseRecor
 
 // DeleteWarehouseRecord removes durable warehouse metadata.
 func (r *Repository) DeleteWarehouseRecord(ctx context.Context, name string) error {
-	result, err := r.mgr.Exec(ctx, `DELETE FROM _metadata_warehouses WHERE name = ?`, name)
-	if err != nil {
-		return fmt.Errorf("delete warehouse %s: %w", name, err)
-	}
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if affected == 0 {
-		return fmt.Errorf("warehouse %s not found", name)
-	}
-	return nil
+	return r.mgr.ExecTx(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM _metadata_warehouse_privilege_grants WHERE warehouse_name = ?`, name); err != nil {
+			return err
+		}
+		result, err := tx.ExecContext(ctx, `DELETE FROM _metadata_warehouses WHERE name = ?`, name)
+		if err != nil {
+			return fmt.Errorf("delete warehouse %s: %w", name, err)
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if affected == 0 {
+			return fmt.Errorf("warehouse %s not found", name)
+		}
+		return nil
+	})
 }

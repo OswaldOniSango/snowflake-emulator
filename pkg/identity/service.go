@@ -32,6 +32,12 @@ var (
 	ErrSystemRole         = errors.New("system role cannot be modified")
 	ErrRoleCycle          = errors.New("role grant would create a cycle")
 	ErrRoleNotGranted     = errors.New("role is not granted to user")
+	ErrPrivilegeDenied    = errors.New("insufficient privileges")
+)
+
+const (
+	PrivilegeUsage   = "USAGE"
+	PrivilegeOperate = "OPERATE"
 )
 
 type Principal struct {
@@ -538,6 +544,90 @@ func (s *Service) roleByID(ctx context.Context, id string) (*metadata.RoleRecord
 		}
 	}
 	return nil, fmt.Errorf("%w: default role", metadata.ErrIdentityNotFound)
+}
+
+// RoleByID resolves a persisted role for internal owner-context execution.
+func (s *Service) RoleByID(ctx context.Context, id string) (*metadata.RoleRecord, error) {
+	return s.roleByID(ctx, id)
+}
+
+// WarehouseGrantsToRole returns direct warehouse privileges granted to a role.
+func (s *Service) WarehouseGrantsToRole(ctx context.Context, roleName string) ([]metadata.WarehousePrivilegeRecord, error) {
+	role, err := s.repo.GetRoleRecordByName(ctx, roleName)
+	if err != nil {
+		return nil, err
+	}
+	grants, err := s.repo.ListWarehousePrivilegeRecords(ctx)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]metadata.WarehousePrivilegeRecord, 0)
+	for _, grant := range grants {
+		if grant.RoleID == role.ID {
+			result = append(result, grant)
+		}
+	}
+	return result, nil
+}
+
+// GrantWarehousePrivilege persists a direct warehouse privilege for a role.
+func (s *Service) GrantWarehousePrivilege(ctx context.Context, privilege, warehouseName, roleName string) error {
+	privilege = strings.ToUpper(privilege)
+	if privilege != PrivilegeUsage && privilege != PrivilegeOperate {
+		return fmt.Errorf("unsupported warehouse privilege %s", privilege)
+	}
+	role, err := s.repo.GetRoleRecordByName(ctx, roleName)
+	if err != nil {
+		return err
+	}
+	return s.repo.GrantWarehousePrivilegeRecord(ctx, role.ID, warehouseName, privilege)
+}
+
+func (s *Service) RevokeWarehousePrivilege(ctx context.Context, privilege, warehouseName, roleName string) error {
+	role, err := s.repo.GetRoleRecordByName(ctx, roleName)
+	if err != nil {
+		return err
+	}
+	return s.repo.RevokeWarehousePrivilegeRecord(ctx, role.ID, warehouseName, strings.ToUpper(privilege))
+}
+
+// AuthorizeWarehouse checks the active role and every role it inherits.
+func (s *Service) AuthorizeWarehouse(ctx context.Context, activeRoleID, warehouseName, privilege string) error {
+	active, err := s.roleByID(ctx, activeRoleID)
+	if err != nil {
+		return err
+	}
+	if active.Name == RoleAccountAdmin {
+		return nil
+	}
+	grants, err := s.repo.ListRoleGrantRecords(ctx)
+	if err != nil {
+		return err
+	}
+	effective := map[string]bool{}
+	var visit func(string)
+	visit = func(roleID string) {
+		if effective[roleID] {
+			return
+		}
+		effective[roleID] = true
+		for _, grant := range grants {
+			if grant.ParentRoleID == roleID {
+				visit(grant.ChildRoleID)
+			}
+		}
+	}
+	visit(activeRoleID)
+	privileges, err := s.repo.ListWarehousePrivilegeRecords(ctx)
+	if err != nil {
+		return err
+	}
+	for _, grant := range privileges {
+		if effective[grant.RoleID] && strings.EqualFold(grant.WarehouseName, warehouseName) && strings.EqualFold(grant.Privilege, privilege) {
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: role %s lacks %s on warehouse %s", ErrPrivilegeDenied, active.Name, strings.ToUpper(privilege), strings.ToUpper(warehouseName))
 }
 
 func publicUser(record metadata.UserRecord) User {

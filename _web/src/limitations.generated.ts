@@ -3,7 +3,7 @@
 
 /** What the emulator does not support, as documented in the README. */
 export const LIMITATIONS: readonly string[] = [
-  "Production authentication and object-level authorization — local gosnowflake sessions authenticate users and roles, but REST/UI requests remain anonymous and object privileges such as GRANT SELECT or GRANT USAGE are not implemented yet. Identity SQL manages users and role membership only; ownership transfer, secondary roles, and database roles are also outside the current subset.",
+  "Production authentication and object-level authorization — local gosnowflake sessions authenticate users and roles, but REST/UI requests remain anonymous. Warehouse USAGE and OPERATE are enforced for authenticated sessions, but table privileges such as GRANT SELECT or GRANT USAGE are not implemented yet. Identity SQL manages users and role membership only; ownership transfer, secondary roles, and database roles are also outside the current subset.",
   "Distributed processing / Clustering",
   "Time Travel / Zero-Copy Cloning",
   "Task graphs, task dependencies, USING CRON schedules, and Pipes",

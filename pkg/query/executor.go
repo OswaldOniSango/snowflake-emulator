@@ -172,6 +172,9 @@ func (e *Executor) QueryWithContext(ctx context.Context, executionContext Execut
 		if executionContext.Warehouse == "" {
 			return nil, fmt.Errorf("a warehouse is required to execute this statement")
 		}
+		if err := e.authorizeWarehouse(ctx, executionContext, identity.PrivilegeUsage); err != nil {
+			return nil, err
+		}
 		lease, err := e.warehouseManager.Acquire(ctx, executionContext.Warehouse, executionContext.OnWarehouseQueued)
 		if err != nil {
 			return nil, err
@@ -558,6 +561,13 @@ func (e *Executor) ExecuteWithContext(ctx context.Context, executionContext Exec
 		}
 	}
 	if e.warehouseManager != nil {
+		if warehouseName, requiresOperate := warehouseLifecycleTarget(sql); requiresOperate {
+			operationContext := executionContext
+			operationContext.Warehouse = warehouseName
+			if err := e.authorizeWarehouse(ctx, operationContext, identity.PrivilegeOperate); err != nil {
+				return nil, err
+			}
+		}
 		if result, handled, err := e.executeWarehouseStatement(ctx, sql); handled {
 			return result, err
 		}
@@ -565,6 +575,9 @@ func (e *Executor) ExecuteWithContext(ctx context.Context, executionContext Exec
 	if e.warehouseManager != nil && RequiresWarehouse(sql) && !executionContext.warehouseAcquired {
 		if executionContext.Warehouse == "" {
 			return nil, fmt.Errorf("a warehouse is required to execute this statement")
+		}
+		if err := e.authorizeWarehouse(ctx, executionContext, identity.PrivilegeUsage); err != nil {
+			return nil, err
 		}
 		lease, err := e.warehouseManager.Acquire(ctx, executionContext.Warehouse, executionContext.OnWarehouseQueued)
 		if err != nil {
@@ -577,6 +590,19 @@ func (e *Executor) ExecuteWithContext(ctx context.Context, executionContext Exec
 		}
 	}
 	return e.executeWithContext(ctx, executionContext, sql)
+}
+
+func (e *Executor) authorizeWarehouse(ctx context.Context, executionContext ExecutionContext, privilege string) error {
+	if executionContext.Principal == nil {
+		if executionContext.Role != "" {
+			return fmt.Errorf("role %s is not an authenticated principal", executionContext.Role)
+		}
+		return nil
+	}
+	if e.identityService == nil || executionContext.Principal.RoleID == "" || executionContext.Role == "" {
+		return fmt.Errorf("authenticated role context is incomplete")
+	}
+	return e.identityService.AuthorizeWarehouse(ctx, executionContext.Principal.RoleID, executionContext.Warehouse, privilege)
 }
 
 func (e *Executor) executeWithContext(ctx context.Context, executionContext ExecutionContext, sql string) (*ExecResult, error) {

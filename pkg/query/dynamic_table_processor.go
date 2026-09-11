@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/nnnkkk7/snowflake-emulator/pkg/identity"
 	"github.com/nnnkkk7/snowflake-emulator/pkg/metadata"
 )
 
@@ -85,6 +86,11 @@ func (p *DynamicTableProcessor) Create(ctx context.Context, executionContext Exe
 	if err := p.executor.validateExecutionContext(ctx, ExecutionContext{Warehouse: warehouse}); err != nil {
 		return nil, err
 	}
+	warehouseContext := executionContext
+	warehouseContext.Warehouse = warehouse
+	if err := p.executor.authorizeWarehouse(ctx, warehouseContext, identity.PrivilegeUsage); err != nil {
+		return nil, err
+	}
 	var lease interface{ Release() }
 	if p.executor.warehouseManager != nil {
 		acquired, acquireErr := p.executor.warehouseManager.Acquire(ctx, warehouse, nil)
@@ -125,6 +131,11 @@ func (p *DynamicTableProcessor) Refresh(ctx context.Context, executionContext Ex
 	if err := p.executor.validateExecutionContext(ctx, ExecutionContext{Warehouse: dynamicTable.Warehouse}); err != nil {
 		return nil, err
 	}
+	warehouseContext := executionContext
+	warehouseContext.Warehouse = dynamicTable.Warehouse
+	if err := p.executor.authorizeWarehouse(ctx, warehouseContext, identity.PrivilegeUsage); err != nil {
+		return nil, err
+	}
 	var lease interface{ Release() }
 	if p.executor.warehouseManager != nil {
 		acquired, acquireErr := p.executor.warehouseManager.Acquire(ctx, dynamicTable.Warehouse, nil)
@@ -134,7 +145,7 @@ func (p *DynamicTableProcessor) Refresh(ctx context.Context, executionContext Ex
 		lease = acquired
 		defer lease.Release()
 	}
-	definitionContext := ExecutionContext{Database: dynamicTable.DefinitionDatabase, Schema: dynamicTable.DefinitionSchema, Warehouse: dynamicTable.Warehouse, Role: executionContext.Role, SessionID: executionContext.SessionID}
+	definitionContext := ExecutionContext{Database: dynamicTable.DefinitionDatabase, Schema: dynamicTable.DefinitionSchema, Warehouse: dynamicTable.Warehouse, Role: executionContext.Role, Principal: executionContext.Principal, SessionID: executionContext.SessionID}
 	definitionContext.warehouseAcquired = lease != nil
 	translated, err := p.translatedDefinition(ctx, definitionContext, dynamicTable.Definition)
 	if err != nil {
@@ -226,7 +237,7 @@ func (p *DynamicTableProcessor) getByName(ctx context.Context, name string, exec
 		return nil, ExecutionContext{}, err
 	}
 	value, err := p.repo.GetDynamicTableByName(ctx, schema.ID, objectName)
-	return value, ExecutionContext{Database: databaseName, Schema: schemaName, Warehouse: valueWarehouse(value), Role: executionContext.Role, SessionID: executionContext.SessionID}, err
+	return value, ExecutionContext{Database: databaseName, Schema: schemaName, Warehouse: valueWarehouse(value), Role: executionContext.Role, Principal: executionContext.Principal, SessionID: executionContext.SessionID}, err
 }
 
 func valueWarehouse(value *metadata.DynamicTable) string {

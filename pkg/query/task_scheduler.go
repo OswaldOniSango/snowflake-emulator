@@ -96,7 +96,12 @@ func (s *TaskScheduler) RunDueTasks(ctx context.Context, now time.Time) error {
 		if now.Before(lastRun.Add(interval)) {
 			continue
 		}
-		if _, err := s.processor.executeStoredTask(ctx, task, ExecutionContext{}); err != nil {
+		executionContext, err := s.processor.ownerExecutionContext(ctx, task)
+		if err != nil {
+			executionErrors = append(executionErrors, err.Error())
+			continue
+		}
+		if _, err := s.processor.executeStoredTask(ctx, task, executionContext); err != nil {
 			executionErrors = append(executionErrors, err.Error())
 		}
 	}

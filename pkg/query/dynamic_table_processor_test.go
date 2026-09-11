@@ -19,7 +19,7 @@ func TestExecutor_DynamicTableLifecycleAndRefresh(t *testing.T) {
 	executor, repo := setupTestExecutor(t)
 	ctx := context.Background()
 	warehouseManager := warehouse.NewManager()
-	if _, err := warehouseManager.CreateWarehouse(ctx, "COMPUTE_WH", "X-SMALL", ""); err != nil {
+	if _, err := warehouseManager.CreateWarehouse(ctx, "COMPUTE_WH", defaultWarehouseSize, ""); err != nil {
 		t.Fatal(err)
 	}
 	executor.Configure(WithWarehouseManager(warehouseManager))
