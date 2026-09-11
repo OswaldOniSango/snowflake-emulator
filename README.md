@@ -642,9 +642,7 @@ again unless the first command used `PURGE = TRUE`.
 This emulator is designed for development and testing. The following features
 are not supported or have limited support:
 
-- Production authentication and object-level authorization. Local
-  `gosnowflake` sessions authenticate users and roles, while REST/UI requests
-  remain anonymous and RBAC privilege enforcement is not implemented yet.
+- Production authentication and object-level authorization — local `gosnowflake` sessions authenticate users and roles, but REST/UI requests remain anonymous and RBAC privilege enforcement is not implemented yet.
 - Distributed processing / Clustering
 - Time Travel / Zero-Copy Cloning
 - Task graphs, task dependencies, `USING CRON` schedules, and Pipes
