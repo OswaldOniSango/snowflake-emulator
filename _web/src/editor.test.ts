@@ -12,14 +12,19 @@ afterEach(() => {
 });
 
 describe("highlightRunning", () => {
-  it("marks the given range's line and clears it when passed null", () => {
+  it("marks the given range's line without adding an inline background", () => {
     const parent = host();
     const editor = createEditor({ parent, initialValue: "SELECT 1;\nSELECT 2;", onRun: () => {} });
 
     expect(parent.querySelectorAll(".cm-runningStatement")).toHaveLength(0);
+    const backgroundBeforeRun = getComputedStyle(parent.querySelector<HTMLElement>(".cm-activeLine")!).backgroundColor;
 
     editor.highlightRunning({ from: 0, to: 8 }); // "SELECT 1"
-    expect(parent.querySelectorAll(".cm-runningStatement")).toHaveLength(1);
+    const marker = parent.querySelector<HTMLElement>(".cm-runningStatement");
+    expect(marker).not.toBeNull();
+    const style = getComputedStyle(marker!);
+    expect(style.backgroundColor).toBe(backgroundBeforeRun);
+    expect(style.boxShadow).toContain("inset 3px 0 0");
 
     editor.highlightRunning(null);
     expect(parent.querySelectorAll(".cm-runningStatement")).toHaveLength(0);
@@ -33,7 +38,7 @@ describe("highlightRunning", () => {
     expect(parent.querySelectorAll(".cm-runningStatement")).toHaveLength(3);
   });
 
-  it("moves the highlight to the next statement instead of stacking it", () => {
+  it("moves the marker to the next statement instead of stacking it", () => {
     const parent = host();
     const editor = createEditor({ parent, initialValue: "SELECT 1;\nSELECT 2;", onRun: () => {} });
 
