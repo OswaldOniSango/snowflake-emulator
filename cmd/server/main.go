@@ -106,7 +106,8 @@ func main() {
 	)
 	warehouseMgr, err := warehouse.NewPersistentManager(context.Background(), repo)
 	if err != nil {
-		log.Fatalf("Failed to initialize warehouses: %v", err)
+		log.Printf("Failed to initialize warehouses: %v", err)
+		return
 	}
 	warehouseContext, stopWarehouses := context.WithCancel(context.Background())
 	defer stopWarehouses()
@@ -140,7 +141,8 @@ func main() {
 
 	log.Printf("Starting Snowflake Emulator on port %s", port) //nolint:gosec // G706: port is from env var at startup, not attacker-controlled
 	if err := server.ListenAndServe(); err != nil {
-		log.Fatalf("Server failed: %v", err) //nolint:gocritic // exitAfterDefer: intentional - OS cleans up on exit
+		log.Printf("Server failed: %v", err)
+		return
 	}
 }
 

@@ -89,7 +89,7 @@ func (e *Executor) showWarehouses(ctx context.Context) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	columns := []string{"name", "state", "size", "auto_suspend", "auto_resume", "running", "queued", "last_resumed_on", "last_suspended_on", "last_activity_on"}
+	columns := []string{columnName, "state", "size", "auto_suspend", "auto_resume", "running", "queued", "last_resumed_on", "last_suspended_on", "last_activity_on"}
 	rows := make([][]interface{}, 0, len(values))
 	for _, v := range values {
 		rows = append(rows, []interface{}{v.Name, string(v.State), v.Size, v.AutoSuspend, v.AutoResume, v.Running, v.Queued, v.LastResumedAt, v.LastSuspendedAt, v.LastActivityAt})

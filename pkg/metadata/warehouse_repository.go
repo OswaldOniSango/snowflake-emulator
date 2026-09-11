@@ -25,7 +25,7 @@ type WarehouseRecord struct {
 }
 
 // UpsertWarehouse persists a warehouse's stable configuration and lifecycle.
-func (r *Repository) UpsertWarehouse(ctx context.Context, value WarehouseRecord) error {
+func (r *Repository) UpsertWarehouse(ctx context.Context, value *WarehouseRecord) error {
 	_, err := r.mgr.Exec(ctx, `INSERT INTO _metadata_warehouses
 		(id, name, state, size, comment, created_at, owner, auto_resume, auto_suspend,
 		 last_resumed_at, last_suspended_at, last_activity_at)

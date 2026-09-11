@@ -140,6 +140,7 @@ func (s *Service) ListUsers(ctx context.Context) ([]User, error) {
 	}
 	return users, nil
 }
+
 func (s *Service) ListRoles(ctx context.Context) ([]metadata.RoleRecord, error) {
 	return s.repo.ListRoleRecords(ctx)
 }
@@ -330,8 +331,8 @@ func (s *Service) roleByID(ctx context.Context, id string) (*metadata.RoleRecord
 	}
 	for _, role := range roles {
 		if role.ID == id {
-			copy := role
-			return &copy, nil
+			result := role
+			return &result, nil
 		}
 	}
 	return nil, fmt.Errorf("%w: default role", metadata.ErrIdentityNotFound)
