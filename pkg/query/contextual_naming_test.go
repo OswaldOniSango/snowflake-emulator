@@ -67,7 +67,7 @@ func TestExecutorValidatesAllExecutionContextFields(t *testing.T) {
 		})
 	}
 
-	if _, err := warehouseManager.CreateWarehouse(ctx, "LEARNING_WH", "X-SMALL", ""); err != nil {
+	if _, err := warehouseManager.CreateWarehouse(ctx, "LEARNING_WH", defaultWarehouseSize, ""); err != nil {
 		t.Fatalf("CreateWarehouse() error = %v", err)
 	}
 	validContext := ExecutionContext{Database: "LEARNING_DB", Schema: "PUBLIC", Warehouse: "LEARNING_WH"}

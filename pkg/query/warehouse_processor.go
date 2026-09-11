@@ -10,6 +10,8 @@ import (
 	"github.com/nnnkkk7/snowflake-emulator/pkg/warehouse"
 )
 
+const defaultWarehouseSize = "X-SMALL"
+
 var (
 	createWarehouseSQL = regexp.MustCompile(`(?is)^CREATE\s+WAREHOUSE\s+([^\s;]+)(.*?);?\s*$`)
 	alterWarehouseSQL  = regexp.MustCompile(`(?is)^ALTER\s+WAREHOUSE\s+([^\s;]+)\s+(RESUME|SUSPEND|SET\s+.+?)\s*;?\s*$`)
@@ -23,10 +25,21 @@ func isShowWarehouses(sql string) bool {
 	return strings.EqualFold(strings.TrimSpace(strings.TrimSuffix(trimLeadingComments(sql), ";")), "SHOW WAREHOUSES")
 }
 
+func warehouseLifecycleTarget(sql string) (string, bool) {
+	value := strings.TrimSpace(trimLeadingComments(sql))
+	if match := alterWarehouseSQL.FindStringSubmatch(value); match != nil {
+		return strings.Trim(match[1], `"`), true
+	}
+	if match := dropWarehouseSQL.FindStringSubmatch(value); match != nil {
+		return strings.Trim(match[2], `"`), true
+	}
+	return "", false
+}
+
 func (e *Executor) executeWarehouseStatement(ctx context.Context, sql string) (*ExecResult, bool, error) {
 	value := strings.TrimSpace(trimLeadingComments(sql))
 	if match := createWarehouseSQL.FindStringSubmatch(value); match != nil {
-		settings, err := parseWarehouseSettings(match[2], warehouse.Settings{Size: "X-SMALL", AutoResume: true, AutoSuspend: 600})
+		settings, err := parseWarehouseSettings(match[2], warehouse.Settings{Size: defaultWarehouseSize, AutoResume: true, AutoSuspend: 600})
 		if err != nil {
 			return nil, true, err
 		}

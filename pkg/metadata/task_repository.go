@@ -9,7 +9,7 @@ import (
 	"github.com/google/uuid"
 )
 
-func (r *Repository) CreateTask(ctx context.Context, schemaID, name, warehouse, schedule, definition string, replace bool) (*Task, error) {
+func (r *Repository) CreateTask(ctx context.Context, schemaID, name, warehouse, schedule, definition, ownerRoleID string, replace bool) (*Task, error) {
 	name = strings.ToUpper(strings.TrimSpace(name))
 	warehouse = strings.ToUpper(strings.TrimSpace(warehouse))
 	if name == "" || warehouse == "" || strings.TrimSpace(schedule) == "" || strings.TrimSpace(definition) == "" {
@@ -24,8 +24,8 @@ func (r *Repository) CreateTask(ctx context.Context, schemaID, name, warehouse, 
 		}
 		_, err := tx.ExecContext(ctx, `INSERT INTO _metadata_tasks
 			(id, schema_id, name, warehouse, schedule, definition, state, created_at, owner)
-			VALUES (?, ?, ?, ?, ?, ?, 'SUSPENDED', CURRENT_TIMESTAMP, '')`,
-			id, schemaID, name, warehouse, strings.TrimSpace(schedule), strings.TrimSpace(definition))
+			VALUES (?, ?, ?, ?, ?, ?, 'SUSPENDED', CURRENT_TIMESTAMP, ?)`,
+			id, schemaID, name, warehouse, strings.TrimSpace(schedule), strings.TrimSpace(definition), ownerRoleID)
 		if err != nil {
 			return fmt.Errorf("failed to create task %s: %w", name, err)
 		}

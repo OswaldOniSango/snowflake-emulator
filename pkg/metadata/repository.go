@@ -354,6 +354,13 @@ func (r *Repository) initMetadataTables(ctx context.Context) error {
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			UNIQUE(child_role_id, parent_role_id)
 		)`,
+		`CREATE TABLE IF NOT EXISTS _metadata_warehouse_privilege_grants (
+			role_id VARCHAR NOT NULL,
+			warehouse_name VARCHAR NOT NULL,
+			privilege VARCHAR NOT NULL,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(role_id, warehouse_name, privilege)
+		)`,
 		`CREATE TABLE IF NOT EXISTS _metadata_procedures (
 			id VARCHAR PRIMARY KEY,
 			schema_id VARCHAR NOT NULL,

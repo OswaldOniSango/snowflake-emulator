@@ -501,7 +501,7 @@ The emulator supports standard SQL operations with automatic Snowflake-to-DuckDB
 | **DDL** | `CREATE DATABASE`, `DROP DATABASE` | Database management |
 | **DDL** | `CREATE SCHEMA`, `DROP SCHEMA` | Schema namespace management |
 | **DDL** | `CREATE WAREHOUSE`, `ALTER WAREHOUSE ... RESUME/SUSPEND/SET`, `SHOW WAREHOUSES`, `DROP WAREHOUSE` | Virtual warehouse lifecycle and configuration |
-| **Identity** | `CREATE/ALTER/DROP USER`, `CREATE/DROP ROLE`, `GRANT/REVOKE ROLE`, `SHOW USERS/ROLES/GRANTS` | Persistent local users, direct and inherited roles, and catalog inspection |
+| **Identity** | `CREATE/ALTER/DROP USER`, `CREATE/DROP ROLE`, `GRANT/REVOKE ROLE`, `GRANT/REVOKE USAGE/OPERATE ON WAREHOUSE`, `SHOW USERS/ROLES/GRANTS` | Persistent local users, inherited roles, and warehouse access control |
 | **DDL** | `CREATE [OR REPLACE] STAGE`, `DROP STAGE` | Named internal stages |
 | **Transaction** | `BEGIN`, `COMMIT`, `ROLLBACK` | Transaction control |
 | **Data Loading** | `LIST @stage`, `COPY INTO` | Upload and load CSV or JSON files from named internal stages |
@@ -526,6 +526,14 @@ Warehouses and their settings persist when `DB_PATH` names a database file,
 but restart in `SUSPENDED` state. This models Snowflake lifecycle and queuing;
 all admitted work still shares the local DuckDB engine, so a larger warehouse
 does not guarantee that one query runs faster.
+
+Authenticated `gosnowflake` sessions require `USAGE` on their selected
+warehouse before compute can be admitted, and `OPERATE` for `ALTER WAREHOUSE`
+or `DROP WAREHOUSE`. Privileges granted to a child role are inherited by its
+parent roles. `ACCOUNTADMIN` has an explicit compatibility bypass. Authorization
+runs before auto-resume and queue admission, so rejected work consumes no slot.
+The currently anonymous REST/UI path retains a local-study bypass in this phase;
+the request body's `role` field is never accepted as an authenticated principal.
 
 Ordinary views are persisted by DuckDB and synchronized with the emulator
 catalog. Their query body is evaluated when selected, like a regular view;
@@ -645,10 +653,10 @@ are not supported or have limited support:
 
 - Production authentication and object-level authorization. Local
   `gosnowflake` sessions authenticate users and roles, while REST/UI requests
-  remain anonymous and object privileges such as `GRANT SELECT` or
-  `GRANT USAGE` are not implemented yet. Identity SQL manages users and role
-  membership only; ownership transfer, secondary roles, and database roles
-  are also outside the current subset.
+  remain anonymous. Warehouse `USAGE` and `OPERATE` are enforced for
+  authenticated sessions, but table privileges such as `GRANT SELECT`, along
+  with ownership transfer, secondary roles, and database roles, remain outside
+  the current subset.
 - Distributed processing / Clustering
 - Time Travel / Zero-Copy Cloning
 - Task graphs, task dependencies, `USING CRON` schedules, and Pipes

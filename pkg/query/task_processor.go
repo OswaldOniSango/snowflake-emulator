@@ -45,7 +45,11 @@ func (p *TaskProcessor) Create(ctx context.Context, executionContext ExecutionCo
 	if _, err := parseTaskSchedule(match[4]); err != nil {
 		return nil, err
 	}
-	if _, err := p.repo.CreateTask(ctx, schema.ID, taskName, warehouseName, match[4], match[5], strings.TrimSpace(match[1]) != ""); err != nil {
+	ownerRoleID := ""
+	if executionContext.Principal != nil {
+		ownerRoleID = executionContext.Principal.RoleID
+	}
+	if _, err := p.repo.CreateTask(ctx, schema.ID, taskName, warehouseName, match[4], match[5], ownerRoleID, strings.TrimSpace(match[1]) != ""); err != nil {
 		return nil, err
 	}
 	return &ExecResult{}, nil
@@ -131,7 +135,7 @@ func (p *TaskProcessor) executeStoredTask(ctx context.Context, task *metadata.Ta
 	if err != nil {
 		return nil, err
 	}
-	taskContext := ExecutionContext{Database: database.Name, Schema: schema.Name, Warehouse: task.Warehouse, Role: executionContext.Role, SessionID: executionContext.SessionID}
+	taskContext := ExecutionContext{Database: database.Name, Schema: schema.Name, Warehouse: task.Warehouse, Role: executionContext.Role, Principal: executionContext.Principal, SessionID: executionContext.SessionID}
 
 	classifier := NewClassifier()
 	var result *ExecResult
@@ -158,6 +162,24 @@ func (p *TaskProcessor) executeStoredTask(ctx context.Context, task *metadata.Ta
 		return nil, fmt.Errorf("task %s execution failed: %w", task.Name, err)
 	}
 	return result, nil
+}
+
+func (p *TaskProcessor) ownerExecutionContext(ctx context.Context, task *metadata.Task) (ExecutionContext, error) {
+	// Executors created without identity support retain the legacy test/embedder
+	// behavior. Production wiring always configures the shared identity service.
+	if p.executor.identityService == nil {
+		return ExecutionContext{}, nil
+	}
+	if task.Owner == "" {
+		return ExecutionContext{}, fmt.Errorf("task %s has no authenticated owner role", task.Name)
+	}
+	role, err := p.executor.identityService.RoleByID(ctx, task.Owner)
+	if err != nil {
+		return ExecutionContext{}, fmt.Errorf("task %s owner role is unavailable: %w", task.Name, err)
+	}
+	return ExecutionContext{Role: role.Name, Principal: &PrincipalContext{
+		UserID: "TASK:" + task.ID, Username: "TASK:" + task.Name, RoleID: role.ID,
+	}}, nil
 }
 
 func (p *TaskProcessor) getByName(ctx context.Context, name string, executionContext ExecutionContext) (*metadata.Task, error) {

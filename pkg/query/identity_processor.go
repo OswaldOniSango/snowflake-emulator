@@ -17,15 +17,17 @@ const (
 )
 
 var (
-	createUserSQL = regexp.MustCompile(`(?is)^CREATE\s+USER\s+(IF\s+NOT\s+EXISTS\s+)?(` + identityIdentifierSQL + `)\s+(.+?)\s*;?\s*$`)
-	alterUserSQL  = regexp.MustCompile(`(?is)^ALTER\s+USER\s+(` + identityIdentifierSQL + `)\s+SET\s+(.+?)\s*;?\s*$`)
-	dropUserSQL   = regexp.MustCompile(`(?is)^DROP\s+USER\s+(IF\s+EXISTS\s+)?(` + identityIdentifierSQL + `)\s*;?\s*$`)
-	createRoleSQL = regexp.MustCompile(`(?is)^CREATE\s+ROLE\s+(IF\s+NOT\s+EXISTS\s+)?(` + identityIdentifierSQL + `)(?:\s+(.+?))?\s*;?\s*$`)
-	dropRoleSQL   = regexp.MustCompile(`(?is)^DROP\s+ROLE\s+(IF\s+EXISTS\s+)?(` + identityIdentifierSQL + `)\s*;?\s*$`)
-	grantRoleSQL  = regexp.MustCompile(`(?is)^GRANT\s+ROLE\s+(` + identityIdentifierSQL + `)\s+TO\s+(USER|ROLE)\s+(` + identityIdentifierSQL + `)\s*;?\s*$`)
-	revokeRoleSQL = regexp.MustCompile(`(?is)^REVOKE\s+ROLE\s+(` + identityIdentifierSQL + `)\s+FROM\s+(USER|ROLE)\s+(` + identityIdentifierSQL + `)\s*;?\s*$`)
-	showGrantsSQL = regexp.MustCompile(`(?is)^SHOW\s+GRANTS\s+(TO\s+(USER|ROLE)|OF\s+ROLE)\s+(` + identityIdentifierSQL + `)\s*;?\s*$`)
-	passwordSQL   = regexp.MustCompile(`(?is)(\bPASSWORD\s*=\s*)'(?:''|[^'])*'`)
+	createUserSQL               = regexp.MustCompile(`(?is)^CREATE\s+USER\s+(IF\s+NOT\s+EXISTS\s+)?(` + identityIdentifierSQL + `)\s+(.+?)\s*;?\s*$`)
+	alterUserSQL                = regexp.MustCompile(`(?is)^ALTER\s+USER\s+(` + identityIdentifierSQL + `)\s+SET\s+(.+?)\s*;?\s*$`)
+	dropUserSQL                 = regexp.MustCompile(`(?is)^DROP\s+USER\s+(IF\s+EXISTS\s+)?(` + identityIdentifierSQL + `)\s*;?\s*$`)
+	createRoleSQL               = regexp.MustCompile(`(?is)^CREATE\s+ROLE\s+(IF\s+NOT\s+EXISTS\s+)?(` + identityIdentifierSQL + `)(?:\s+(.+?))?\s*;?\s*$`)
+	dropRoleSQL                 = regexp.MustCompile(`(?is)^DROP\s+ROLE\s+(IF\s+EXISTS\s+)?(` + identityIdentifierSQL + `)\s*;?\s*$`)
+	grantRoleSQL                = regexp.MustCompile(`(?is)^GRANT\s+ROLE\s+(` + identityIdentifierSQL + `)\s+TO\s+(USER|ROLE)\s+(` + identityIdentifierSQL + `)\s*;?\s*$`)
+	revokeRoleSQL               = regexp.MustCompile(`(?is)^REVOKE\s+ROLE\s+(` + identityIdentifierSQL + `)\s+FROM\s+(USER|ROLE)\s+(` + identityIdentifierSQL + `)\s*;?\s*$`)
+	grantWarehousePrivilegeSQL  = regexp.MustCompile(`(?is)^GRANT\s+(USAGE|OPERATE)\s+ON\s+WAREHOUSE\s+(` + identityIdentifierSQL + `)\s+TO\s+ROLE\s+(` + identityIdentifierSQL + `)\s*;?\s*$`)
+	revokeWarehousePrivilegeSQL = regexp.MustCompile(`(?is)^REVOKE\s+(USAGE|OPERATE)\s+ON\s+WAREHOUSE\s+(` + identityIdentifierSQL + `)\s+FROM\s+ROLE\s+(` + identityIdentifierSQL + `)\s*;?\s*$`)
+	showGrantsSQL               = regexp.MustCompile(`(?is)^SHOW\s+GRANTS\s+(TO\s+(USER|ROLE)|OF\s+ROLE)\s+(` + identityIdentifierSQL + `)\s*;?\s*$`)
+	passwordSQL                 = regexp.MustCompile(`(?is)(\bPASSWORD\s*=\s*)'(?:''|[^'])*'`)
 )
 
 // RedactSensitiveSQL prevents identity secrets from entering query history.
@@ -57,6 +59,12 @@ func (e *Executor) executeIdentityStatement(ctx context.Context, sql string) (*E
 		return &ExecResult{}, true, e.grantIdentityRole(ctx, grantRoleSQL.FindStringSubmatch(statement))
 	case revokeRoleSQL.MatchString(statement):
 		return &ExecResult{}, true, e.revokeIdentityRole(ctx, revokeRoleSQL.FindStringSubmatch(statement))
+	case grantWarehousePrivilegeSQL.MatchString(statement):
+		match := grantWarehousePrivilegeSQL.FindStringSubmatch(statement)
+		return &ExecResult{}, true, e.identityService.GrantWarehousePrivilege(ctx, match[1], parseIdentityIdentifier(match[2]), parseIdentityIdentifier(match[3]))
+	case revokeWarehousePrivilegeSQL.MatchString(statement):
+		match := revokeWarehousePrivilegeSQL.FindStringSubmatch(statement)
+		return &ExecResult{}, true, e.identityService.RevokeWarehousePrivilege(ctx, match[1], parseIdentityIdentifier(match[2]), parseIdentityIdentifier(match[3]))
 	}
 	return nil, false, nil
 }
@@ -199,6 +207,15 @@ func (e *Executor) queryIdentityStatement(ctx context.Context, sql string) (*Res
 		rows := make([][]interface{}, 0, len(assignments))
 		for _, assignment := range assignments {
 			rows = append(rows, []interface{}{assignment.RoleName, assignment.GrantedTo, assignment.Grantee})
+		}
+		if direction == "TO ROLE" {
+			warehouseGrants, grantErr := e.identityService.WarehouseGrantsToRole(ctx, name)
+			if grantErr != nil {
+				return nil, true, grantErr
+			}
+			for _, grant := range warehouseGrants {
+				rows = append(rows, []interface{}{grant.Privilege, "WAREHOUSE", grant.WarehouseName})
+			}
 		}
 		return identityResult(columns, rows), true, nil
 	}
