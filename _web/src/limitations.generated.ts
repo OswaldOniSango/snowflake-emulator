@@ -3,7 +3,8 @@
 
 /** What the emulator does not support, as documented in the README. */
 export const LIMITATIONS: readonly string[] = [
-  "Authentication/Authorization (skipped in dev mode)",
+  "Production authentication and object-level authorization — local gosnowflake sessions authenticate users and roles, but REST/UI requests remain anonymous. Warehouse USAGE and OPERATE are enforced for authenticated sessions, but table privileges such as GRANT SELECT, along with ownership transfer, secondary roles, and database roles, remain outside the current subset.",
+  "Procedures use caller-rights rather than Snowflake's full configurable caller/owner-rights model. COPY INTO and streams enforce warehouse compute authorization, but stage and table object privileges are not implemented.",
   "Distributed processing / Clustering",
   "Time Travel / Zero-Copy Cloning",
   "Task graphs, task dependencies, USING CRON schedules, and Pipes",
