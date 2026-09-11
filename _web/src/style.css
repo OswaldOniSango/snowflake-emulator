@@ -119,6 +119,83 @@ button {
   height: 26px;
 }
 
+.identity-login,
+[data-role="identity"] {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.identity-login input,
+[data-role="identity"] select {
+  width: 112px;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--sunk);
+  color: var(--ink);
+  padding: 4px 6px;
+  font: inherit;
+}
+
+.identity-login input[type="password"] {
+  width: 96px;
+}
+
+.identity-user {
+  color: var(--ink-2);
+  font-weight: 600;
+}
+
+.identity-error {
+  color: var(--crit);
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.identity-view {
+  padding: 24px;
+  overflow: auto;
+}
+
+.identity-admin-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+  max-width: 980px;
+}
+
+.identity-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.identity-card h2 {
+  margin: 0 0 4px;
+  font-size: 14px;
+}
+
+.identity-card input {
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--sunk);
+  color: var(--ink);
+  padding: 7px;
+  font: inherit;
+}
+
+.identity-output {
+  min-height: 1.4em;
+  color: var(--ink-2);
+}
+
 .brand svg {
   width: 22px;
   height: 22px;

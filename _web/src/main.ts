@@ -20,8 +20,10 @@ import { createHistoryView } from "./history";
 import { createWarehousesView } from "./warehouses";
 import { createLimitationsButton } from "./limitations";
 import { createThemeToggle } from "./theme";
+import { createIdentityAdminView, roleNamesFromRows } from "./identity-admin";
 import { splitStatements, statementAt, type Statement as StatementRange } from "./statements";
 import { renderTranslation } from "./translation";
+import { login, logout, session, subscribe, useRole, type AuthSession } from "./auth";
 import {
   loadWorkspace,
   nextWorksheetName,
@@ -56,11 +58,13 @@ const SHELL = `
     <button data-view="worksheets" aria-current="page">Worksheets</button>
     <button data-view="warehouses">Warehouses</button>
     <button data-view="history">History</button>
+    <button data-view="identity">Identity</button>
   </nav>
   <div class="spacer"></div>
   <div class="conn" data-state="pending" role="status">
     <span class="dot"></span><span data-role="health">Checking emulator…</span>
   </div>
+  <div data-role="identity"></div>
   <div data-role="theme"></div>
 </header>
 
@@ -99,6 +103,7 @@ const SHELL = `
 
 <div class="view-pane" data-view-pane="warehouses" hidden></div>
 <div class="view-pane" data-view-pane="history" hidden></div>
+<div class="view-pane" data-view-pane="identity" hidden></div>
 
 <footer class="footer">
   <span>Not affiliated with or endorsed by Snowflake Inc. Snowflake is a trademark of Snowflake Inc.</span>
@@ -127,6 +132,7 @@ function main(): void {
   const cancelButton = pick<HTMLButtonElement>(root, "cancel");
   const pill = pick(root, "pill");
   const meta = pick(root, "meta");
+  const identity = pick(root, "identity");
 
   const workspace: Workspace = loadWorkspace();
   let activeTab: "results" | "translation" = "results";
@@ -179,6 +185,19 @@ function main(): void {
         showTab("translation");
       }
     },
+  });
+
+  subscribe((value) => {
+    if (value) {
+      const next = { database: value.database, schema: value.schema };
+      active().context = next;
+      contextPicker.set(next);
+      persist();
+    }
+    if (!value) {
+      showView("worksheets");
+    }
+    void renderIdentity(identity, active().context, value);
   });
 
   createExplorer({
@@ -616,7 +635,9 @@ function main(): void {
       name,
       name === "warehouses"
         ? createWarehousesView(pane)
-        : createHistoryView({
+        : name === "identity"
+          ? createIdentityAdminView(pane, () => active().context)
+          : createHistoryView({
             parent: pane,
             onOpen: (entry) => {
               openInWorksheet(entry.statement, {
@@ -678,6 +699,79 @@ function main(): void {
   syncCatalog();
   editor.focus();
   void showHealth(root);
+}
+
+async function renderIdentity(parent: HTMLElement, context: ExecutionContext, value: AuthSession | null = session()): Promise<void> {
+  parent.replaceChildren();
+  if (!value) {
+    const form = document.createElement("form");
+    form.className = "identity-login";
+    const username = input("Username", "ADMIN");
+    const password = input("Password", "admin", "password");
+    const submit = document.createElement("button");
+    submit.className = "ghost";
+    submit.type = "submit";
+    submit.textContent = "Sign in";
+    const error = document.createElement("span");
+    error.className = "identity-error";
+    form.append(username, password, submit, error);
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      submit.disabled = true;
+      error.textContent = "";
+      void login({ username: username.value, password: password.value, database: context.database, schema: context.schema })
+        .catch((cause: unknown) => { error.textContent = cause instanceof Error ? cause.message : "Login failed"; })
+        .finally(() => { submit.disabled = false; });
+    });
+    parent.append(form);
+    return;
+  }
+
+  const label = document.createElement("span");
+  label.className = "identity-user";
+  label.textContent = value.username;
+  const roles = document.createElement("select");
+  roles.setAttribute("aria-label", "Active role");
+  const roleNames = await discoverRoles(context, value.role);
+  for (const role of [...new Set(roleNames)]) {
+    const option = document.createElement("option");
+    option.value = role;
+    option.textContent = role;
+    option.selected = role === value.role;
+    roles.append(option);
+  }
+  roles.addEventListener("change", () => {
+    roles.disabled = true;
+    void useRole(roles.value).catch((cause: unknown) => {
+      roles.value = value.role;
+      window.alert(cause instanceof Error ? cause.message : "Role change failed");
+    }).finally(() => { roles.disabled = false; });
+  });
+  const out = document.createElement("button");
+  out.className = "ghost";
+  out.textContent = "Sign out";
+  out.addEventListener("click", () => void logout());
+  parent.append(label, roles, out);
+}
+
+async function discoverRoles(context: ExecutionContext, currentRole: string): Promise<string[]> {
+  try {
+    const result = await runStatement("SHOW ROLES", context);
+    return roleNamesFromRows(result.rows, currentRole);
+  } catch {
+    // A role list is optional for anonymous/local compatibility. Never offer
+    // guessed roles when the catalog could not confirm them.
+    return [currentRole];
+  }
+}
+
+function input(label: string, value: string, type = "text"): HTMLInputElement {
+  const element = document.createElement("input");
+  element.type = type;
+  element.value = value;
+  element.placeholder = label;
+  element.setAttribute("aria-label", label);
+  return element;
 }
 
 function summary(total: number, done: number, result: Statement, elapsedMs: number): string {
