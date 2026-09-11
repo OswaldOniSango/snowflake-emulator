@@ -40,6 +40,17 @@ rows, _ := db.Query("SELECT IFF(1>0,'yes','no')")  // Supported Snowflake syntax
 
 > **Note**: This is a dev/test emulator — no auth, no clustering, no external stages, no JS stored procedures. See [Limitations](#limitations) for details.
 
+### Local demonstration identity
+
+On the first start with an empty identity catalog, the emulator creates a
+demonstration administrator with username `ADMIN`, password `admin`, and
+default role `ACCOUNTADMIN`. The password is stored as a bcrypt hash and an
+existing catalog is never reset during restart.
+
+These credentials are intentionally convenient for local study only. Identity
+enforcement is not connected to login or query execution in this release, so
+they must not be treated as production security.
+
 ## Overview
 
 Snowflake Emulator provides a learning-oriented subset of the

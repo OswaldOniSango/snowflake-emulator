@@ -325,6 +325,35 @@ func (r *Repository) initMetadataTables(ctx context.Context) error {
 			last_suspended_at TIMESTAMP,
 			last_activity_at TIMESTAMP
 		)`,
+		`CREATE TABLE IF NOT EXISTS _metadata_roles (
+			id VARCHAR PRIMARY KEY,
+			name VARCHAR NOT NULL UNIQUE,
+			comment VARCHAR,
+			system_role BOOLEAN NOT NULL DEFAULT FALSE,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE TABLE IF NOT EXISTS _metadata_users (
+			id VARCHAR PRIMARY KEY,
+			name VARCHAR NOT NULL UNIQUE,
+			password_hash VARCHAR NOT NULL,
+			default_role_id VARCHAR,
+			disabled BOOLEAN NOT NULL DEFAULT FALSE,
+			must_change_password BOOLEAN NOT NULL DEFAULT FALSE,
+			comment VARCHAR,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE TABLE IF NOT EXISTS _metadata_user_role_grants (
+			user_id VARCHAR NOT NULL,
+			role_id VARCHAR NOT NULL,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(user_id, role_id)
+		)`,
+		`CREATE TABLE IF NOT EXISTS _metadata_role_role_grants (
+			child_role_id VARCHAR NOT NULL,
+			parent_role_id VARCHAR NOT NULL,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(child_role_id, parent_role_id)
+		)`,
 		`CREATE TABLE IF NOT EXISTS _metadata_procedures (
 			id VARCHAR PRIMARY KEY,
 			schema_id VARCHAR NOT NULL,

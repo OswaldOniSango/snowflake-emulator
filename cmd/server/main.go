@@ -14,6 +14,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/nnnkkk7/snowflake-emulator/pkg/connection"
+	"github.com/nnnkkk7/snowflake-emulator/pkg/identity"
 	"github.com/nnnkkk7/snowflake-emulator/pkg/metadata"
 	"github.com/nnnkkk7/snowflake-emulator/pkg/query"
 	"github.com/nnnkkk7/snowflake-emulator/pkg/session"
@@ -68,6 +69,14 @@ func main() {
 	// contexts are validated against the catalog, so the namespace must exist.
 	if err := repo.EnsureDefaultNamespace(context.Background()); err != nil {
 		log.Printf("Failed to create default namespace: %v", err)
+		return
+	}
+
+	// Identity is persisted now so future authentication and authorization
+	// layers can share one catalog. Query execution remains unauthenticated in
+	// this phase; constructing the service only bootstraps system identities.
+	if _, err := identity.NewService(context.Background(), repo); err != nil {
+		log.Printf("Failed to initialize identity catalog: %v", err)
 		return
 	}
 
