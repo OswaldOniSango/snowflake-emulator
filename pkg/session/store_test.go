@@ -43,6 +43,11 @@ func TestStore_SaveAndLoad(t *testing.T) {
 		ID:             1234567890123,
 		Token:          "token-abc",
 		Username:       "user1",
+		UserID:         "user-id",
+		ActiveRoleID:   "role-id",
+		ActiveRole:     "DEVELOPER",
+		Warehouse:      "COMPUTE_WH",
+		MasterToken:    "master-token",
 		Database:       "TEST_DB",
 		CurrentSchema:  "PUBLIC",
 		CreatedAt:      time.Now(),
@@ -73,11 +78,149 @@ func TestStore_SaveAndLoad(t *testing.T) {
 	if loaded.Username != session.Username {
 		t.Errorf("Expected username %s, got %s", session.Username, loaded.Username)
 	}
+	if loaded.UserID != session.UserID || loaded.ActiveRoleID != session.ActiveRoleID || loaded.ActiveRole != session.ActiveRole || loaded.Warehouse != session.Warehouse {
+		t.Errorf("Expected identity context to survive persistence, got %+v", loaded)
+	}
 	if loaded.Database != session.Database {
 		t.Errorf("Expected database %s, got %s", session.Database, loaded.Database)
 	}
 	if loaded.CurrentSchema != session.CurrentSchema {
 		t.Errorf("Expected schema %s, got %s", session.CurrentSchema, loaded.CurrentSchema)
+	}
+}
+
+func TestStoreMigratesLegacySessionsTable(t *testing.T) {
+	db, err := sql.Open("duckdb", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	mgr := connection.NewManager(db)
+	if _, err := mgr.Exec(context.Background(), `CREATE TABLE _sessions (
+		token VARCHAR PRIMARY KEY, id VARCHAR NOT NULL, username VARCHAR NOT NULL,
+		database_name VARCHAR NOT NULL, current_schema VARCHAR NOT NULL,
+		created_at TIMESTAMP NOT NULL, last_accessed_at TIMESTAMP NOT NULL,
+		expires_at TIMESTAMP NOT NULL, parameters VARCHAR)`); err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewStore(mgr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value := &Session{
+		ID:             1,
+		Token:          "token",
+		MasterToken:    "master",
+		Username:       "ADMIN",
+		UserID:         "user-id",
+		ActiveRoleID:   "role-id",
+		ActiveRole:     "ACCOUNTADMIN",
+		Database:       "TEST_DB",
+		CurrentSchema:  "PUBLIC",
+		Warehouse:      "COMPUTE_WH",
+		CreatedAt:      time.Now(),
+		LastAccessedAt: time.Now(),
+		ExpiresAt:      time.Now().Add(time.Hour),
+		Parameters:     map[string]interface{}{},
+	}
+	if err := store.Save(context.Background(), value); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := store.Load(context.Background(), value.Token)
+	if err != nil || loaded.UserID != value.UserID || loaded.ActiveRole != value.ActiveRole {
+		t.Fatalf("migrated session mismatch: loaded=%+v err=%v", loaded, err)
+	}
+}
+
+func TestPersistentManagerRestoresIdentityAndRenewsToken(t *testing.T) {
+	store := setupTestStore(t)
+	ctx := context.Background()
+	manager := NewManagerWithStore(time.Hour, store)
+	created, err := manager.CreateAuthenticatedSession(ctx, CreateInput{
+		UserID: "user-id", Username: "ADMIN", ActiveRoleID: "role-id", ActiveRole: "ACCOUNTADMIN",
+		Database: "TEST_DB", Schema: "PUBLIC", Warehouse: "COMPUTE_WH",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored, err := NewPersistentManager(ctx, time.Hour, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := restored.ValidateSession(ctx, created.Token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.UserID != created.UserID || loaded.ActiveRole != created.ActiveRole || loaded.Warehouse != created.Warehouse {
+		t.Fatalf("restored context mismatch: %+v", loaded)
+	}
+	touchedAt := loaded.LastAccessedAt
+	time.Sleep(time.Millisecond)
+	if err := restored.UpdateLastAccessed(ctx, created.Token); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := NewPersistentManager(ctx, time.Hour, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterTouch, err := restarted.ValidateSession(ctx, created.Token)
+	if err != nil || !afterTouch.LastAccessedAt.After(touchedAt) {
+		t.Fatalf("durable touch was not restored: before=%v after=%v err=%v", touchedAt, afterTouch.LastAccessedAt, err)
+	}
+	renewed, newToken, err := restarted.RenewToken(ctx, created.MasterToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if newToken == created.Token || renewed.UserID != created.UserID || renewed.ActiveRole != created.ActiveRole {
+		t.Fatalf("renewal lost identity: %+v", renewed)
+	}
+	if _, err := store.Load(ctx, created.Token); err == nil {
+		t.Fatal("old persisted token was not removed")
+	}
+}
+
+func TestPersistentMutationsRollBackOnStoreFailure(t *testing.T) {
+	store := setupTestStore(t)
+	ctx := context.Background()
+	manager := NewManagerWithStore(time.Hour, store)
+	created, err := manager.CreateAuthenticatedSession(ctx, CreateInput{
+		UserID: "user-id", Username: "ADMIN", ActiveRoleID: "old-role-id", ActiveRole: "OLD_ROLE",
+		Database: "TEST_DB", Schema: "PUBLIC", Warehouse: "OLD_WH",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	failedContext, cancel := context.WithCancel(ctx)
+	cancel()
+	if err := manager.SetWarehouseContext(failedContext, created.Token, "NEW_WH"); err == nil {
+		t.Fatal("warehouse update should fail")
+	}
+	if err := manager.UpdateSessionContext(failedContext, created.Token, "NEW_DB", "NEW_SCHEMA"); err == nil {
+		t.Fatal("context update should fail")
+	}
+	if err := manager.SetActiveRole(failedContext, created.Token, "new-role-id", "NEW_ROLE"); err == nil {
+		t.Fatal("role update should fail")
+	}
+	if _, _, err := manager.RenewToken(failedContext, created.MasterToken); err == nil {
+		t.Fatal("renewal should fail")
+	}
+	current, err := manager.ValidateSession(ctx, created.Token)
+	if err != nil {
+		t.Fatalf("old token should remain usable: %v", err)
+	}
+	if current.Warehouse != "OLD_WH" || current.Database != "TEST_DB" || current.CurrentSchema != "PUBLIC" || current.ActiveRole != "OLD_ROLE" {
+		t.Fatalf("failed persistence mutated memory: %+v", current)
+	}
+	persisted, err := store.Load(ctx, created.Token)
+	if err != nil || persisted.ActiveRole != "OLD_ROLE" || persisted.Warehouse != "OLD_WH" {
+		t.Fatalf("failed persistence mutated durable session: %+v err=%v", persisted, err)
+	}
+	if err := manager.SetActiveRole(ctx, created.Token, "later-role-id", "LATER_ROLE"); err != nil {
+		t.Fatal(err)
+	}
+	later, _ := manager.ValidateSession(ctx, created.Token)
+	if later.ActiveRole != "LATER_ROLE" {
+		t.Fatalf("later successful role was overwritten: %+v", later)
 	}
 }
 

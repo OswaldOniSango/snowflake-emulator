@@ -7,8 +7,10 @@ import (
 	"strings"
 
 	"github.com/nnnkkk7/snowflake-emulator/pkg/config"
+	"github.com/nnnkkk7/snowflake-emulator/pkg/identity"
 	"github.com/nnnkkk7/snowflake-emulator/pkg/metadata"
 	"github.com/nnnkkk7/snowflake-emulator/pkg/session"
+	"github.com/nnnkkk7/snowflake-emulator/pkg/warehouse"
 	"github.com/nnnkkk7/snowflake-emulator/server/apierror"
 	"github.com/nnnkkk7/snowflake-emulator/server/types"
 )
@@ -17,6 +19,8 @@ import (
 type SessionHandler struct {
 	sessionMgr *session.Manager
 	repo       *metadata.Repository
+	identity   *identity.Service
+	warehouses *warehouse.Manager
 }
 
 // RenewSessionRequest represents a session renewal request (legacy).
@@ -56,11 +60,17 @@ type UseContextResponse struct {
 }
 
 // NewSessionHandler creates a new session handler.
-func NewSessionHandler(sessionMgr *session.Manager, repo *metadata.Repository) *SessionHandler {
-	return &SessionHandler{
-		sessionMgr: sessionMgr,
-		repo:       repo,
+func NewSessionHandler(sessionMgr *session.Manager, repo *metadata.Repository, services ...interface{}) *SessionHandler {
+	handler := &SessionHandler{sessionMgr: sessionMgr, repo: repo}
+	for _, service := range services {
+		switch value := service.(type) {
+		case *identity.Service:
+			handler.identity = value
+		case *warehouse.Manager:
+			handler.warehouses = value
+		}
 	}
+	return handler
 }
 
 // Login handles login requests with gosnowflake protocol.
@@ -89,26 +99,49 @@ func (h *SessionHandler) Login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-
-	// Ensure database exists (try to get it, create if not found)
-	_, err := h.repo.GetDatabaseByName(ctx, database)
+	if h.identity == nil {
+		sendError(w, apierror.NewSnowflakeError(apierror.CodeInternalError, "Identity service is not configured"))
+		return
+	}
+	principal, err := h.identity.Authenticate(ctx, req.Data.LoginName, req.Data.Password)
 	if err != nil {
-		// Database doesn't exist, create it
-		_, err = h.repo.CreateDatabase(ctx, database, "Auto-created database")
-		if err != nil {
-			sendError(w, apierror.NewSnowflakeError(apierror.CodeInternalError, "Failed to initialize database"))
+		sendError(w, apierror.NewSnowflakeError(apierror.CodeAuthenticationFailed, "Invalid username or password"))
+		return
+	}
+	role, err := h.identity.ResolveActiveRole(ctx, principal.UserID, req.Data.RoleName)
+	if err != nil {
+		sendError(w, apierror.NewSnowflakeError(apierror.CodeAuthenticationFailed, "Requested role is not available"))
+		return
+	}
+
+	databaseRecord, err := h.repo.GetDatabaseByName(ctx, database)
+	if err != nil {
+		sendError(w, apierror.NewSnowflakeError(apierror.CodeInvalidParameter, "Requested database does not exist"))
+		return
+	}
+	if _, err := h.repo.GetSchemaByName(ctx, databaseRecord.ID, schema); err != nil {
+		sendError(w, apierror.NewSnowflakeError(apierror.CodeInvalidParameter, "Requested schema does not exist"))
+		return
+	}
+	if req.Data.WarehouseName != "" {
+		if h.warehouses == nil {
+			sendError(w, apierror.NewSnowflakeError(apierror.CodeInternalError, "Warehouse service is not configured"))
+			return
+		}
+		if _, err := h.warehouses.GetWarehouse(ctx, req.Data.WarehouseName); err != nil {
+			sendError(w, apierror.NewSnowflakeError(apierror.CodeInvalidParameter, "Requested warehouse does not exist"))
 			return
 		}
 	}
 
 	// Create session with master token support
-	sess, err := h.sessionMgr.CreateSession(ctx, req.Data.LoginName, database, schema)
+	sess, err := h.sessionMgr.CreateAuthenticatedSession(ctx, session.CreateInput{
+		UserID: principal.UserID, Username: principal.Username,
+		ActiveRoleID: role.ID, ActiveRole: role.Name,
+		Database: databaseRecord.Name, Schema: schema, Warehouse: req.Data.WarehouseName,
+	})
 	if err != nil {
 		sendError(w, apierror.NewSnowflakeError(apierror.CodeInternalError, "Failed to create session"))
-		return
-	}
-	if err := h.sessionMgr.SetWarehouse(sess.Token, req.Data.WarehouseName); err != nil {
-		sendError(w, apierror.NewSnowflakeError(apierror.CodeSessionNotFound, err.Error()))
 		return
 	}
 
@@ -155,7 +188,7 @@ func (h *SessionHandler) Login(w http.ResponseWriter, r *http.Request) {
 				DatabaseName:  database,
 				SchemaName:    schema,
 				WarehouseName: req.Data.WarehouseName,
-				RoleName:      req.Data.RoleName,
+				RoleName:      role.Name,
 			},
 		},
 	}

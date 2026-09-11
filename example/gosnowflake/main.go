@@ -32,7 +32,7 @@ func main() {
 
 	// Connect to the local emulator
 	// DSN format: user:pass@host:port/database/schema?account=name&protocol=http
-	dsn := fmt.Sprintf("testuser:testpass@%s/TEST_DB/PUBLIC?account=testaccount&protocol=http", host)
+	dsn := fmt.Sprintf("ADMIN:admin@%s/TEST_DB/PUBLIC?account=testaccount&protocol=http", host)
 
 	db, err := sql.Open("snowflake", dsn)
 	if err != nil {

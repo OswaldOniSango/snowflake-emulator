@@ -1,6 +1,5 @@
 // Package identity manages the emulator's persistent users and role hierarchy.
-// Authentication is exposed for future session integration, but this phase does
-// not yet enforce identity during query execution.
+// Authentication supplies stable principals and effective roles to sessions.
 package identity
 
 import (
@@ -30,6 +29,7 @@ var (
 	ErrRoleInUse          = errors.New("role is in use")
 	ErrSystemRole         = errors.New("system role cannot be modified")
 	ErrRoleCycle          = errors.New("role grant would create a cycle")
+	ErrRoleNotGranted     = errors.New("role is not granted to user")
 )
 
 type Principal struct {
@@ -37,6 +37,51 @@ type Principal struct {
 	Username      string
 	DefaultRoleID string
 	DefaultRole   string
+}
+
+type Service struct {
+	repo *metadata.Repository
+}
+
+// ResolveActiveRole resolves the requested role from a user's effective role
+// set. An empty request selects the user's configured default role. PUBLIC is
+// effective for every user, including users without an explicit grant row.
+func (s *Service) ResolveActiveRole(ctx context.Context, userID, requestedRole string) (*metadata.RoleRecord, error) {
+	users, err := s.repo.ListUserRecords(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var user *metadata.UserRecord
+	for i := range users {
+		if users[i].ID == userID {
+			user = &users[i]
+			break
+		}
+	}
+	if user == nil {
+		return nil, fmt.Errorf("%w: user", metadata.ErrIdentityNotFound)
+	}
+	roleName := NormalizeName(requestedRole)
+	if roleName == "" {
+		role, roleErr := s.roleByID(ctx, user.DefaultRoleID)
+		if roleErr != nil {
+			return nil, roleErr
+		}
+		roleName = role.Name
+	}
+	effective, err := s.EffectiveRoles(ctx, user.Name)
+	if err != nil {
+		return nil, err
+	}
+	for i := range effective {
+		if effective[i].Name == roleName {
+			return &effective[i], nil
+		}
+	}
+	if _, err := s.repo.GetRoleRecordByName(ctx, roleName); err != nil {
+		return nil, err
+	}
+	return nil, fmt.Errorf("%w: %s", ErrRoleNotGranted, roleName)
 }
 
 // User is the public identity representation. Password hashes remain confined
@@ -48,10 +93,6 @@ type User struct {
 	Disabled           bool
 	MustChangePassword bool
 	Comment            string
-}
-
-type Service struct {
-	repo *metadata.Repository
 }
 
 func NewService(ctx context.Context, repo *metadata.Repository) (*Service, error) {

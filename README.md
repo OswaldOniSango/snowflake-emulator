@@ -38,7 +38,7 @@ rows, _ := db.Query("SELECT IFF(1>0,'yes','no')")  // Supported Snowflake syntax
 - Cheap & fast CI smoke tests for Snowflake SQL
 - Validate Snowflake-ish SQL behavior before hitting real Snowflake
 
-> **Note**: This is a dev/test emulator — no auth, no clustering, no external stages, no JS stored procedures. See [Limitations](#limitations) for details.
+> **Note**: This is a dev/test emulator — its local authentication is not a production security boundary, and it has no clustering, external stages, or JS stored procedures. See [Limitations](#limitations) for details.
 
 ### Local demonstration identity
 
@@ -47,9 +47,13 @@ demonstration administrator with username `ADMIN`, password `admin`, and
 default role `ACCOUNTADMIN`. The password is stored as a bcrypt hash and an
 existing catalog is never reset during restart.
 
-These credentials are intentionally convenient for local study only. Identity
-enforcement is not connected to login or query execution in this release, so
-they must not be treated as production security.
+These credentials are intentionally convenient for local study only. The
+`gosnowflake` login authenticates against this catalog, resolves the requested
+or default role, and persists that identity in the session. `USE ROLE`,
+`CURRENT_USER()`, and `CURRENT_ROLE()` use the authenticated session context.
+The REST statement API and browser console remain anonymous in this phase, and
+object privilege enforcement is planned separately, so this must not be
+treated as production security.
 
 ## Overview
 
@@ -638,7 +642,9 @@ again unless the first command used `PURGE = TRUE`.
 This emulator is designed for development and testing. The following features
 are not supported or have limited support:
 
-- Authentication/Authorization (skipped in dev mode)
+- Production authentication and object-level authorization. Local
+  `gosnowflake` sessions authenticate users and roles, while REST/UI requests
+  remain anonymous and RBAC privilege enforcement is not implemented yet.
 - Distributed processing / Clustering
 - Time Travel / Zero-Copy Cloning
 - Task graphs, task dependencies, `USING CRON` schedules, and Pipes

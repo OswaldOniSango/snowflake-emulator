@@ -177,6 +177,7 @@ func (e *Executor) queryWithContext(ctx context.Context, executionContext Execut
 		return nil, err
 	}
 	classifier := NewClassifier()
+	sql = rewriteSessionFunctions(sql, executionContext)
 	if result, handled, err := e.queryWithProcessor(ctx, executionContext, sql, classifier); handled {
 		return result, err
 	}

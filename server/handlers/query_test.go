@@ -12,6 +12,7 @@ import (
 
 	_ "github.com/duckdb/duckdb-go/v2"
 	"github.com/nnnkkk7/snowflake-emulator/pkg/connection"
+	"github.com/nnnkkk7/snowflake-emulator/pkg/identity"
 	"github.com/nnnkkk7/snowflake-emulator/pkg/metadata"
 	"github.com/nnnkkk7/snowflake-emulator/pkg/query"
 	"github.com/nnnkkk7/snowflake-emulator/pkg/session"
@@ -73,7 +74,76 @@ func setupTestQueryHandler(t *testing.T) (*QueryHandler, *session.Manager, *meta
 		t.Fatalf("failed to insert test data: %v", err)
 	}
 
-	return NewQueryHandler(executor, sessionMgr), sessionMgr, repo
+	identityService, err := identity.NewService(ctx, repo)
+	if err != nil {
+		t.Fatalf("failed to initialize identity: %v", err)
+	}
+	return NewQueryHandler(executor, sessionMgr, identityService), sessionMgr, repo
+}
+
+func TestQueryHandlerUseRoleIsSessionScoped(t *testing.T) {
+	handler, sessionMgr, repo := setupTestQueryHandler(t)
+	ctx := context.Background()
+	identityService, err := identity.NewService(ctx, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	developer, err := identityService.CreateRole(ctx, "DEVELOPER", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := identityService.CreateUser(ctx, "alice", "secret", developer.Name, ""); err != nil {
+		t.Fatal(err)
+	}
+	principal, err := identityService.Authenticate(ctx, "alice", "secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	role, err := identityService.ResolveActiveRole(ctx, principal.UserID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	newSession := func() *session.Session {
+		sess, createErr := sessionMgr.CreateAuthenticatedSession(ctx, session.CreateInput{
+			UserID: principal.UserID, Username: principal.Username,
+			ActiveRoleID: role.ID, ActiveRole: role.Name, Database: "TEST_DB", Schema: "PUBLIC",
+		})
+		if createErr != nil {
+			t.Fatal(createErr)
+		}
+		return sess
+	}
+	first, second := newSession(), newSession()
+	execute := func(token, sql string) types.QueryResponse {
+		body, _ := json.Marshal(types.QueryRequest{SQLText: sql})
+		req := httptest.NewRequest(http.MethodPost, "/queries/v1/query-request", bytes.NewReader(body))
+		req.Header.Set("Authorization", `Snowflake Token="`+token+`"`)
+		recorder := httptest.NewRecorder()
+		handler.ExecuteQuery(recorder, req)
+		var response types.QueryResponse
+		if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+			t.Fatal(err)
+		}
+		return response
+	}
+	if response := execute(first.Token, "USE ROLE PUBLIC"); !response.Success {
+		t.Fatalf("USE ROLE failed: %+v", response)
+	}
+	changed, _ := sessionMgr.ValidateSession(ctx, first.Token)
+	unchanged, _ := sessionMgr.ValidateSession(ctx, second.Token)
+	if changed.ActiveRole != identity.RolePublic || unchanged.ActiveRole != developer.Name {
+		t.Fatalf("role leaked across sessions: changed=%s unchanged=%s", changed.ActiveRole, unchanged.ActiveRole)
+	}
+	if response := execute(first.Token, "USE ROLE USERADMIN"); response.Success {
+		t.Fatal("ungranted role should fail")
+	}
+	preserved, _ := sessionMgr.ValidateSession(ctx, first.Token)
+	if preserved.ActiveRole != identity.RolePublic {
+		t.Fatalf("failed USE ROLE changed role to %s", preserved.ActiveRole)
+	}
+	if response := execute(first.Token, "SELECT CURRENT_USER(), CURRENT_ROLE()"); !response.Success || response.Data.RowSet[0][0] != "ALICE" || response.Data.RowSet[0][1] != "PUBLIC" {
+		t.Fatalf("current identity query failed: %+v", response)
+	}
 }
 
 // TestQueryHandler_ExecuteQuery tests the query execution endpoint.

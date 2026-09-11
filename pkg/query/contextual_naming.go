@@ -472,7 +472,7 @@ func (e *Executor) validateExecutionContext(ctx context.Context, executionContex
 		}
 	}
 
-	if executionContext.Role != "" {
+	if executionContext.Role != "" && (executionContext.Principal == nil || executionContext.Principal.RoleID == "" || executionContext.Principal.UserID == "") {
 		return fmt.Errorf("role %s cannot be validated: role management is not implemented", executionContext.Role)
 	}
 
