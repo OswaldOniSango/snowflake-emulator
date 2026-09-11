@@ -95,7 +95,13 @@ func main() {
 		query.WithStageManager(stageMgr),
 		query.WithMergeProcessor(mergeProcessor),
 	)
-	warehouseMgr := warehouse.NewManager()
+	warehouseMgr, err := warehouse.NewPersistentManager(context.Background(), repo)
+	if err != nil {
+		log.Fatalf("Failed to initialize warehouses: %v", err)
+	}
+	warehouseContext, stopWarehouses := context.WithCancel(context.Background())
+	defer stopWarehouses()
+	warehouseMgr.StartAutoSuspend(warehouseContext, time.Second)
 
 	sessionHandler := handlers.NewSessionHandler(sessionMgr, repo)
 	queryHandler := handlers.NewQueryHandler(executor, sessionMgr)
@@ -203,6 +209,7 @@ func newRouter(
 		r.Get("/warehouses", restAPIHandler.ListWarehouses)
 		r.Post("/warehouses", restAPIHandler.CreateWarehouse)
 		r.Get("/warehouses/{warehouse}", restAPIHandler.GetWarehouse)
+		r.Put("/warehouses/{warehouse}", restAPIHandler.AlterWarehouse)
 		r.Delete("/warehouses/{warehouse}", restAPIHandler.DeleteWarehouse)
 		r.Post("/warehouses/{warehouse}:resume", restAPIHandler.ResumeWarehouse)
 		r.Post("/warehouses/{warehouse}:suspend", restAPIHandler.SuspendWarehouse)

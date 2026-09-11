@@ -84,7 +84,7 @@ func TestRestAPIv2Handler_InternalStageCSVWorkflow(t *testing.T) {
 
 	submit := func(statement string) types.StatementResponse {
 		t.Helper()
-		requestBody, err := json.Marshal(types.SubmitStatementRequest{Statement: statement, Database: "TEST_DB", Schema: "PUBLIC"})
+		requestBody, err := json.Marshal(types.SubmitStatementRequest{Statement: statement, Database: "TEST_DB", Schema: "PUBLIC", Warehouse: "COMPUTE_WH"})
 		if err != nil {
 			t.Fatalf("marshal statement request: %v", err)
 		}
@@ -185,6 +185,7 @@ func TestRestAPIv2Handler_WarehouseSizeRoundTrip(t *testing.T) {
 	router := chi.NewRouter()
 	router.Post("/api/v2/warehouses", handler.CreateWarehouse)
 	router.Get("/api/v2/warehouses/{warehouse}", handler.GetWarehouse)
+	router.Put("/api/v2/warehouses/{warehouse}", handler.AlterWarehouse)
 
 	tests := []struct {
 		name    string
@@ -227,6 +228,39 @@ func TestRestAPIv2Handler_WarehouseSizeRoundTrip(t *testing.T) {
 			}
 		})
 	}
+
+	request := httptest.NewRequest(http.MethodPost, "/api/v2/warehouses", strings.NewReader(`{"name":"MANUAL_WH","size":"SMALL","auto_resume":false,"auto_suspend":0}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("POST configuration status = %d, body = %s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), `"auto_resume":false`) || !strings.Contains(response.Body.String(), `"auto_suspend":0`) {
+		t.Fatalf("explicit disabled settings missing from response: %s", response.Body.String())
+	}
+	var created types.WarehouseResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	if created.AutoResume || created.AutoSuspend != 0 {
+		t.Fatalf("explicit false/zero settings were not preserved: %#v", created)
+	}
+
+	request = httptest.NewRequest(http.MethodPut, "/api/v2/warehouses/MANUAL_WH", strings.NewReader(`{"size":"LARGE","auto_resume":true,"auto_suspend":15}`))
+	request.Header.Set("Content-Type", "application/json")
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("PUT status = %d, body = %s", response.Code, response.Body.String())
+	}
+	var altered types.WarehouseResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &altered); err != nil {
+		t.Fatal(err)
+	}
+	if altered.Size != "LARGE" || !altered.AutoResume || altered.AutoSuspend != 15 {
+		t.Fatalf("altered warehouse = %#v", altered)
+	}
 }
 
 func TestRestAPIv2Handler_SubmitStatement_Sync(t *testing.T) {
@@ -236,6 +270,7 @@ func TestRestAPIv2Handler_SubmitStatement_Sync(t *testing.T) {
 		Statement: "SELECT 1 AS num",
 		Database:  "TEST_DB",
 		Schema:    "PUBLIC",
+		Warehouse: "COMPUTE_WH",
 	}
 	body, _ := json.Marshal(reqBody)
 
@@ -283,6 +318,7 @@ func TestRestAPIv2Handler_SubmitStatement_WithBindings(t *testing.T) {
 		Statement: "SELECT :1 AS num, :2 AS name",
 		Database:  "TEST_DB",
 		Schema:    "PUBLIC",
+		Warehouse: "COMPUTE_WH",
 		Bindings: map[string]*types.BindingValue{
 			"1": {Type: "FIXED", Value: "42"},
 			"2": {Type: "TEXT", Value: "hello"},
@@ -334,7 +370,7 @@ func TestRestAPIv2Handler_StreamUsesRequestContext(t *testing.T) {
 
 	execute := func(statement string) types.StatementResponse {
 		t.Helper()
-		requestBody := types.SubmitStatementRequest{Statement: statement, Database: "LEARNING_DB", Schema: "PUBLIC"}
+		requestBody := types.SubmitStatementRequest{Statement: statement, Database: "LEARNING_DB", Schema: "PUBLIC", Warehouse: "COMPUTE_WH"}
 		body, err := json.Marshal(requestBody)
 		if err != nil {
 			t.Fatalf("json.Marshal() error = %v", err)
@@ -641,7 +677,7 @@ func TestTranslateStatementDoesNotExecute(t *testing.T) {
 	}
 
 	// Selecting from it must still work: the preview ran nothing.
-	probe := `{"statement":"SELECT * FROM preview_probe","database":"TEST_DB","schema":"PUBLIC"}`
+	probe := `{"statement":"SELECT * FROM preview_probe","database":"TEST_DB","schema":"PUBLIC","warehouse":"COMPUTE_WH"}`
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v2/statements", strings.NewReader(probe)))
 
@@ -659,7 +695,7 @@ func TestRestAPIv2Handler_ListSchemaObjects(t *testing.T) {
 
 	run := func(statement string) {
 		t.Helper()
-		body := `{"statement":` + strconv.Quote(statement) + `,"database":"TEST_DB","schema":"PUBLIC"}`
+		body := `{"statement":` + strconv.Quote(statement) + `,"database":"TEST_DB","schema":"PUBLIC","warehouse":"COMPUTE_WH"}`
 		rec := httptest.NewRecorder()
 		router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v2/statements", strings.NewReader(body)))
 		if rec.Code != http.StatusOK {
@@ -763,7 +799,7 @@ func TestRestAPIv2Handler_ListSchemaObjects(t *testing.T) {
 			})
 		}
 
-		queryBody := `{"statement":"SELECT * FROM active_users","database":"TEST_DB","schema":"PUBLIC"}`
+		queryBody := `{"statement":"SELECT * FROM active_users","database":"TEST_DB","schema":"PUBLIC","warehouse":"COMPUTE_WH"}`
 		recorder = httptest.NewRecorder()
 		router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/api/v2/statements", strings.NewReader(queryBody)))
 		if recorder.Code != http.StatusOK || strings.Contains(recorder.Body.String(), "does not exist") {
@@ -822,7 +858,7 @@ func TestRestAPIv2Handler_ListStatements(t *testing.T) {
 
 	submit := func(statement string) {
 		t.Helper()
-		body := `{"statement":` + strconv.Quote(statement) + `,"database":"TEST_DB","schema":"PUBLIC"}`
+		body := `{"statement":` + strconv.Quote(statement) + `,"database":"TEST_DB","schema":"PUBLIC","warehouse":"COMPUTE_WH"}`
 		rec := httptest.NewRecorder()
 		router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v2/statements", strings.NewReader(body)))
 	}
@@ -888,7 +924,7 @@ func TestRestAPIv2Handler_ListStatementsLimit(t *testing.T) {
 
 	for i := 0; i < 3; i++ {
 		rec := httptest.NewRecorder()
-		body := `{"statement":"SELECT ` + strconv.Itoa(i) + `"}`
+		body := `{"statement":"SELECT ` + strconv.Itoa(i) + `","warehouse":"COMPUTE_WH"}`
 		router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v2/statements", strings.NewReader(body)))
 	}
 

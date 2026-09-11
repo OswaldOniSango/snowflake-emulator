@@ -241,7 +241,7 @@ describe("createWarehousesView", () => {
   it("renders a card per warehouse with its state", async () => {
     stubFetch({
       "/warehouses": [
-        { name: "COMPUTE_WH", state: "ACTIVE", size: "X-SMALL", auto_suspend: 600, auto_resume: true },
+        { name: "COMPUTE_WH", state: "ACTIVE", size: "X-SMALL", auto_suspend: 600, auto_resume: true, running: 2, queued: 1, last_activity_on: "2026-09-10T10:00:00Z" },
         { name: "LOAD_WH", state: "SUSPENDED", size: "X-SMALL" },
       ],
     });
@@ -258,6 +258,8 @@ describe("createWarehousesView", () => {
       "Active",
       "Suspended",
     ]);
+    expect(parent.textContent).toContain("Running2");
+    expect(parent.textContent).toContain("Queued1");
   });
 
   it("offers Suspend for a running warehouse and Resume for a stopped one", async () => {

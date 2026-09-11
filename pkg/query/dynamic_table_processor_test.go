@@ -12,17 +12,17 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/nnnkkk7/snowflake-emulator/pkg/connection"
 	"github.com/nnnkkk7/snowflake-emulator/pkg/metadata"
+	"github.com/nnnkkk7/snowflake-emulator/pkg/warehouse"
 )
 
 func TestExecutor_DynamicTableLifecycleAndRefresh(t *testing.T) {
 	executor, repo := setupTestExecutor(t)
-	executor.Configure(WithWarehouseValidator(func(_ context.Context, name string) error {
-		if name != "COMPUTE_WH" {
-			return fmt.Errorf("missing")
-		}
-		return nil
-	}))
 	ctx := context.Background()
+	warehouseManager := warehouse.NewManager()
+	if _, err := warehouseManager.CreateWarehouse(ctx, "COMPUTE_WH", "X-SMALL", ""); err != nil {
+		t.Fatal(err)
+	}
+	executor.Configure(WithWarehouseManager(warehouseManager))
 	database, err := repo.CreateDatabase(ctx, "DYNAMIC_DB", "")
 	if err != nil {
 		t.Fatal(err)
@@ -31,7 +31,7 @@ func TestExecutor_DynamicTableLifecycleAndRefresh(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	executionContext := ExecutionContext{Database: database.Name, Schema: schema.Name}
+	executionContext := ExecutionContext{Database: database.Name, Schema: schema.Name, Warehouse: "COMPUTE_WH"}
 
 	mustExecute := func(sql string) {
 		t.Helper()

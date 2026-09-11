@@ -1,7 +1,9 @@
 // Package types provides API request/response types for Snowflake REST API v2.
 package types
 
-import "encoding/json"
+import (
+	"encoding/json"
+)
 
 // SQL REST API v2 Types
 // Reference: https://docs.snowflake.com/en/developer-guide/sql-api/
@@ -46,6 +48,8 @@ type StatementResponse struct {
 	StatementHandle    string             `json:"statementHandle"`
 	Message            string             `json:"message,omitempty"`
 	CreatedOn          int64              `json:"createdOn,omitempty"`
+	QueuedOn           int64              `json:"queuedOn,omitempty"`
+	StartedOn          int64              `json:"startedOn,omitempty"`
 }
 
 // ResultSetMetaData contains metadata about the result set.
@@ -167,11 +171,13 @@ type ListTablesResponse []TableResponse
 
 // WarehouseRequest represents a request to create/alter a warehouse.
 type WarehouseRequest struct {
-	Name        string `json:"name"`
-	Size        string `json:"warehouse_size,omitempty"` // X-SMALL, SMALL, MEDIUM, etc.
-	AutoSuspend int    `json:"auto_suspend,omitempty"`   // Seconds
-	AutoResume  bool   `json:"auto_resume,omitempty"`
-	Comment     string `json:"comment,omitempty"`
+	Name           string `json:"name"`
+	Size           string `json:"warehouse_size,omitempty"` // X-SMALL, SMALL, MEDIUM, etc.
+	AutoSuspend    int    `json:"auto_suspend,omitempty"`   // Seconds
+	AutoResume     bool   `json:"auto_resume,omitempty"`
+	Comment        string `json:"comment,omitempty"`
+	autoResumeSet  bool
+	autoSuspendSet bool
 }
 
 // UnmarshalJSON accepts both the Snowflake-style warehouse_size request field
@@ -188,6 +194,10 @@ func (r *WarehouseRequest) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &payload); err != nil {
 		return err
 	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
 	r.Name = payload.Name
 	r.Size = payload.WarehouseSize
 	if r.Size == "" {
@@ -195,21 +205,31 @@ func (r *WarehouseRequest) UnmarshalJSON(data []byte) error {
 	}
 	r.AutoSuspend = payload.AutoSuspend
 	r.AutoResume = payload.AutoResume
+	_, r.autoSuspendSet = fields["auto_suspend"]
+	_, r.autoResumeSet = fields["auto_resume"]
 	r.Comment = payload.Comment
 	return nil
 }
 
+func (r WarehouseRequest) HasAutoResume() bool  { return r.autoResumeSet }
+func (r WarehouseRequest) HasAutoSuspend() bool { return r.autoSuspendSet }
+
 // WarehouseResponse represents warehouse information.
 type WarehouseResponse struct {
-	Name        string `json:"name"`
-	State       string `json:"state"` // STARTED, SUSPENDED, RESUMING, SUSPENDING
-	Size        string `json:"size,omitempty"`
-	Type        string `json:"type,omitempty"` // STANDARD, SNOWPARK-OPTIMIZED
-	AutoSuspend int    `json:"auto_suspend,omitempty"`
-	AutoResume  bool   `json:"auto_resume,omitempty"`
-	Comment     string `json:"comment,omitempty"`
-	Owner       string `json:"owner,omitempty"`
-	CreatedOn   string `json:"created_on,omitempty"`
+	Name            string `json:"name"`
+	State           string `json:"state"` // ACTIVE, SUSPENDED, RESUMING, SUSPENDING
+	Size            string `json:"size,omitempty"`
+	Type            string `json:"type,omitempty"` // STANDARD, SNOWPARK-OPTIMIZED
+	AutoSuspend     int    `json:"auto_suspend"`
+	AutoResume      bool   `json:"auto_resume"`
+	Comment         string `json:"comment,omitempty"`
+	Owner           string `json:"owner,omitempty"`
+	CreatedOn       string `json:"created_on,omitempty"`
+	Running         int    `json:"running"`
+	Queued          int    `json:"queued"`
+	LastResumedOn   string `json:"last_resumed_on,omitempty"`
+	LastSuspendedOn string `json:"last_suspended_on,omitempty"`
+	LastActivityOn  string `json:"last_activity_on,omitempty"`
 }
 
 // ListWarehousesResponse represents a list of warehouses.
@@ -335,6 +355,8 @@ type StatementHistoryEntry struct {
 	Schema      string `json:"schema,omitempty"`
 	Warehouse   string `json:"warehouse,omitempty"`
 	CreatedOn   int64  `json:"createdOn"`
+	QueuedOn    int64  `json:"queuedOn,omitempty"`
+	StartedOn   int64  `json:"startedOn,omitempty"`
 	CompletedOn int64  `json:"completedOn,omitempty"`
 
 	// DurationMs is set once a statement has finished.

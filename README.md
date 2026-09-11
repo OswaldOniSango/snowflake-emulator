@@ -159,7 +159,7 @@ assets and no separate process.
 | **Worksheets** | Tabbed SQL editor with syntax highlighting. `Cmd`/`Ctrl` + `Enter` runs the statement under the cursor, or the selection. Multiple statements in one buffer are split correctly — including procedure bodies between `$$`, which are full of semicolons. Worksheets, their names and their execution context are kept in the browser, and tabs can be dragged into any order. A running statement can be canceled, and results exported as CSV or JSON. |
 | **Translated SQL** | Shows the DuckDB SQL a statement becomes, beside what you wrote, without running it. Statements handled by a processor (COPY, MERGE, procedures) say so rather than showing a partial translation as though it were the whole story. |
 | **Object explorer** | Databases, schemas, tables, streams, procedures, tasks and stages. Clicking an object writes its name into the editor. |
-| **Warehouses** | Create, resume, suspend and drop. Compute is emulated: a suspended warehouse changes what the API reports, not where statements run. |
+| **Warehouses** | Persistent lifecycle, auto-resume/auto-suspend, FIFO admission queues, size-based logical slots, and SQL/REST/UI management. |
 | **History** | Recent statements with their status, duration and handle. Click one to reopen it in a new worksheet. Statements are kept for seven days, and survive a restart when the emulator is run against a database file (`DB_PATH`); with the default in-memory database they go when the process does. |
 
 > **Note**: The console is an original interface for this emulator. It is not
@@ -460,7 +460,7 @@ go run ./example/gosnowflake
 | `/api/v2/databases/{db}/schemas/{schema}/stages/{stage}` | DELETE | Drop an internal stage and its files |
 | `/api/v2/databases/{db}/schemas/{schema}/stages/{stage}/files` | GET, POST | List files or upload one multipart `file` (maximum 64 MiB) |
 | `/api/v2/warehouses` | GET, POST | List/Create warehouses |
-| `/api/v2/warehouses/{wh}` | GET, DELETE | Get/Drop warehouse |
+| `/api/v2/warehouses/{wh}` | GET, PUT, DELETE | Get/Alter/Drop warehouse |
 | `/api/v2/warehouses/{wh}:resume` | POST | Resume warehouse |
 | `/api/v2/warehouses/{wh}:suspend` | POST | Suspend warehouse |
 | `/health` | GET | Health check |
@@ -485,6 +485,7 @@ The emulator supports standard SQL operations with automatic Snowflake-to-DuckDB
 | **DDL** | `CREATE [OR REPLACE] TEMPORARY TABLE ... AS <query>` | A true DuckDB TEMP table, visible to every statement in the session |
 | **DDL** | `CREATE DATABASE`, `DROP DATABASE` | Database management |
 | **DDL** | `CREATE SCHEMA`, `DROP SCHEMA` | Schema namespace management |
+| **DDL** | `CREATE WAREHOUSE`, `ALTER WAREHOUSE ... RESUME/SUSPEND/SET`, `SHOW WAREHOUSES`, `DROP WAREHOUSE` | Virtual warehouse lifecycle and configuration |
 | **DDL** | `CREATE [OR REPLACE] STAGE`, `DROP STAGE` | Named internal stages |
 | **Transaction** | `BEGIN`, `COMMIT`, `ROLLBACK` | Transaction control |
 | **Data Loading** | `LIST @stage`, `COPY INTO` | Upload and load CSV or JSON files from named internal stages |
@@ -500,6 +501,15 @@ Schemas and persistent/transient tables created through SQL are synchronized
 with the emulator catalog, so they are visible through the REST object explorer.
 Temporary tables remain connection-scoped and are not stored in the global
 catalog.
+
+Statements that read or mutate data require a selected warehouse. A suspended
+warehouse resumes on demand when `AUTO_RESUME` is enabled; otherwise the
+statement is rejected until an explicit resume. Each size doubles logical
+admission slots from `X-SMALL=1`, and excess work waits in a FIFO queue.
+Warehouses and their settings persist when `DB_PATH` names a database file,
+but restart in `SUSPENDED` state. This models Snowflake lifecycle and queuing;
+all admitted work still shares the local DuckDB engine, so a larger warehouse
+does not guarantee that one query runs faster.
 
 Ordinary views are persisted by DuckDB and synchronized with the emulator
 catalog. Their query body is evaluated when selected, like a regular view;

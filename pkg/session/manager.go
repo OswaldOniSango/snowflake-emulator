@@ -18,6 +18,7 @@ type Session struct {
 	Username                string
 	Database                string
 	CurrentSchema           string
+	Warehouse               string
 	CreatedAt               time.Time
 	LastAccessedAt          time.Time
 	ExpiresAt               time.Time
@@ -105,6 +106,18 @@ func (m *Manager) CreateSession(ctx context.Context, username, database, schema 
 	}
 
 	return session.Copy(), nil
+}
+
+// SetWarehouse records the warehouse selected during login.
+func (m *Manager) SetWarehouse(token, warehouse string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	session, ok := m.sessions[token]
+	if !ok {
+		return fmt.Errorf("session not found")
+	}
+	session.Warehouse = warehouse
+	return nil
 }
 
 // ValidateSession validates a session token and returns the session if valid.

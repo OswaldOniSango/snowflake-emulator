@@ -14,6 +14,17 @@ import (
 
 func submit(t *testing.T, router *chi.Mux, body string) (*httptest.ResponseRecorder, types.StatementResponse) {
 	t.Helper()
+	var requestBody map[string]interface{}
+	if err := json.Unmarshal([]byte(body), &requestBody); err == nil {
+		if _, exists := requestBody["warehouse"]; !exists {
+			requestBody["warehouse"] = "COMPUTE_WH"
+			encoded, marshalErr := json.Marshal(requestBody)
+			if marshalErr != nil {
+				t.Fatal(marshalErr)
+			}
+			body = string(encoded)
+		}
+	}
 
 	request := httptest.NewRequest(http.MethodPost, "/api/v2/statements", bytes.NewBufferString(body))
 	request.Header.Set("Content-Type", "application/json")
@@ -111,7 +122,7 @@ func TestAsyncCanBeAskedForWithAQueryParameter(t *testing.T) {
 	_, router := setupRestAPIv2Handler(t)
 
 	request := httptest.NewRequest(http.MethodPost, "/api/v2/statements?async=true",
-		bytes.NewBufferString(`{"statement":"SELECT 1","database":"TEST_DB","schema":"PUBLIC"}`))
+		bytes.NewBufferString(`{"statement":"SELECT 1","database":"TEST_DB","schema":"PUBLIC","warehouse":"COMPUTE_WH"}`))
 	request.Header.Set("Content-Type", "application/json")
 	recorder := httptest.NewRecorder()
 	router.ServeHTTP(recorder, request)

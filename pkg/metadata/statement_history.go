@@ -20,6 +20,8 @@ type StatementRecord struct {
 	Schema       string
 	Warehouse    string
 	CreatedOn    time.Time
+	QueuedOn     *time.Time
+	StartedOn    *time.Time
 	CompletedOn  *time.Time
 	RowCount     int
 	ErrorCode    string
@@ -49,13 +51,13 @@ func (r *Repository) RecordStatement(ctx context.Context, record *StatementRecor
 	const update = `UPDATE _metadata_query_history
 		SET sql_text = ?, status = ?, rows_affected = ?, execution_time_ms = ?,
 		    error_code = ?, error_message = ?, started_at = ?, completed_at = ?,
-		    database_name = ?, schema_name = ?, warehouse = ?
+		    database_name = ?, schema_name = ?, warehouse = ?, queued_at = ?, execution_started_at = ?
 		WHERE query_id = ?`
 
 	result, err := r.mgr.Exec(ctx, update,
 		record.SQLText, record.Status, int64(record.RowCount), durationMs,
 		record.ErrorCode, record.ErrorMessage, record.CreatedOn, completedAt,
-		record.Database, record.Schema, record.Warehouse, record.Handle)
+		record.Database, record.Schema, record.Warehouse, record.QueuedOn, record.StartedOn, record.Handle)
 	if err != nil {
 		return fmt.Errorf("failed to update statement history: %w", err)
 	}
@@ -66,14 +68,14 @@ func (r *Repository) RecordStatement(ctx context.Context, record *StatementRecor
 	const insert = `INSERT INTO _metadata_query_history
 		(id, session_id, query_id, sql_text, status, rows_affected, execution_time_ms,
 		 error_code, error_message, started_at, completed_at,
-		 database_name, schema_name, warehouse)
-		VALUES (?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		 database_name, schema_name, warehouse, queued_at, execution_started_at)
+		VALUES (?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	if _, err := r.mgr.Exec(ctx, insert,
 		record.Handle, record.Handle, record.SQLText, record.Status,
 		int64(record.RowCount), durationMs, record.ErrorCode, record.ErrorMessage,
 		record.CreatedOn, completedAt,
-		record.Database, record.Schema, record.Warehouse); err != nil {
+		record.Database, record.Schema, record.Warehouse, record.QueuedOn, record.StartedOn); err != nil {
 		return fmt.Errorf("failed to insert statement history: %w", err)
 	}
 	return nil
@@ -83,7 +85,7 @@ func (r *Repository) RecordStatement(ctx context.Context, record *StatementRecor
 // A limit of zero or less returns every row.
 func (r *Repository) ListStatementHistory(ctx context.Context, limit int) ([]StatementRecord, error) {
 	query := `SELECT query_id, status, sql_text, rows_affected, error_code, error_message,
-		started_at, completed_at, database_name, schema_name, warehouse
+		started_at, completed_at, database_name, schema_name, warehouse, queued_at, execution_started_at
 		FROM _metadata_query_history
 		WHERE query_id IS NOT NULL AND query_id <> ''
 		ORDER BY started_at DESC`
@@ -104,11 +106,11 @@ func (r *Repository) ListStatementHistory(ctx context.Context, limit int) ([]Sta
 		var record StatementRecord
 		var rowCount int64
 		var errorCode, errorMessage, database, schema, warehouse sql.NullString
-		var completedAt sql.NullTime
+		var completedAt, queuedAt, executionStartedAt sql.NullTime
 
 		if err := rows.Scan(&record.Handle, &record.Status, &record.SQLText, &rowCount,
 			&errorCode, &errorMessage, &record.CreatedOn, &completedAt,
-			&database, &schema, &warehouse); err != nil {
+			&database, &schema, &warehouse, &queuedAt, &executionStartedAt); err != nil {
 			return nil, fmt.Errorf("failed to scan statement history row: %w", err)
 		}
 
@@ -120,6 +122,12 @@ func (r *Repository) ListStatementHistory(ctx context.Context, limit int) ([]Sta
 		record.Warehouse = warehouse.String
 		if completedAt.Valid {
 			record.CompletedOn = &completedAt.Time
+		}
+		if queuedAt.Valid {
+			record.QueuedOn = &queuedAt.Time
+		}
+		if executionStartedAt.Valid {
+			record.StartedOn = &executionStartedAt.Time
 		}
 		records = append(records, record)
 	}

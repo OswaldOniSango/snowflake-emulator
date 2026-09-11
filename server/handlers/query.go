@@ -52,6 +52,7 @@ func (h *QueryHandler) ExecuteQuery(w http.ResponseWriter, r *http.Request) {
 	executionContext := query.ExecutionContext{
 		Database:  sess.Database,
 		Schema:    sess.CurrentSchema,
+		Warehouse: sess.Warehouse,
 		SessionID: fmt.Sprintf("%d", sess.ID),
 	}
 

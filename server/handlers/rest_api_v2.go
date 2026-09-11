@@ -64,10 +64,7 @@ func NewRestAPIv2HandlerWithWarehouse(executor *query.Executor, stmtMgr *query.S
 }
 
 func configureWarehouseValidation(executor *query.Executor, warehouseMgr *warehouse.Manager) {
-	executor.Configure(query.WithWarehouseValidator(func(ctx context.Context, name string) error {
-		_, err := warehouseMgr.GetWarehouse(ctx, name)
-		return err
-	}))
+	executor.Configure(query.WithWarehouseManager(warehouseMgr))
 }
 
 // SubmitStatement handles POST /api/v2/statements.
@@ -91,6 +88,12 @@ func (h *RestAPIv2Handler) SubmitStatement(w http.ResponseWriter, r *http.Reques
 		Warehouse: req.Warehouse,
 		Role:      req.Role,
 		RowLimit:  req.RowLimit,
+		OnWarehouseQueued: func() {
+			h.stmtMgr.UpdateStatus(stmt.Handle, query.StatementStatusQueued)
+		},
+		OnWarehouseRunning: func() {
+			h.stmtMgr.UpdateStatus(stmt.Handle, query.StatementStatusRunning)
+		},
 	}
 	bindings := convertBindings(req.Bindings)
 
@@ -104,7 +107,6 @@ func (h *RestAPIv2Handler) SubmitStatement(w http.ResponseWriter, r *http.Reques
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 	h.stmtMgr.SetCancelFunc(stmt.Handle, cancel)
-	h.stmtMgr.UpdateStatus(stmt.Handle, query.StatementStatusRunning)
 
 	resp := h.runStatement(ctx, stmt, req.Statement, executionContext, bindings)
 
@@ -128,7 +130,6 @@ func (h *RestAPIv2Handler) submitAsync(
 ) {
 	ctx, cancel := context.WithCancel(context.Background())
 	h.stmtMgr.SetCancelFunc(stmt.Handle, cancel)
-	h.stmtMgr.UpdateStatus(stmt.Handle, query.StatementStatusRunning)
 
 	go func() {
 		defer cancel()
@@ -161,6 +162,9 @@ func (h *RestAPIv2Handler) runStatement(
 	executionContext query.ExecutionContext,
 	bindings map[string]*query.BindingValue,
 ) types.StatementResponse {
+	if !query.RequiresWarehouse(statement) {
+		h.stmtMgr.UpdateStatus(stmt.Handle, query.StatementStatusRunning)
+	}
 	classification := query.ClassifySQL(statement)
 
 	var result *query.Result
@@ -235,7 +239,7 @@ func (h *RestAPIv2Handler) GetStatement(w http.ResponseWriter, r *http.Request) 
 	var resp types.StatementResponse
 
 	switch stmt.Status {
-	case query.StatementStatusRunning, query.StatementStatusPending:
+	case query.StatementStatusRunning, query.StatementStatusPending, query.StatementStatusQueued:
 		resp = types.StatementResponse{
 			StatementHandle:    stmt.Handle,
 			Code:               types.ResponseCodeStatementPending,
@@ -943,17 +947,7 @@ func (h *RestAPIv2Handler) ListWarehouses(w http.ResponseWriter, r *http.Request
 
 	resp := make(types.ListWarehousesResponse, len(warehouses))
 	for i, wh := range warehouses {
-		resp[i] = types.WarehouseResponse{
-			Name:        wh.Name,
-			State:       string(wh.State),
-			Size:        wh.Size,
-			Type:        "STANDARD",
-			AutoSuspend: wh.AutoSuspend,
-			AutoResume:  wh.AutoResume,
-			Comment:     wh.Comment,
-			Owner:       wh.Owner,
-			CreatedOn:   wh.CreatedAt.Format(time.RFC3339),
-		}
+		resp[i] = warehouseResponse(wh)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -972,17 +966,7 @@ func (h *RestAPIv2Handler) GetWarehouse(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	resp := types.WarehouseResponse{
-		Name:        wh.Name,
-		State:       string(wh.State),
-		Size:        wh.Size,
-		Type:        "STANDARD",
-		AutoSuspend: wh.AutoSuspend,
-		AutoResume:  wh.AutoResume,
-		Comment:     wh.Comment,
-		Owner:       wh.Owner,
-		CreatedOn:   wh.CreatedAt.Format(time.RFC3339),
-	}
+	resp := warehouseResponse(wh)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -1004,27 +988,55 @@ func (h *RestAPIv2Handler) CreateWarehouse(w http.ResponseWriter, r *http.Reques
 
 	ctx := r.Context()
 
-	wh, err := h.warehouseMgr.CreateWarehouse(ctx, req.Name, req.Size, req.Comment)
+	settings := warehouse.Settings{Size: req.Size, AutoResume: true, AutoSuspend: 600}
+	if req.HasAutoResume() {
+		settings.AutoResume = req.AutoResume
+	}
+	if req.HasAutoSuspend() {
+		settings.AutoSuspend = req.AutoSuspend
+	}
+	wh, err := h.warehouseMgr.CreateWarehouseWithSettings(ctx, req.Name, req.Comment, settings)
 	if err != nil {
 		h.sendError(w, http.StatusBadRequest, err.Error(), types.SQLState42000)
 		return
 	}
 
-	resp := types.WarehouseResponse{
-		Name:        wh.Name,
-		State:       string(wh.State),
-		Size:        wh.Size,
-		Type:        "STANDARD",
-		AutoSuspend: wh.AutoSuspend,
-		AutoResume:  wh.AutoResume,
-		Comment:     wh.Comment,
-		Owner:       wh.Owner,
-		CreatedOn:   wh.CreatedAt.Format(time.RFC3339),
-	}
+	resp := warehouseResponse(wh)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// AlterWarehouse updates warehouse size and automation settings.
+func (h *RestAPIv2Handler) AlterWarehouse(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "warehouse")
+	current, err := h.warehouseMgr.GetWarehouse(r.Context(), name)
+	if err != nil {
+		h.sendError(w, http.StatusNotFound, err.Error(), types.SQLState02000)
+		return
+	}
+	var req types.WarehouseRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.sendError(w, http.StatusBadRequest, "Invalid request body", types.SQLState42000)
+		return
+	}
+	settings := warehouse.Settings{Size: current.Size, AutoResume: current.AutoResume, AutoSuspend: current.AutoSuspend}
+	if req.Size != "" {
+		settings.Size = req.Size
+	}
+	if req.HasAutoResume() {
+		settings.AutoResume = req.AutoResume
+	}
+	if req.HasAutoSuspend() {
+		settings.AutoSuspend = req.AutoSuspend
+	}
+	if err := h.warehouseMgr.AlterWarehouse(r.Context(), name, settings); err != nil {
+		h.sendError(w, http.StatusBadRequest, err.Error(), types.SQLState42000)
+		return
+	}
+	updated, _ := h.warehouseMgr.GetWarehouse(r.Context(), name)
+	writeJSON(w, http.StatusOK, warehouseResponse(updated))
 }
 
 // DeleteWarehouse handles DELETE /api/v2/warehouses/{warehouse}.
@@ -1056,17 +1068,7 @@ func (h *RestAPIv2Handler) ResumeWarehouse(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	resp := types.WarehouseResponse{
-		Name:        wh.Name,
-		State:       string(wh.State),
-		Size:        wh.Size,
-		Type:        "STANDARD",
-		AutoSuspend: wh.AutoSuspend,
-		AutoResume:  wh.AutoResume,
-		Comment:     wh.Comment,
-		Owner:       wh.Owner,
-		CreatedOn:   wh.CreatedAt.Format(time.RFC3339),
-	}
+	resp := warehouseResponse(wh)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -1089,21 +1091,25 @@ func (h *RestAPIv2Handler) SuspendWarehouse(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	resp := types.WarehouseResponse{
-		Name:        wh.Name,
-		State:       string(wh.State),
-		Size:        wh.Size,
-		Type:        "STANDARD",
-		AutoSuspend: wh.AutoSuspend,
-		AutoResume:  wh.AutoResume,
-		Comment:     wh.Comment,
-		Owner:       wh.Owner,
-		CreatedOn:   wh.CreatedAt.Format(time.RFC3339),
-	}
+	resp := warehouseResponse(wh)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(resp)
+}
+
+func warehouseResponse(wh *warehouse.Warehouse) types.WarehouseResponse {
+	resp := types.WarehouseResponse{Name: wh.Name, State: string(wh.State), Size: wh.Size, Type: "STANDARD", AutoSuspend: wh.AutoSuspend, AutoResume: wh.AutoResume, Comment: wh.Comment, Owner: wh.Owner, CreatedOn: wh.CreatedAt.Format(time.RFC3339), Running: wh.Running, Queued: wh.Queued}
+	if wh.LastResumedAt != nil {
+		resp.LastResumedOn = wh.LastResumedAt.Format(time.RFC3339)
+	}
+	if wh.LastSuspendedAt != nil {
+		resp.LastSuspendedOn = wh.LastSuspendedAt.Format(time.RFC3339)
+	}
+	if wh.LastActivityAt != nil {
+		resp.LastActivityOn = wh.LastActivityAt.Format(time.RFC3339)
+	}
+	return resp
 }
 
 // convertBindings converts types.BindingValue map to query.BindingValue map.
@@ -1472,6 +1478,12 @@ func (h *RestAPIv2Handler) ListStatements(w http.ResponseWriter, r *http.Request
 			NumRows:   summary.RowCount,
 			Code:      summary.ErrorCode,
 			Message:   summary.ErrorMessage,
+		}
+		if summary.QueuedOn != nil {
+			entry.QueuedOn = summary.QueuedOn.UnixMilli()
+		}
+		if summary.StartedOn != nil {
+			entry.StartedOn = summary.StartedOn.UnixMilli()
 		}
 		if summary.CompletedOn != nil {
 			entry.CompletedOn = summary.CompletedOn.UnixMilli()

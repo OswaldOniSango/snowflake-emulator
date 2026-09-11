@@ -13,6 +13,7 @@ import (
 	"github.com/nnnkkk7/snowflake-emulator/pkg/connection"
 	"github.com/nnnkkk7/snowflake-emulator/pkg/metadata"
 	"github.com/nnnkkk7/snowflake-emulator/pkg/stage"
+	"github.com/nnnkkk7/snowflake-emulator/pkg/warehouse"
 )
 
 // Binding validation regexes to prevent SQL injection
@@ -47,6 +48,18 @@ type Executor struct {
 	dynamicTableProcessor *DynamicTableProcessor
 	stageProcessor        *StageProcessor
 	warehouseValidator    func(context.Context, string) error
+	warehouseManager      *warehouse.Manager
+}
+
+// WithWarehouseManager makes warehouse lifecycle and admission govern compute.
+func WithWarehouseManager(manager *warehouse.Manager) ExecutorOption {
+	return func(e *Executor) {
+		e.warehouseManager = manager
+		e.warehouseValidator = func(ctx context.Context, name string) error {
+			_, err := manager.GetWarehouse(ctx, name)
+			return err
+		}
+	}
 }
 
 // ExecutorOption configures an Executor.
@@ -117,6 +130,7 @@ func (e *Executor) withPinnedConnection(ctx context.Context, fn func(*Executor) 
 	return e.mgr.WithConnection(ctx, func(mgr *connection.Manager) error {
 		pinnedRepo := e.repo.WithManager(mgr)
 		pinned := NewExecutor(mgr, pinnedRepo, WithWarehouseValidator(e.warehouseValidator))
+		pinned.warehouseManager = e.warehouseManager
 		if e.mergeProcessor != nil {
 			pinned.mergeProcessor = NewMergeProcessor(pinned)
 		}
@@ -138,6 +152,27 @@ func (e *Executor) Query(ctx context.Context, sql string) (*Result, error) {
 
 // QueryWithContext executes a query using Snowflake database/schema context.
 func (e *Executor) QueryWithContext(ctx context.Context, executionContext ExecutionContext, sql string) (*Result, error) {
+	if e.warehouseManager != nil && isShowWarehouses(sql) {
+		return e.showWarehouses(ctx)
+	}
+	if e.warehouseManager != nil && RequiresWarehouse(sql) && !executionContext.warehouseAcquired {
+		if executionContext.Warehouse == "" {
+			return nil, fmt.Errorf("a warehouse is required to execute this statement")
+		}
+		lease, err := e.warehouseManager.Acquire(ctx, executionContext.Warehouse, executionContext.OnWarehouseQueued)
+		if err != nil {
+			return nil, err
+		}
+		defer lease.Release()
+		executionContext.warehouseAcquired = true
+		if executionContext.OnWarehouseRunning != nil {
+			executionContext.OnWarehouseRunning()
+		}
+	}
+	return e.queryWithContext(ctx, executionContext, sql)
+}
+
+func (e *Executor) queryWithContext(ctx context.Context, executionContext ExecutionContext, sql string) (*Result, error) {
 	if err := e.validateExecutionContext(ctx, executionContext); err != nil {
 		return nil, err
 	}
@@ -503,6 +538,29 @@ func (e *Executor) Execute(ctx context.Context, sql string) (*ExecResult, error)
 
 // ExecuteWithContext executes a statement using Snowflake database/schema context.
 func (e *Executor) ExecuteWithContext(ctx context.Context, executionContext ExecutionContext, sql string) (*ExecResult, error) {
+	if e.warehouseManager != nil {
+		if result, handled, err := e.executeWarehouseStatement(ctx, sql); handled {
+			return result, err
+		}
+	}
+	if e.warehouseManager != nil && RequiresWarehouse(sql) && !executionContext.warehouseAcquired {
+		if executionContext.Warehouse == "" {
+			return nil, fmt.Errorf("a warehouse is required to execute this statement")
+		}
+		lease, err := e.warehouseManager.Acquire(ctx, executionContext.Warehouse, executionContext.OnWarehouseQueued)
+		if err != nil {
+			return nil, err
+		}
+		defer lease.Release()
+		executionContext.warehouseAcquired = true
+		if executionContext.OnWarehouseRunning != nil {
+			executionContext.OnWarehouseRunning()
+		}
+	}
+	return e.executeWithContext(ctx, executionContext, sql)
+}
+
+func (e *Executor) executeWithContext(ctx context.Context, executionContext ExecutionContext, sql string) (*ExecResult, error) {
 	if err := e.validateExecutionContext(ctx, executionContext); err != nil {
 		return nil, err
 	}

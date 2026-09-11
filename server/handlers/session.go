@@ -107,6 +107,10 @@ func (h *SessionHandler) Login(w http.ResponseWriter, r *http.Request) {
 		sendError(w, apierror.NewSnowflakeError(apierror.CodeInternalError, "Failed to create session"))
 		return
 	}
+	if err := h.sessionMgr.SetWarehouse(sess.Token, req.Data.WarehouseName); err != nil {
+		sendError(w, apierror.NewSnowflakeError(apierror.CodeSessionNotFound, err.Error()))
+		return
+	}
 
 	// Build parameter bindings from default session parameters
 	defaultParams := config.DefaultSessionParameters()
