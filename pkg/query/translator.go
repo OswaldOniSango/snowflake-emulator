@@ -161,8 +161,12 @@ func splitCreateViewAs(sql string) (preamble, body string, ok bool) {
 
 // translateCreateTableKind converts Snowflake CREATE TABLE modifiers that
 // DuckDB does not understand while preserving modifiers it supports.
+// Leading comments are skipped for matching (same as Classify) but preserved
+// in the returned text so worksheet/history display stays unchanged.
 func translateCreateTableKind(sql string) string {
-	upperSQL := strings.ToUpper(sql)
+	trimmed := trimLeadingComments(sql)
+	prefixLen := len(sql) - len(trimmed)
+	upperTrimmed := strings.ToUpper(trimmed)
 	replacements := []struct {
 		from string
 		to   string
@@ -172,8 +176,8 @@ func translateCreateTableKind(sql string) string {
 	}
 
 	for _, replacement := range replacements {
-		if strings.HasPrefix(upperSQL, replacement.from) {
-			return replacement.to + sql[len(replacement.from):]
+		if strings.HasPrefix(upperTrimmed, replacement.from) {
+			return sql[:prefixLen] + replacement.to + trimmed[len(replacement.from):]
 		}
 	}
 

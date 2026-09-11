@@ -100,3 +100,80 @@ func TestExecutor_CreateTemporaryAndTransientTables(t *testing.T) {
 		}
 	}
 }
+
+
+func TestTranslator_CreateTransientTableWithLeadingComments(t *testing.T) {
+	translator := NewTranslator()
+	tests := []struct {
+		name string
+		sql  string
+		want string
+	}{
+		{
+			name: "line comments before transient table",
+			sql: "-- ============================================================\n" +
+				"-- TRANSIENT TABLE\n" +
+				"-- ============================================================\n" +
+				"\n" +
+				"CREATE TRANSIENT TABLE release_audit_log (\n" +
+				"    message VARCHAR\n" +
+				");",
+			want: "-- ============================================================\n" +
+				"-- TRANSIENT TABLE\n" +
+				"-- ============================================================\n" +
+				"\n" +
+				"CREATE TABLE release_audit_log (\n" +
+				"    message VARCHAR\n" +
+				");",
+		},
+		{
+			name: "block comment before transient table",
+			sql:  "/* setup */ CREATE TRANSIENT TABLE t (id INTEGER)",
+			want: "/* setup */ CREATE TABLE t (id INTEGER)",
+		},
+		{
+			name: "line comments before or-replace transient",
+			sql:  "-- recreate\nCREATE OR REPLACE TRANSIENT TABLE t (id INTEGER)",
+			want: "-- recreate\nCREATE OR REPLACE TABLE t (id INTEGER)",
+		},
+		{
+			name: "ordinary create table with comments unchanged",
+			sql:  "-- note\nCREATE TABLE t (id INTEGER)",
+			want: "-- note\nCREATE TABLE t (id INTEGER)",
+		},
+		{
+			name: "temp table with comments unchanged",
+			sql:  "-- note\nCREATE TEMP TABLE t (id INTEGER)",
+			want: "-- note\nCREATE TEMP TABLE t (id INTEGER)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := translator.Translate(tt.sql)
+			if err != nil {
+				t.Fatalf("Translate: %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("got:\n%s\nwant:\n%s", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestClassifier_IsCreateTransientTableWithLeadingComments(t *testing.T) {
+	classifier := NewClassifier()
+	cases := []string{
+		"-- setup\nCREATE TRANSIENT TABLE t (id INTEGER)",
+		"/* setup */ CREATE TRANSIENT TABLE t (id INTEGER)",
+		"-- setup\nCREATE OR REPLACE TRANSIENT TABLE t (id INTEGER)",
+		"-- setup\nCREATE TABLE t (id INTEGER)",
+		"-- setup\nCREATE TEMP TABLE t (id INTEGER)",
+		"-- setup\nCREATE TEMPORARY TABLE t (id INTEGER)",
+	}
+	for _, sql := range cases {
+		if !classifier.IsCreateTable(sql) {
+			t.Errorf("IsCreateTable did not recognise %q", sql)
+		}
+	}
+}
