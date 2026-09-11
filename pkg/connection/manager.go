@@ -4,6 +4,7 @@ package connection
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"sync"
 )
 
@@ -86,7 +87,24 @@ func (m *Manager) ExecTx(ctx context.Context, fn func(*sql.Tx) error) error {
 	m.writeMu.Lock()
 	defer m.writeMu.Unlock()
 
-	tx, err := m.db.BeginTx(ctx, nil)
+	var (
+		tx  *sql.Tx
+		err error
+	)
+	if m.pinned {
+		// A pinned manager owns the only connection available to the
+		// operation (notably while executing a procedure that uses temporary
+		// tables). Starting the transaction through db would wait for that
+		// same connection to be returned to the pool and deadlock. Begin it
+		// directly on the pinned connection instead.
+		conn, ok := m.runner.(*sql.Conn)
+		if !ok {
+			return fmt.Errorf("pinned manager runner is not a database connection")
+		}
+		tx, err = conn.BeginTx(ctx, nil)
+	} else {
+		tx, err = m.db.BeginTx(ctx, nil)
+	}
 	if err != nil {
 		return err
 	}
