@@ -1881,7 +1881,7 @@ func (r *Repository) DeleteDynamicTable(ctx context.Context, schemaID, name stri
 }
 
 // MaterializeDynamicTable atomically replaces the physical result and both catalog records.
-func (r *Repository) MaterializeDynamicTable(ctx context.Context, schemaID, name, targetLag, warehouse, definition, definitionDatabase, definitionSchema, databaseName, physicalName, materializeSQL string) (*DynamicTable, error) {
+func (r *Repository) MaterializeDynamicTable(ctx context.Context, schemaID, name, targetLag, warehouse, definition, definitionDatabase, definitionSchema, databaseName, physicalName, materializeSQL, ownerRoleID string) (*DynamicTable, error) {
 	id := uuid.New().String()
 	err := r.mgr.ExecTx(ctx, func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, materializeSQL); err != nil {
@@ -1902,12 +1902,13 @@ func (r *Repository) MaterializeDynamicTable(ctx context.Context, schemaID, name
 		}
 		_, err = tx.ExecContext(ctx, `INSERT INTO _metadata_dynamic_tables
 			(id, schema_id, name, target_lag, warehouse, definition, definition_database, definition_schema, created_at, last_refreshed_at, owner)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, '')
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?)
 			ON CONFLICT (schema_id, name) DO UPDATE SET target_lag = EXCLUDED.target_lag,
 			warehouse = EXCLUDED.warehouse, definition = EXCLUDED.definition,
 			definition_database = EXCLUDED.definition_database, definition_schema = EXCLUDED.definition_schema,
-			created_at = EXCLUDED.created_at, last_refreshed_at = EXCLUDED.last_refreshed_at`,
-			id, schemaID, strings.ToUpper(name), targetLag, strings.ToUpper(warehouse), definition, definitionDatabase, definitionSchema)
+			created_at = EXCLUDED.created_at, last_refreshed_at = EXCLUDED.last_refreshed_at,
+			owner = EXCLUDED.owner`,
+			id, schemaID, strings.ToUpper(name), targetLag, strings.ToUpper(warehouse), definition, definitionDatabase, definitionSchema, ownerRoleID)
 		if err != nil {
 			return fmt.Errorf("failed to register dynamic table definition: %w", err)
 		}

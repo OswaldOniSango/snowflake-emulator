@@ -65,7 +65,11 @@ func (p *StreamProcessor) Create(ctx context.Context, executionContext Execution
 		return nil, fmt.Errorf("source table %s not found or unreadable: %w", match[3], err)
 	}
 
-	_, err = p.repo.CreateStream(ctx, streamSchemaMetadata.ID, streamName, sourceDatabase, sourceSchema, sourceTable, "APPEND_ONLY", offset, strings.TrimSpace(match[1]) != "")
+	ownerRoleID := ""
+	if executionContext.Principal != nil {
+		ownerRoleID = executionContext.Principal.RoleID
+	}
+	_, err = p.repo.CreateStream(ctx, streamSchemaMetadata.ID, streamName, sourceDatabase, sourceSchema, sourceTable, "APPEND_ONLY", ownerRoleID, offset, strings.TrimSpace(match[1]) != "")
 	if err != nil {
 		return nil, err
 	}

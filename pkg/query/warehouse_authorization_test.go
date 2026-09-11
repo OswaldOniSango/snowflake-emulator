@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -265,6 +266,165 @@ func TestDynamicTableAuthorizationHappensBeforeAdmission(t *testing.T) {
 	}
 	if state.State != warehouse.StateSuspended || state.Running != 0 || state.Queued != 0 {
 		t.Fatalf("denied dynamic table changed admission state: %+v", state)
+	}
+	if err := service.GrantWarehousePrivilege(ctx, identity.PrivilegeUsage, "dynamic_auth_wh", role.Name); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := executor.ExecuteWithContext(ctx, executionContext, statement); err != nil {
+		t.Fatalf("authorized dynamic table creation failed: %v", err)
+	}
+	schema, err := executor.repo.GetSchemaByName(ctx, database.ID, "PUBLIC")
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := executor.repo.GetDynamicTableByName(ctx, schema.ID, "guarded")
+	if err != nil || value.Owner != role.ID {
+		t.Fatalf("persisted dynamic owner = %#v, error = %v", value, err)
+	}
+	if _, err := identity.NewService(ctx, executor.repo); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := warehouse.NewPersistentManager(ctx, executor.repo); err != nil {
+		t.Fatal(err)
+	}
+	value, err = executor.repo.GetDynamicTableByName(ctx, schema.ID, "guarded")
+	if err != nil || value.Owner != role.ID {
+		t.Fatalf("dynamic owner after reconstruction = %#v, error = %v", value, err)
+	}
+	if err := service.RevokeWarehousePrivilege(ctx, identity.PrivilegeUsage, "dynamic_auth_wh", role.Name); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := executor.ExecuteWithContext(ctx, executionContext, "ALTER DYNAMIC TABLE guarded REFRESH"); !errors.Is(err, identity.ErrPrivilegeDenied) {
+		t.Fatalf("dynamic refresh ignored revoked USAGE: %v", err)
+	}
+}
+
+func TestCopyAndStreamConsumptionDenyBeforeWarehouseAdmission(t *testing.T) {
+	executor, service, manager := setupWarehouseAuthorization(t)
+	ctx := context.Background()
+	if _, err := manager.CreateWarehouse(ctx, "data_wh", defaultWarehouseSize, ""); err != nil {
+		t.Fatal(err)
+	}
+	role, err := service.CreateRole(ctx, "loader", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.CreateUser(ctx, "loader_user", "secret", role.Name, ""); err != nil {
+		t.Fatal(err)
+	}
+	executionContext := authenticatedWarehouseContext(t, service, "loader_user", "secret", "data_wh")
+	statements := []string{
+		"COPY INTO target_table FROM @input_stage",
+		"INSERT INTO target_table SELECT * FROM source_stream",
+	}
+	for _, statement := range statements {
+		if _, err := executor.ExecuteWithContext(ctx, executionContext, statement); !errors.Is(err, identity.ErrPrivilegeDenied) {
+			t.Fatalf("%q was not denied before object processing: %v", statement, err)
+		}
+		state, stateErr := manager.GetWarehouse(ctx, "data_wh")
+		if stateErr != nil {
+			t.Fatal(stateErr)
+		}
+		if state.State != warehouse.StateSuspended || state.Running != 0 || state.Queued != 0 {
+			t.Fatalf("denied %q changed admission state: %+v", statement, state)
+		}
+	}
+}
+
+func TestNestedCallAcquiresWarehouseOnceAndUsesCallerRights(t *testing.T) {
+	executor, service, manager := setupWarehouseAuthorization(t)
+	ctx := context.Background()
+	if _, err := manager.CreateWarehouse(ctx, "call_wh", defaultWarehouseSize, ""); err != nil {
+		t.Fatal(err)
+	}
+	role, err := service.CreateRole(ctx, "caller_role", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.CreateUser(ctx, "caller_user", "secret", role.Name, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.GrantWarehousePrivilege(ctx, identity.PrivilegeUsage, "call_wh", role.Name); err != nil {
+		t.Fatal(err)
+	}
+	database, err := executor.repo.CreateDatabase(ctx, "CALL_AUTH_DB", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	caller := authenticatedWarehouseContext(t, service, "caller_user", "secret", "call_wh")
+	caller.Database, caller.Schema = database.Name, "PUBLIC"
+	if _, err := executor.ExecuteWithContext(ctx, caller, "CREATE PROCEDURE nested_write() RETURNS VARCHAR LANGUAGE SQL AS $$ BEGIN CREATE TABLE IF NOT EXISTS call_log (username VARCHAR, role_name VARCHAR); INSERT INTO call_log VALUES (CURRENT_USER(), CURRENT_ROLE()); RETURN 'ok'; END $$"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := executor.ExecuteWithContext(ctx, caller, "CREATE TABLE stream_source (id INTEGER)"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := executor.ExecuteWithContext(ctx, caller, "CREATE STREAM owned_stream ON TABLE stream_source"); err != nil {
+		t.Fatal(err)
+	}
+	schema, err := executor.repo.GetSchemaByName(ctx, database.ID, "PUBLIC")
+	if err != nil {
+		t.Fatal(err)
+	}
+	procedure, err := executor.repo.GetProcedureByName(ctx, schema.ID, "nested_write")
+	if err != nil || procedure.Owner != role.ID {
+		t.Fatalf("persisted procedure owner = %#v, error = %v", procedure, err)
+	}
+	stream, err := executor.repo.GetStreamByName(ctx, schema.ID, "owned_stream")
+	if err != nil || stream.Owner != role.ID {
+		t.Fatalf("persisted stream owner = %#v, error = %v", stream, err)
+	}
+	var admissions atomic.Int32
+	caller.OnWarehouseRunning = func() { admissions.Add(1) }
+	if _, err := executor.QueryWithContext(ctx, caller, "CALL nested_write()"); err != nil {
+		t.Fatal(err)
+	}
+	if got := admissions.Load(); got != 1 {
+		t.Fatalf("warehouse running callback count = %d, want one outer CALL admission", got)
+	}
+	result, err := executor.QueryWithContext(ctx, caller, "SELECT username, role_name FROM call_log")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Rows) != 1 || result.Rows[0][0] != "CALLER_USER" || result.Rows[0][1] != role.Name {
+		t.Fatalf("procedure did not use caller role: %#v", result.Rows)
+	}
+
+	// Reconstruct the identity service and warehouse manager over the same
+	// persistent catalog, then verify creator metadata is unchanged.
+	restoredService, err := identity.NewService(ctx, executor.repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := warehouse.NewPersistentManager(ctx, executor.repo); err != nil {
+		t.Fatal(err)
+	}
+	procedure, err = executor.repo.GetProcedureByName(ctx, schema.ID, "nested_write")
+	if err != nil || procedure.Owner != role.ID {
+		t.Fatalf("procedure owner after reconstruction = %#v, error = %v", procedure, err)
+	}
+	stream, err = executor.repo.GetStreamByName(ctx, schema.ID, "owned_stream")
+	if err != nil || stream.Owner != role.ID {
+		t.Fatalf("stream owner after reconstruction = %#v, error = %v", stream, err)
+	}
+	if err := restoredService.RevokeWarehousePrivilege(ctx, identity.PrivilegeUsage, "call_wh", role.Name); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.SuspendWarehouse(ctx, "call_wh"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := executor.QueryWithContext(ctx, caller, "CALL nested_write()"); !errors.Is(err, identity.ErrPrivilegeDenied) {
+		t.Fatalf("CALL ignored revoked USAGE: %v", err)
+	}
+	if _, err := executor.ExecuteWithContext(ctx, caller, "INSERT INTO call_log SELECT CURRENT_USER(), CURRENT_ROLE() FROM owned_stream"); !errors.Is(err, identity.ErrPrivilegeDenied) {
+		t.Fatalf("stream consumption ignored revoked USAGE: %v", err)
+	}
+	state, err := manager.GetWarehouse(ctx, "call_wh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.State != warehouse.StateSuspended || state.Running != 0 || state.Queued != 0 {
+		t.Fatalf("revoked CALL/stream consumption changed admission: %+v", state)
 	}
 }
 
