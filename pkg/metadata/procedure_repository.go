@@ -11,7 +11,7 @@ import (
 
 // CreateProcedure stores a SQL procedure in the catalog.
 // When replace is true, an existing procedure with the same schema and name is replaced.
-func (r *Repository) CreateProcedure(ctx context.Context, schemaID, name, arguments, returnType, language, body, comment string, replace bool) (*Procedure, error) {
+func (r *Repository) CreateProcedure(ctx context.Context, schemaID, name, arguments, returnType, language, body, comment, ownerRoleID string, replace bool) (*Procedure, error) {
 	if strings.TrimSpace(name) == "" {
 		return nil, fmt.Errorf("procedure name cannot be empty")
 	}
@@ -36,7 +36,7 @@ func (r *Repository) CreateProcedure(ctx context.Context, schemaID, name, argume
 		_, err := tx.ExecContext(ctx, `INSERT INTO _metadata_procedures
 			(id, schema_id, name, arguments, return_type, language, body, comment, created_at, owner)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)`,
-			id, schemaID, normalizedName, arguments, strings.ToUpper(returnType), normalizedLanguage, body, comment, "")
+			id, schemaID, normalizedName, arguments, strings.ToUpper(returnType), normalizedLanguage, body, comment, ownerRoleID)
 		if err != nil {
 			if strings.Contains(err.Error(), "UNIQUE") || strings.Contains(err.Error(), "Constraint Error") {
 				return fmt.Errorf("procedure %s already exists in schema", normalizedName)

@@ -345,7 +345,10 @@ procedure uses the procedure call's database and schema context. Dynamic
 identifiers currently support simple unquoted object names; qualified/quoted
 names remain limited. During a `CALL`, temporary tables use a single pinned
 DuckDB connection, remain isolated from concurrent calls, and are cleaned up
-when the invocation finishes.
+when the invocation finishes. Procedures use caller-rights in this emulator:
+the caller's authenticated active role remains authoritative for nested SQL.
+The creator role is persisted as metadata but does not elevate execution, and
+the outer `CALL` acquires one warehouse slot that nested statements reuse.
 
 ### Append-Only Streams
 
@@ -377,6 +380,10 @@ reads from it advances its offset, so the same changes are not returned again:
 INSERT INTO processed_users
 SELECT id, name FROM users_stream;
 ```
+
+The creator role is retained in stream metadata. Stream reads and consuming
+DML are compute operations and require `USAGE` on the active warehouse; stream
+ownership does not substitute for that privilege.
 
 ### Tasks
 
@@ -413,6 +420,9 @@ Tasks in `STARTED` state run automatically. The scheduler currently supports
 second, minute, and hour intervals, such as `1 SECOND`, `5 MINUTES`, or
 `2 HOURS`. `USING CRON` schedules are not supported yet. `EXECUTE TASK` remains
 available for immediate manual execution, including while a task is suspended.
+Scheduled tasks execute under their persisted creator role. A missing owner
+role or revoked warehouse `USAGE` fails closed before admission; manual task
+execution uses the authenticated caller's active role.
 
 ## Next Steps
 
@@ -652,6 +662,7 @@ This emulator is designed for development and testing. The following features
 are not supported or have limited support:
 
 - Production authentication and object-level authorization — local `gosnowflake` sessions authenticate users and roles, but REST/UI requests remain anonymous. Warehouse `USAGE` and `OPERATE` are enforced for authenticated sessions, but table privileges such as `GRANT SELECT` or `GRANT USAGE` are not implemented yet. Identity SQL manages users and role membership only; ownership transfer, secondary roles, and database roles are also outside the current subset.
+- Procedures use caller-rights rather than Snowflake's full configurable caller/owner-rights model. `COPY INTO` and streams enforce warehouse compute authorization, but stage and table object privileges are not implemented.
 - Distributed processing / Clustering
 - Time Travel / Zero-Copy Cloning
 - Task graphs, task dependencies, `USING CRON` schedules, and Pipes

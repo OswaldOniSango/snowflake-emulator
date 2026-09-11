@@ -110,8 +110,12 @@ func (p *DynamicTableProcessor) Create(ctx context.Context, executionContext Exe
 	}
 	physical := BuildTableName(databaseName, schemaName, name)
 	materializeSQL := "CREATE OR REPLACE TABLE " + physical + " AS " + translated
+	ownerRoleID := ""
+	if executionContext.Principal != nil {
+		ownerRoleID = executionContext.Principal.RoleID
+	}
 	if _, err := p.repo.MaterializeDynamicTable(ctx, schema.ID, name, match[3], warehouse, definition,
-		executionContext.Database, executionContext.Schema, databaseName, strings.ToUpper(schemaName)+"_"+strings.ToUpper(name), materializeSQL); err != nil {
+		executionContext.Database, executionContext.Schema, databaseName, strings.ToUpper(schemaName)+"_"+strings.ToUpper(name), materializeSQL, ownerRoleID); err != nil {
 		return nil, err
 	}
 	return &ExecResult{}, nil

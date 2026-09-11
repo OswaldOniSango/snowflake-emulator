@@ -18,9 +18,12 @@ func TestRepository_ProcedureLifecycle(t *testing.T) {
 		t.Fatalf("GetSchemaByName() error = %v", err)
 	}
 
-	procedure, err := repo.CreateProcedure(ctx, schema.ID, "HELLO", `[{"name":"NAME","type":"VARCHAR"}]`, "VARCHAR", "SQL", "RETURN :NAME", "", false)
+	procedure, err := repo.CreateProcedure(ctx, schema.ID, "HELLO", `[{"name":"NAME","type":"VARCHAR"}]`, "VARCHAR", "SQL", "RETURN :NAME", "", "ROLE-ID", false)
 	if err != nil {
 		t.Fatalf("CreateProcedure() error = %v", err)
+	}
+	if procedure.Owner != "ROLE-ID" {
+		t.Fatalf("procedure owner = %q, want ROLE-ID", procedure.Owner)
 	}
 	if procedure.Name != "HELLO" || procedure.Language != "SQL" {
 		t.Fatalf("unexpected procedure: %+v", procedure)

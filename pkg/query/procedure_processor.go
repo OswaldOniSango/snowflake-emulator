@@ -73,7 +73,11 @@ func (p *ProcedureProcessor) Create(ctx context.Context, executionContext Execut
 		return nil, err
 	}
 
-	_, err = p.repo.CreateProcedure(ctx, schema.ID, procedureName, string(encodedArguments), match[4], match[5], strings.TrimSpace(match[6]), "", strings.TrimSpace(match[1]) != "")
+	ownerRoleID := ""
+	if executionContext.Principal != nil {
+		ownerRoleID = executionContext.Principal.RoleID
+	}
+	_, err = p.repo.CreateProcedure(ctx, schema.ID, procedureName, string(encodedArguments), match[4], match[5], strings.TrimSpace(match[6]), "", ownerRoleID, strings.TrimSpace(match[1]) != "")
 	if err != nil {
 		return nil, err
 	}

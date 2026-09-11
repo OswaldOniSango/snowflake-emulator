@@ -10,7 +10,7 @@ import (
 )
 
 // CreateStream stores a stream definition and its initial source-table offset.
-func (r *Repository) CreateStream(ctx context.Context, schemaID, name, sourceDatabase, sourceSchema, sourceTable, streamType string, offset int64, replace bool) (*Stream, error) {
+func (r *Repository) CreateStream(ctx context.Context, schemaID, name, sourceDatabase, sourceSchema, sourceTable, streamType, ownerRoleID string, offset int64, replace bool) (*Stream, error) {
 	if strings.TrimSpace(name) == "" {
 		return nil, fmt.Errorf("stream name cannot be empty")
 	}
@@ -33,7 +33,7 @@ func (r *Repository) CreateStream(ctx context.Context, schemaID, name, sourceDat
 		_, err := tx.ExecContext(ctx, `INSERT INTO _metadata_streams
 			(id, schema_id, name, source_database, source_schema, source_table, stream_type, stream_offset, created_at, owner)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)`,
-			id, schemaID, normalizedName, strings.ToUpper(sourceDatabase), strings.ToUpper(sourceSchema), strings.ToUpper(sourceTable), strings.ToUpper(streamType), offset, "")
+			id, schemaID, normalizedName, strings.ToUpper(sourceDatabase), strings.ToUpper(sourceSchema), strings.ToUpper(sourceTable), strings.ToUpper(streamType), offset, ownerRoleID)
 		if err != nil {
 			if strings.Contains(err.Error(), "UNIQUE") || strings.Contains(err.Error(), "Constraint Error") {
 				return fmt.Errorf("stream %s already exists in schema", normalizedName)

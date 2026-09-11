@@ -609,6 +609,7 @@ func (e *Executor) executeWithContext(ctx context.Context, executionContext Exec
 	if err := e.validateExecutionContext(ctx, executionContext); err != nil {
 		return nil, err
 	}
+	sql = rewriteSessionFunctions(sql, executionContext)
 	// Use classifier to detect DDL statements that need metadata tracking
 	classifier := NewClassifier()
 	if err := e.dynamicTableProcessor.RejectOrdinaryMutation(ctx, executionContext, sql); err != nil {

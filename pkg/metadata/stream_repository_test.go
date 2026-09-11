@@ -18,9 +18,12 @@ func TestRepository_StreamLifecycle(t *testing.T) {
 		t.Fatalf("GetSchemaByName() error = %v", err)
 	}
 
-	stream, err := repo.CreateStream(ctx, schema.ID, "EVENTS_STREAM", "STREAM_DB", "PUBLIC", "EVENTS", "APPEND_ONLY", 4, false)
+	stream, err := repo.CreateStream(ctx, schema.ID, "EVENTS_STREAM", "STREAM_DB", "PUBLIC", "EVENTS", "APPEND_ONLY", "ROLE-ID", 4, false)
 	if err != nil {
 		t.Fatalf("CreateStream() error = %v", err)
+	}
+	if stream.Owner != "ROLE-ID" {
+		t.Fatalf("stream owner = %q, want ROLE-ID", stream.Owner)
 	}
 	if stream.Name != "EVENTS_STREAM" || stream.Offset != 4 {
 		t.Fatalf("unexpected stream: %+v", stream)
