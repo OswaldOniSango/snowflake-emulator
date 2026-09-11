@@ -252,13 +252,13 @@ func normalizeGrantedObjectName(value string) string {
 func (e *Executor) validateGrantedObject(ctx context.Context, objectType, objectName string) error {
 	parts := strings.Split(objectName, ".")
 	switch strings.ToUpper(objectType) {
-	case "DATABASE":
+	case objectTypeDatabase:
 		if len(parts) != 1 {
 			return fmt.Errorf("database grant requires an unqualified database name")
 		}
 		_, err := e.repo.GetDatabaseByName(ctx, parts[0])
 		return err
-	case "SCHEMA":
+	case objectTypeSchema:
 		if len(parts) != 2 {
 			return fmt.Errorf("schema grant requires database.schema")
 		}
@@ -268,7 +268,7 @@ func (e *Executor) validateGrantedObject(ctx context.Context, objectType, object
 		}
 		_, err = e.repo.GetSchemaByName(ctx, database.ID, parts[1])
 		return err
-	case "TABLE":
+	case objectTypeTable:
 		if len(parts) != 3 {
 			return fmt.Errorf("table grant requires database.schema.table")
 		}

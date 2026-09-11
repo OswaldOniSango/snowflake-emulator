@@ -45,13 +45,6 @@ func (r *Repository) ListObjectPrivilegeRecords(ctx context.Context) ([]ObjectPr
 	return result, rows.Err()
 }
 
-func (r *Repository) deleteObjectPrivileges(ctx context.Context, objectType, objectName string) error {
-	_, err := r.mgr.Exec(ctx, `DELETE FROM _metadata_object_privilege_grants
-		WHERE (object_type = ? AND object_name = ?)
-		   OR object_name LIKE ?`, strings.ToUpper(objectType), strings.ToUpper(objectName), strings.ToUpper(objectName)+".%")
-	return err
-}
-
 func deleteObjectPrivilegesTx(ctx context.Context, tx *sql.Tx, objectType, objectName string) error {
 	_, err := tx.ExecContext(ctx, `DELETE FROM _metadata_object_privilege_grants
 		WHERE (object_type = ? AND object_name = ?) OR object_name LIKE ?`, strings.ToUpper(objectType), strings.ToUpper(objectName), strings.ToUpper(objectName)+".%")

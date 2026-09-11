@@ -229,14 +229,14 @@ func matchingParen(sql string, open int) int {
 }
 
 var sqlKeywords = map[string]bool{
-	"SET":    true,
-	"VALUES": true,
-	"SELECT": true,
-	"WHERE":  true,
-	"FROM":   true,
-	"USING":  true,
-	"ON":     true,
-	"AS":     true,
+	"SET":            true,
+	"VALUES":         true,
+	sqlKeywordSelect: true,
+	"WHERE":          true,
+	"FROM":           true,
+	"USING":          true,
+	"ON":             true,
+	"AS":             true,
 }
 
 // rewriteContextualTableReferences maps unqualified Snowflake table names to

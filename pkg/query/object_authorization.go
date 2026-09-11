@@ -21,23 +21,17 @@ var (
 	cteNamePattern     = regexp.MustCompile(`(?is)(?:\bWITH\b|,)\s*([A-Za-z_][A-Za-z0-9_$]*)\s+AS\s*\(`)
 )
 
+const (
+	objectTypeDatabase = "DATABASE"
+	objectTypeSchema   = "SCHEMA"
+	objectTypeTable    = "TABLE"
+	sqlKeywordSelect   = "SELECT"
+	sqlKeywordInsert   = "INSERT"
+)
+
 func (e *Executor) authorizeObjectStatement(ctx context.Context, executionContext ExecutionContext, sql string) error {
 	if executionContext.Principal == nil || e.identityService == nil {
 		return nil
-	}
-	authorizeTable := func(raw, privilege string) error {
-		database, schema, table, err := resolveQualifiedObjectName(raw, "table", executionContext)
-		if err != nil {
-			return err
-		}
-		roleID := executionContext.Principal.RoleID
-		if err := e.identityService.AuthorizeObject(ctx, roleID, "DATABASE", database, identity.PrivilegeUsage); err != nil {
-			return err
-		}
-		if err := e.identityService.AuthorizeObject(ctx, roleID, "SCHEMA", database+"."+schema, identity.PrivilegeUsage); err != nil {
-			return err
-		}
-		return e.identityService.AuthorizeObject(ctx, roleID, "TABLE", database+"."+schema+"."+table, privilege)
 	}
 	value := trimLeadingComments(sql)
 	mainStatement := topLevelStatementAfterWith(value)
@@ -45,41 +39,79 @@ func (e *Executor) authorizeObjectStatement(ctx context.Context, executionContex
 	if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(mainStatement)), "MERGE ") && (strings.Contains(upper, "WHEN NOT MATCHED") || strings.Contains(upper, "THEN DELETE")) {
 		return fmt.Errorf("authorization for MERGE INSERT/DELETE branches is not supported")
 	}
-	needsObjectResolution := readTablePattern.MatchString(value) || insertTablePattern.MatchString(value) || updateTablePattern.MatchString(value) || deleteTablePattern.MatchString(value) || mergeTablePattern.MatchString(value) || createTablePattern.MatchString(value)
+	needsObjectResolution := statementNeedsObjectResolution(value)
 	if needsObjectResolution && regexp.MustCompile(`"[^"]*\s+[^"]*"`).MatchString(value) {
 		return fmt.Errorf("authorization for quoted identifiers containing whitespace is not supported")
 	}
-	if match := createTablePattern.FindStringSubmatch(mainStatement); match != nil {
-		database, schema, _, err := resolveQualifiedObjectName(match[1], "table", executionContext)
-		if err != nil {
-			return err
-		}
-		roleID := executionContext.Principal.RoleID
-		if err := e.identityService.AuthorizeObject(ctx, roleID, "DATABASE", database, identity.PrivilegeUsage); err != nil {
-			return err
-		}
-		if err := e.identityService.AuthorizeObject(ctx, roleID, "SCHEMA", database+"."+schema, identity.PrivilegeUsage); err != nil {
-			return err
-		}
-		if err := e.identityService.AuthorizeObject(ctx, roleID, "SCHEMA", database+"."+schema, identity.PrivilegeCreateTable); err != nil {
-			return err
-		}
-		// CTAS also needs SELECT on every source discovered below. A plain CREATE
-		// has no FROM/JOIN matches and therefore finishes after the CREATE check.
+	if err := e.authorizeCreateTable(ctx, executionContext, mainStatement); err != nil {
+		return err
 	}
+	if err := e.authorizeMutationTarget(ctx, executionContext, mainStatement); err != nil {
+		return err
+	}
+	return e.authorizeStatementSources(ctx, executionContext, value, mainStatement)
+}
+
+func statementNeedsObjectResolution(value string) bool {
+	return readTablePattern.MatchString(value) || insertTablePattern.MatchString(value) ||
+		updateTablePattern.MatchString(value) || deleteTablePattern.MatchString(value) ||
+		mergeTablePattern.MatchString(value) || createTablePattern.MatchString(value)
+}
+
+func (e *Executor) authorizeTable(ctx context.Context, executionContext ExecutionContext, raw, privilege string) error {
+	database, schema, table, err := resolveQualifiedObjectName(raw, "table", executionContext)
+	if err != nil {
+		return err
+	}
+	roleID := executionContext.Principal.RoleID
+	if err := e.identityService.AuthorizeObject(ctx, roleID, objectTypeDatabase, database, identity.PrivilegeUsage); err != nil {
+		return err
+	}
+	if err := e.identityService.AuthorizeObject(ctx, roleID, objectTypeSchema, database+"."+schema, identity.PrivilegeUsage); err != nil {
+		return err
+	}
+	return e.identityService.AuthorizeObject(ctx, roleID, objectTypeTable, database+"."+schema+"."+table, privilege)
+}
+
+func (e *Executor) authorizeCreateTable(ctx context.Context, executionContext ExecutionContext, statement string) error {
+	match := createTablePattern.FindStringSubmatch(statement)
+	if len(match) < 2 {
+		return nil
+	}
+	database, schema, _, err := resolveQualifiedObjectName(match[1], "table", executionContext)
+	if err != nil {
+		return err
+	}
+	roleID := executionContext.Principal.RoleID
+	if err := e.identityService.AuthorizeObject(ctx, roleID, objectTypeDatabase, database, identity.PrivilegeUsage); err != nil {
+		return err
+	}
+	if err := e.identityService.AuthorizeObject(ctx, roleID, objectTypeSchema, database+"."+schema, identity.PrivilegeUsage); err != nil {
+		return err
+	}
+	return e.identityService.AuthorizeObject(ctx, roleID, objectTypeSchema, database+"."+schema, identity.PrivilegeCreateTable)
+}
+
+func (e *Executor) authorizeMutationTarget(ctx context.Context, executionContext ExecutionContext, statement string) error {
 	for _, target := range []struct {
 		pattern   *regexp.Regexp
 		privilege string
 	}{
-		{insertTablePattern, identity.PrivilegeInsert}, {updateTablePattern, identity.PrivilegeUpdate},
-		{deleteTablePattern, identity.PrivilegeDelete}, {mergeTablePattern, identity.PrivilegeUpdate},
+		{insertTablePattern, identity.PrivilegeInsert},
+		{updateTablePattern, identity.PrivilegeUpdate},
+		{deleteTablePattern, identity.PrivilegeDelete},
+		{mergeTablePattern, identity.PrivilegeUpdate},
 	} {
-		if match := target.pattern.FindStringSubmatch(mainStatement); match != nil {
-			if err := authorizeTable(match[1], target.privilege); err != nil {
+		if match := target.pattern.FindStringSubmatch(statement); len(match) >= 2 {
+			if err := e.authorizeTable(ctx, executionContext, match[1], target.privilege); err != nil {
 				return err
 			}
 		}
 	}
+	return nil
+}
+
+func (e *Executor) authorizeStatementSources(ctx context.Context, executionContext ExecutionContext, value, mainStatement string) error {
 	cteNames := map[string]bool{}
 	for _, match := range cteNamePattern.FindAllStringSubmatch(value, -1) {
 		cteNames[strings.ToUpper(match[1])] = true
@@ -95,7 +127,7 @@ func (e *Executor) authorizeObjectStatement(ctx context.Context, executionContex
 			}
 		}
 	}
-	if match := mergeUsingPattern.FindStringSubmatch(mainStatement); match != nil {
+	if match := mergeUsingPattern.FindStringSubmatch(mainStatement); len(match) >= 2 {
 		sources = append(sources, match[1])
 	}
 	seen := map[string]bool{}
@@ -109,10 +141,10 @@ func (e *Executor) authorizeObjectStatement(ctx context.Context, executionContex
 		if strings.HasPrefix(name, "@") {
 			continue
 		}
-		if target := deleteTablePattern.FindStringSubmatch(mainStatement); target != nil && strings.EqualFold(name, target[1]) {
+		if target := deleteTablePattern.FindStringSubmatch(mainStatement); len(target) >= 2 && strings.EqualFold(name, target[1]) {
 			continue
 		}
-		if err := authorizeTable(name, identity.PrivilegeSelect); err != nil {
+		if err := e.authorizeTable(ctx, executionContext, name, identity.PrivilegeSelect); err != nil {
 			return err
 		}
 	}
@@ -152,7 +184,7 @@ func topLevelStatementAfterWith(sql string) string {
 		if depth != 0 || (i > 0 && (isIdentifierChar(trimmed[i-1]))) {
 			continue
 		}
-		for _, keyword := range []string{"INSERT", "UPDATE", "DELETE", "MERGE", "SELECT", "CREATE"} {
+		for _, keyword := range []string{sqlKeywordInsert, "UPDATE", "DELETE", "MERGE", sqlKeywordSelect, "CREATE"} {
 			if len(trimmed)-i >= len(keyword) && strings.EqualFold(trimmed[i:i+len(keyword)], keyword) && (i+len(keyword) == len(trimmed) || !isIdentifierChar(trimmed[i+len(keyword)])) {
 				return trimmed[i:]
 			}

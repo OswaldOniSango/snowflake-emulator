@@ -211,7 +211,8 @@ func TestCTASRequiresCreateAndSourceSelect(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, grant := range []struct{ privilege, objectType, objectName string }{
-		{identity.PrivilegeUsage, "DATABASE", database.Name}, {identity.PrivilegeUsage, "SCHEMA", database.Name + ".PUBLIC"},
+		{identity.PrivilegeUsage, "DATABASE", database.Name},
+		{identity.PrivilegeUsage, "SCHEMA", database.Name + ".PUBLIC"},
 		{identity.PrivilegeCreateTable, "SCHEMA", database.Name + ".PUBLIC"},
 	} {
 		if err := service.GrantObjectPrivilege(ctx, grant.privilege, grant.objectType, grant.objectName, role.Name); err != nil {
@@ -346,8 +347,10 @@ func TestPrivilegeCompatibilityAndNamespaceCleanup(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, invalid := range []struct{ p, typ string }{
-		{identity.PrivilegeUsage, "TABLE"}, {identity.PrivilegeCreateTable, "DATABASE"},
-		{identity.PrivilegeSelect, "SCHEMA"}, {identity.PrivilegeInsert, "DATABASE"},
+		{identity.PrivilegeUsage, "TABLE"},
+		{identity.PrivilegeCreateTable, "DATABASE"},
+		{identity.PrivilegeSelect, "SCHEMA"},
+		{identity.PrivilegeInsert, "DATABASE"},
 	} {
 		if err := service.GrantObjectPrivilege(ctx, invalid.p, invalid.typ, "ANY", role.Name); err == nil {
 			t.Errorf("accepted %s ON %s", invalid.p, invalid.typ)
@@ -433,7 +436,8 @@ func TestCTEMutationsCommaSourcesAndMergeUsingCannotBypassAuthorization(t *testi
 		t.Fatal(err)
 	}
 	for _, grant := range []struct{ p, typ, name string }{
-		{identity.PrivilegeUsage, "DATABASE", database.Name}, {identity.PrivilegeUsage, "SCHEMA", database.Name + ".PUBLIC"},
+		{identity.PrivilegeUsage, "DATABASE", database.Name},
+		{identity.PrivilegeUsage, "SCHEMA", database.Name + ".PUBLIC"},
 		{identity.PrivilegeSelect, "TABLE", database.Name + ".PUBLIC.SOURCE_A"},
 	} {
 		if err := service.GrantObjectPrivilege(ctx, grant.p, grant.typ, grant.name, role.Name); err != nil {
