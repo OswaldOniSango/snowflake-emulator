@@ -16,6 +16,9 @@ type Session struct {
 	Token                   string
 	MasterToken             string
 	Username                string
+	UserID                  string
+	ActiveRoleID            string
+	ActiveRole              string
 	Database                string
 	CurrentSchema           string
 	Warehouse               string
@@ -25,6 +28,12 @@ type Session struct {
 	ValidityInSeconds       int64
 	MasterValidityInSeconds int64
 	Parameters              map[string]interface{}
+}
+
+// CreateInput contains the authenticated identity and initial SQL context.
+type CreateInput struct {
+	UserID, Username, ActiveRoleID, ActiveRole string
+	Database, Schema, Warehouse                string
 }
 
 // Manager manages Snowflake sessions.
@@ -47,6 +56,12 @@ func NewManager(sessionTimeout time.Duration) *Manager {
 
 // CreateSession creates a new session with a unique token.
 func (m *Manager) CreateSession(ctx context.Context, username, database, schema string) (*Session, error) {
+	return m.CreateAuthenticatedSession(ctx, CreateInput{Username: username, Database: database, Schema: schema})
+}
+
+// CreateAuthenticatedSession creates a session for an already authenticated principal.
+func (m *Manager) CreateAuthenticatedSession(ctx context.Context, input CreateInput) (*Session, error) {
+	username, database, schema := input.Username, input.Database, input.Schema
 	if username == "" {
 		return nil, fmt.Errorf("username cannot be empty")
 	}
@@ -78,8 +93,12 @@ func (m *Manager) CreateSession(ctx context.Context, username, database, schema 
 		Token:                   token,
 		MasterToken:             masterToken,
 		Username:                username,
+		UserID:                  input.UserID,
+		ActiveRoleID:            input.ActiveRoleID,
+		ActiveRole:              input.ActiveRole,
 		Database:                database,
 		CurrentSchema:           schema,
+		Warehouse:               input.Warehouse,
 		CreatedAt:               now,
 		LastAccessedAt:          now,
 		ExpiresAt:               now.Add(m.sessionTimeout),
@@ -110,19 +129,53 @@ func (m *Manager) CreateSession(ctx context.Context, username, database, schema 
 
 // SetWarehouse records the warehouse selected during login.
 func (m *Manager) SetWarehouse(token, warehouse string) error {
+	return m.SetWarehouseContext(context.Background(), token, warehouse)
+}
+
+// SetWarehouseContext records and persists the selected warehouse.
+func (m *Manager) SetWarehouseContext(ctx context.Context, token, warehouse string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	session, ok := m.sessions[token]
 	if !ok {
 		return fmt.Errorf("session not found")
 	}
+	oldWarehouse := session.Warehouse
 	session.Warehouse = warehouse
+	if err := m.save(ctx, session); err != nil {
+		session.Warehouse = oldWarehouse
+		return err
+	}
 	return nil
+}
+
+// SetActiveRole changes a session role after the caller validates its grant.
+func (m *Manager) SetActiveRole(ctx context.Context, token, roleID, role string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	sess, ok := m.sessions[token]
+	if !ok {
+		return fmt.Errorf("session not found")
+	}
+	oldID, oldRole := sess.ActiveRoleID, sess.ActiveRole
+	sess.ActiveRoleID, sess.ActiveRole = roleID, role
+	if err := m.save(ctx, sess); err != nil {
+		sess.ActiveRoleID, sess.ActiveRole = oldID, oldRole
+		return err
+	}
+	return nil
+}
+
+func (m *Manager) save(ctx context.Context, sess *Session) error {
+	if m.store == nil {
+		return nil
+	}
+	return m.store.Save(ctx, sess)
 }
 
 // ValidateSession validates a session token and returns the session if valid.
 // It also updates the LastAccessedAt timestamp.
-func (m *Manager) ValidateSession(_ context.Context, token string) (*Session, error) {
+func (m *Manager) ValidateSession(ctx context.Context, token string) (*Session, error) {
 	if token == "" {
 		return nil, fmt.Errorf("token cannot be empty")
 	}
@@ -142,8 +195,15 @@ func (m *Manager) ValidateSession(_ context.Context, token string) (*Session, er
 		return nil, fmt.Errorf("session expired")
 	}
 
-	// Update last accessed time
-	session.LastAccessedAt = time.Now()
+	// Persist the touch before exposing it in memory, so a restart observes the
+	// same session activity that callers observed.
+	now := time.Now()
+	if m.store != nil {
+		if err := m.store.Touch(ctx, token, now); err != nil {
+			return nil, fmt.Errorf("failed to persist session activity: %w", err)
+		}
+	}
+	session.LastAccessedAt = now
 
 	return session.Copy(), nil
 }
@@ -172,7 +232,7 @@ func (m *Manager) CloseSession(ctx context.Context, token string) error {
 }
 
 // UpdateSessionContext updates the database and/or schema for a session.
-func (m *Manager) UpdateSessionContext(_ context.Context, token, database, schema string) error {
+func (m *Manager) UpdateSessionContext(ctx context.Context, token, database, schema string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -180,6 +240,7 @@ func (m *Manager) UpdateSessionContext(_ context.Context, token, database, schem
 	if !exists {
 		return fmt.Errorf("invalid session token")
 	}
+	oldDatabase, oldSchema, oldAccess := session.Database, session.CurrentSchema, session.LastAccessedAt
 
 	// Update database if provided
 	if database != "" {
@@ -192,7 +253,10 @@ func (m *Manager) UpdateSessionContext(_ context.Context, token, database, schem
 	}
 
 	session.LastAccessedAt = time.Now()
-
+	if err := m.save(ctx, session); err != nil {
+		session.Database, session.CurrentSchema, session.LastAccessedAt = oldDatabase, oldSchema, oldAccess
+		return err
+	}
 	return nil
 }
 
@@ -215,7 +279,7 @@ func (m *Manager) CleanupExpiredSessions(_ context.Context) int {
 }
 
 // RenewToken generates a new session token using master token
-func (m *Manager) RenewToken(_ context.Context, masterToken string) (*Session, string, error) {
+func (m *Manager) RenewToken(ctx context.Context, masterToken string) (*Session, string, error) {
 	if masterToken == "" {
 		return nil, "", fmt.Errorf("master token cannot be empty")
 	}
@@ -236,26 +300,32 @@ func (m *Manager) RenewToken(_ context.Context, masterToken string) (*Session, s
 		return nil, "", fmt.Errorf("master token expired")
 	}
 
-	// Revoke old session token
-	delete(m.sessions, session.Token)
-
-	// Generate new session token
+	// Construct and persist the replacement before changing the in-memory
+	// indexes. Store.ReplaceToken performs the durable swap atomically.
+	oldToken := session.Token
 	newToken, err := generateToken()
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to generate new token: %w", err)
 	}
 
-	session.Token = newToken
-	session.LastAccessedAt = time.Now()
-	session.ExpiresAt = time.Now().Add(m.sessionTimeout)
-
+	replacement := session.Copy()
+	replacement.Token = newToken
+	replacement.LastAccessedAt = time.Now()
+	replacement.ExpiresAt = time.Now().Add(m.sessionTimeout)
+	if m.store != nil {
+		if err := m.store.ReplaceToken(ctx, oldToken, replacement); err != nil {
+			return nil, "", err
+		}
+	}
+	delete(m.sessions, oldToken)
+	*session = *replacement
 	m.sessions[newToken] = session
 
 	return session.Copy(), newToken, nil
 }
 
 // UpdateLastAccessed updates the last accessed time for a session (heartbeat)
-func (m *Manager) UpdateLastAccessed(_ context.Context, token string) error {
+func (m *Manager) UpdateLastAccessed(ctx context.Context, token string) error {
 	if token == "" {
 		return fmt.Errorf("token cannot be empty")
 	}
@@ -274,7 +344,13 @@ func (m *Manager) UpdateLastAccessed(_ context.Context, token string) error {
 		return fmt.Errorf("session expired")
 	}
 
-	session.LastAccessedAt = time.Now()
+	now := time.Now()
+	if m.store != nil {
+		if err := m.store.Touch(ctx, token, now); err != nil {
+			return fmt.Errorf("failed to persist session activity: %w", err)
+		}
+	}
+	session.LastAccessedAt = now
 
 	return nil
 }
@@ -296,8 +372,12 @@ func (s *Session) Copy() *Session {
 		Token:                   s.Token,
 		MasterToken:             s.MasterToken,
 		Username:                s.Username,
+		UserID:                  s.UserID,
+		ActiveRoleID:            s.ActiveRoleID,
+		ActiveRole:              s.ActiveRole,
 		Database:                s.Database,
 		CurrentSchema:           s.CurrentSchema,
+		Warehouse:               s.Warehouse,
 		CreatedAt:               s.CreatedAt,
 		LastAccessedAt:          s.LastAccessedAt,
 		ExpiresAt:               s.ExpiresAt,

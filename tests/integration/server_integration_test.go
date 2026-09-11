@@ -14,6 +14,7 @@ import (
 
 	_ "github.com/duckdb/duckdb-go/v2"
 	"github.com/nnnkkk7/snowflake-emulator/pkg/connection"
+	"github.com/nnnkkk7/snowflake-emulator/pkg/identity"
 	"github.com/nnnkkk7/snowflake-emulator/pkg/metadata"
 	"github.com/nnnkkk7/snowflake-emulator/pkg/query"
 	"github.com/nnnkkk7/snowflake-emulator/pkg/session"
@@ -43,6 +44,10 @@ func setupTestServer(t *testing.T) (*httptest.Server, *session.Manager, *metadat
 	}
 
 	sessionMgr := session.NewManager(1 * time.Hour)
+	identityService, err := identity.NewService(context.Background(), repo)
+	if err != nil {
+		t.Fatalf("failed to initialize identity: %v", err)
+	}
 	executor := query.NewExecutor(mgr, repo)
 
 	// Initialize stage manager for COPY INTO support
@@ -87,8 +92,8 @@ func setupTestServer(t *testing.T) (*httptest.Server, *session.Manager, *metadat
 	}
 
 	// Create handlers
-	sessionHandler := handlers.NewSessionHandler(sessionMgr, repo)
-	queryHandler := handlers.NewQueryHandler(executor, sessionMgr)
+	sessionHandler := handlers.NewSessionHandler(sessionMgr, repo, identityService)
+	queryHandler := handlers.NewQueryHandler(executor, sessionMgr, identityService)
 
 	// Create router
 	mux := http.NewServeMux()
@@ -110,8 +115,8 @@ func TestIntegration_CompleteWorkflow(t *testing.T) { //nolint:gocyclo // Integr
 	// Step 1: Login with gosnowflake protocol
 	loginReq := map[string]interface{}{
 		"data": map[string]string{
-			"LOGIN_NAME":   "testuser",
-			"PASSWORD":     "testpass",
+			"LOGIN_NAME":   "ADMIN",
+			"PASSWORD":     "admin",
 			"databaseName": "TEST_DB",
 			"schemaName":   "PUBLIC",
 		},
@@ -249,8 +254,8 @@ func TestIntegration_QueryWithTranslation(t *testing.T) {
 	// Login with gosnowflake protocol
 	loginReq := map[string]interface{}{
 		"data": map[string]string{
-			"LOGIN_NAME":   "testuser",
-			"PASSWORD":     "testpass",
+			"LOGIN_NAME":   "ADMIN",
+			"PASSWORD":     "admin",
 			"databaseName": "TEST_DB",
 			"schemaName":   "PUBLIC",
 		},
@@ -330,8 +335,8 @@ func TestIntegration_ConcurrentSessions(t *testing.T) {
 			// Login with gosnowflake protocol
 			loginReq := map[string]interface{}{
 				"data": map[string]string{
-					"LOGIN_NAME":   "user" + string(rune('0'+id)),
-					"PASSWORD":     "pass",
+					"LOGIN_NAME":   "ADMIN",
+					"PASSWORD":     "admin",
 					"databaseName": "TEST_DB",
 					"schemaName":   "PUBLIC",
 				},
@@ -348,7 +353,12 @@ func TestIntegration_ConcurrentSessions(t *testing.T) {
 
 			var loginResp map[string]interface{}
 			json.NewDecoder(resp.Body).Decode(&loginResp)
-			data := loginResp["data"].(map[string]interface{})
+			data, ok := loginResp["data"].(map[string]interface{})
+			if !ok {
+				t.Errorf("Login rejected for session %d: %+v", id, loginResp)
+				done <- false
+				return
+			}
 			token := data["token"].(string)
 
 			// Execute query
@@ -392,8 +402,8 @@ func TestIntegration_SessionRenewal(t *testing.T) {
 	// Login with gosnowflake protocol
 	loginReq := map[string]interface{}{
 		"data": map[string]string{
-			"LOGIN_NAME":   "testuser",
-			"PASSWORD":     "testpass",
+			"LOGIN_NAME":   "ADMIN",
+			"PASSWORD":     "admin",
 			"databaseName": "TEST_DB",
 			"schemaName":   "PUBLIC",
 		},
@@ -481,8 +491,8 @@ func TestIntegration_AdvancedFunctions(t *testing.T) { //nolint:gocyclo // Integ
 	// Login
 	loginReq := map[string]interface{}{
 		"data": map[string]string{
-			"LOGIN_NAME":   "testuser",
-			"PASSWORD":     "testpass",
+			"LOGIN_NAME":   "ADMIN",
+			"PASSWORD":     "admin",
 			"databaseName": "TEST_DB",
 			"schemaName":   "PUBLIC",
 		},
@@ -660,8 +670,8 @@ func TestIntegration_ErrorHandling(t *testing.T) {
 	// Test 1: Login with non-existent database
 	loginReq := map[string]interface{}{
 		"data": map[string]string{
-			"LOGIN_NAME":   "testuser",
-			"PASSWORD":     "testpass",
+			"LOGIN_NAME":   "ADMIN",
+			"PASSWORD":     "admin",
 			"databaseName": "NONEXISTENT_DB",
 			"schemaName":   "PUBLIC",
 		},
@@ -700,8 +710,8 @@ func TestIntegration_ErrorHandling(t *testing.T) {
 	// First login
 	loginReq = map[string]interface{}{
 		"data": map[string]string{
-			"LOGIN_NAME":   "testuser",
-			"PASSWORD":     "testpass",
+			"LOGIN_NAME":   "ADMIN",
+			"PASSWORD":     "admin",
 			"databaseName": "TEST_DB",
 			"schemaName":   "PUBLIC",
 		},
@@ -918,8 +928,8 @@ func TestIntegration_MergeStatement(t *testing.T) {
 	// Login with gosnowflake protocol
 	loginReq := map[string]interface{}{
 		"data": map[string]string{
-			"LOGIN_NAME":   "testuser",
-			"PASSWORD":     "testpass",
+			"LOGIN_NAME":   "ADMIN",
+			"PASSWORD":     "admin",
 			"databaseName": "TEST_DB",
 			"schemaName":   "PUBLIC",
 		},
@@ -1017,8 +1027,8 @@ func TestIntegration_AllSQLOperations_Protocol(t *testing.T) {
 	// Login
 	loginReq := map[string]interface{}{
 		"data": map[string]string{
-			"LOGIN_NAME":   "testuser",
-			"PASSWORD":     "testpass",
+			"LOGIN_NAME":   "ADMIN",
+			"PASSWORD":     "admin",
 			"databaseName": "TEST_DB",
 			"schemaName":   "PUBLIC",
 		},

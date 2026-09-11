@@ -12,6 +12,7 @@ import (
 
 	_ "github.com/duckdb/duckdb-go/v2"
 	"github.com/nnnkkk7/snowflake-emulator/pkg/connection"
+	"github.com/nnnkkk7/snowflake-emulator/pkg/identity"
 	"github.com/nnnkkk7/snowflake-emulator/pkg/metadata"
 	"github.com/nnnkkk7/snowflake-emulator/pkg/session"
 	"github.com/nnnkkk7/snowflake-emulator/server/apierror"
@@ -20,6 +21,11 @@ import (
 
 // setupTestHandler creates a test handler with dependencies.
 func setupTestHandler(t *testing.T) *SessionHandler {
+	handler, _, _ := setupAuthenticatedHandler(t)
+	return handler
+}
+
+func setupAuthenticatedHandler(t *testing.T) (*SessionHandler, *session.Manager, *identity.Service) {
 	t.Helper()
 
 	db, err := sql.Open("duckdb", "")
@@ -40,6 +46,13 @@ func setupTestHandler(t *testing.T) *SessionHandler {
 	}
 
 	sessionMgr := session.NewManager(1 * time.Hour)
+	identityService, err := identity.NewService(context.Background(), repo)
+	if err != nil {
+		t.Fatalf("failed to initialize identity: %v", err)
+	}
+	if _, err := identityService.CreateUser(context.Background(), "testuser", "testpass", identity.RoleSysAdmin, ""); err != nil {
+		t.Fatalf("failed to create test user: %v", err)
+	}
 
 	// Create test database and schema
 	ctx := context.Background()
@@ -53,7 +66,60 @@ func setupTestHandler(t *testing.T) *SessionHandler {
 		t.Fatalf("failed to get default schema: %v", err)
 	}
 
-	return NewSessionHandler(sessionMgr, repo)
+	return NewSessionHandler(sessionMgr, repo, identityService), sessionMgr, identityService
+}
+
+func TestSessionHandlerAuthenticationAndResolvedRole(t *testing.T) {
+	handler, sessionMgr, identityService := setupAuthenticatedHandler(t)
+	ctx := context.Background()
+	if err := identityService.SetUserDisabled(ctx, "testuser", true); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, test := range []struct {
+		name, user, password, role string
+	}{
+		{name: "wrong password", user: "testuser", password: "wrong"},
+		{name: "missing user", user: "missing", password: "wrong"},
+		{name: "disabled user", user: "testuser", password: "testpass"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			body, _ := json.Marshal(types.LoginRequest{Data: types.LoginRequestData{
+				LoginName: test.user, Password: test.password, DatabaseName: "TEST_DB", SchemaName: "PUBLIC", RoleName: test.role,
+			}})
+			recorder := httptest.NewRecorder()
+			handler.Login(recorder, httptest.NewRequest(http.MethodPost, "/session/v1/login-request", bytes.NewReader(body)))
+			var response types.LoginResponse
+			if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+				t.Fatal(err)
+			}
+			if response.Success || response.Code != apierror.CodeAuthenticationFailed {
+				t.Fatalf("unexpected response: %+v", response)
+			}
+		})
+	}
+	if err := identityService.SetUserDisabled(ctx, "testuser", false); err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(types.LoginRequest{Data: types.LoginRequestData{
+		LoginName: "testuser", Password: "testpass", DatabaseName: "TEST_DB", SchemaName: "PUBLIC",
+	}})
+	recorder := httptest.NewRecorder()
+	handler.Login(recorder, httptest.NewRequest(http.MethodPost, "/session/v1/login-request", bytes.NewReader(body)))
+	var response types.LoginResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if !response.Success || response.Data.SessionInfo.RoleName != identity.RoleSysAdmin {
+		t.Fatalf("default role was not resolved: %+v", response)
+	}
+	sess, err := sessionMgr.ValidateSession(ctx, response.Data.Token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sess.UserID == "" || sess.ActiveRoleID == "" || sess.ActiveRole != identity.RoleSysAdmin {
+		t.Fatalf("authenticated identity was not stored: %+v", sess)
+	}
 }
 
 // TestSessionHandler_LoginRequest tests the login endpoint.

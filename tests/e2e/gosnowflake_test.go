@@ -19,6 +19,7 @@ import (
 	_ "github.com/duckdb/duckdb-go/v2"
 	"github.com/go-chi/chi/v5"
 	"github.com/nnnkkk7/snowflake-emulator/pkg/connection"
+	"github.com/nnnkkk7/snowflake-emulator/pkg/identity"
 	"github.com/nnnkkk7/snowflake-emulator/pkg/metadata"
 	"github.com/nnnkkk7/snowflake-emulator/pkg/query"
 	"github.com/nnnkkk7/snowflake-emulator/pkg/session"
@@ -62,6 +63,10 @@ func setupTestEmulator(t *testing.T) *httptest.Server {
 	if err := repo.EnsureDefaultNamespace(context.Background()); err != nil {
 		t.Fatalf("failed to create default namespace: %v", err)
 	}
+	identityService, err := identity.NewService(context.Background(), repo)
+	if err != nil {
+		t.Fatalf("failed to initialize identity: %v", err)
+	}
 
 	sessionMgr := session.NewManager(1 * time.Hour)
 	executor := query.NewExecutor(connMgr, repo)
@@ -70,8 +75,8 @@ func setupTestEmulator(t *testing.T) *httptest.Server {
 	mergeProcessor := query.NewMergeProcessor(executor)
 	executor.Configure(query.WithMergeProcessor(mergeProcessor))
 
-	sessionHandler := handlers.NewSessionHandler(sessionMgr, repo)
-	queryHandler := handlers.NewQueryHandler(executor, sessionMgr)
+	sessionHandler := handlers.NewSessionHandler(sessionMgr, repo, identityService)
+	queryHandler := handlers.NewQueryHandler(executor, sessionMgr, identityService)
 
 	r := chi.NewRouter()
 
@@ -135,7 +140,7 @@ func TestGosnowflake_BasicConnection(t *testing.T) {
 	server := setupTestEmulator(t)
 	hostPort := server.URL[7:] // Remove "http://"
 
-	dsn := fmt.Sprintf("testuser:testpass@%s/TEST_DB/PUBLIC?account=testaccount&protocol=http&loginTimeout=5", hostPort)
+	dsn := fmt.Sprintf("ADMIN:admin@%s/TEST_DB/PUBLIC?account=testaccount&protocol=http&loginTimeout=5", hostPort)
 	t.Logf("DSN: %s", dsn)
 
 	db, err := sql.Open("snowflake", dsn)
@@ -182,7 +187,7 @@ func TestGosnowflake_FunctionTranslations(t *testing.T) {
 	server := setupTestEmulator(t)
 	hostPort := server.URL[7:]
 
-	dsn := fmt.Sprintf("testuser:testpass@%s/TEST_DB/PUBLIC?account=testaccount&protocol=http&loginTimeout=5", hostPort)
+	dsn := fmt.Sprintf("ADMIN:admin@%s/TEST_DB/PUBLIC?account=testaccount&protocol=http&loginTimeout=5", hostPort)
 
 	db, err := sql.Open("snowflake", dsn)
 	if err != nil {
@@ -434,7 +439,7 @@ func TestGosnowflake_MergeStatement(t *testing.T) {
 	server := setupTestEmulator(t)
 	hostPort := server.URL[7:] // Remove "http://"
 
-	dsn := fmt.Sprintf("testuser:testpass@%s/TEST_DB/PUBLIC?account=testaccount&protocol=http&loginTimeout=5", hostPort)
+	dsn := fmt.Sprintf("ADMIN:admin@%s/TEST_DB/PUBLIC?account=testaccount&protocol=http&loginTimeout=5", hostPort)
 
 	db, err := sql.Open("snowflake", dsn)
 	if err != nil {
@@ -540,7 +545,7 @@ func TestGosnowflake_AllSQLOperations(t *testing.T) {
 	server := setupTestEmulator(t)
 	hostPort := server.URL[7:] // Remove "http://"
 
-	dsn := fmt.Sprintf("testuser:testpass@%s/TEST_DB/PUBLIC?account=testaccount&protocol=http&loginTimeout=5", hostPort)
+	dsn := fmt.Sprintf("ADMIN:admin@%s/TEST_DB/PUBLIC?account=testaccount&protocol=http&loginTimeout=5", hostPort)
 
 	db, err := sql.Open("snowflake", dsn)
 	if err != nil {

@@ -44,9 +44,23 @@ func (s *Store) initTable(ctx context.Context) error {
 			parameters VARCHAR
 		)
 	`
-
-	_, err := s.mgr.Exec(ctx, createTableSQL)
-	return err
+	if _, err := s.mgr.Exec(ctx, createTableSQL); err != nil {
+		return err
+	}
+	for _, migration := range []string{
+		`ALTER TABLE _sessions ADD COLUMN IF NOT EXISTS master_token VARCHAR`,
+		`ALTER TABLE _sessions ADD COLUMN IF NOT EXISTS user_id VARCHAR`,
+		`ALTER TABLE _sessions ADD COLUMN IF NOT EXISTS active_role_id VARCHAR`,
+		`ALTER TABLE _sessions ADD COLUMN IF NOT EXISTS active_role VARCHAR`,
+		`ALTER TABLE _sessions ADD COLUMN IF NOT EXISTS warehouse VARCHAR`,
+		`ALTER TABLE _sessions ADD COLUMN IF NOT EXISTS validity_seconds BIGINT`,
+		`ALTER TABLE _sessions ADD COLUMN IF NOT EXISTS master_validity_seconds BIGINT`,
+	} {
+		if _, err := s.mgr.Exec(ctx, migration); err != nil {
+			return fmt.Errorf("migrate sessions: %w", err)
+		}
+	}
+	return nil
 }
 
 // Save saves a session to persistent storage.
@@ -61,8 +75,10 @@ func (s *Store) Save(ctx context.Context, session *Session) error {
 	insertSQL := `
 		INSERT OR REPLACE INTO _sessions (
 			token, id, username, database_name, current_schema,
-			created_at, last_accessed_at, expires_at, parameters
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+			created_at, last_accessed_at, expires_at, parameters,
+			master_token, user_id, active_role_id, active_role, warehouse,
+			validity_seconds, master_validity_seconds
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
 	_, err = s.mgr.Exec(ctx, insertSQL,
@@ -75,6 +91,13 @@ func (s *Store) Save(ctx context.Context, session *Session) error {
 		session.LastAccessedAt,
 		session.ExpiresAt,
 		string(paramsJSON),
+		session.MasterToken,
+		session.UserID,
+		session.ActiveRoleID,
+		session.ActiveRole,
+		session.Warehouse,
+		session.ValidityInSeconds,
+		session.MasterValidityInSeconds,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to save session: %w", err)
@@ -87,7 +110,11 @@ func (s *Store) Save(ctx context.Context, session *Session) error {
 func (s *Store) Load(ctx context.Context, token string) (*Session, error) {
 	selectSQL := `
 		SELECT id, username, database_name, current_schema,
-			   created_at, last_accessed_at, expires_at, parameters
+			   created_at, last_accessed_at, expires_at, parameters,
+			   COALESCE(master_token, ''), COALESCE(user_id, ''),
+			   COALESCE(active_role_id, ''), COALESCE(active_role, ''),
+			   COALESCE(warehouse, ''), COALESCE(validity_seconds, 0),
+			   COALESCE(master_validity_seconds, 0)
 		FROM _sessions
 		WHERE token = ?
 	`
@@ -104,6 +131,13 @@ func (s *Store) Load(ctx context.Context, token string) (*Session, error) {
 		&session.LastAccessedAt,
 		&session.ExpiresAt,
 		&paramsJSON,
+		&session.MasterToken,
+		&session.UserID,
+		&session.ActiveRoleID,
+		&session.ActiveRole,
+		&session.Warehouse,
+		&session.ValidityInSeconds,
+		&session.MasterValidityInSeconds,
 	)
 
 	if err == sql.ErrNoRows {
@@ -130,6 +164,39 @@ func (s *Store) Delete(ctx context.Context, token string) error {
 	return err
 }
 
+// Touch durably records session activity without rewriting the full row.
+func (s *Store) Touch(ctx context.Context, token string, accessedAt time.Time) error {
+	_, err := s.mgr.Exec(ctx, `UPDATE _sessions SET last_accessed_at = ? WHERE token = ?`, accessedAt, token)
+	return err
+}
+
+// ReplaceToken atomically persists a renewed session and removes its old token.
+func (s *Store) ReplaceToken(ctx context.Context, oldToken string, replacement *Session) error {
+	paramsJSON, err := json.Marshal(replacement.Parameters)
+	if err != nil {
+		return fmt.Errorf("failed to marshal parameters: %w", err)
+	}
+	return s.mgr.ExecTx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `INSERT INTO _sessions (
+			token, id, username, database_name, current_schema, created_at,
+			last_accessed_at, expires_at, parameters, master_token, user_id,
+			active_role_id, active_role, warehouse, validity_seconds,
+			master_validity_seconds
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			replacement.Token, replacement.ID, replacement.Username, replacement.Database,
+			replacement.CurrentSchema, replacement.CreatedAt, replacement.LastAccessedAt,
+			replacement.ExpiresAt, string(paramsJSON), replacement.MasterToken,
+			replacement.UserID, replacement.ActiveRoleID, replacement.ActiveRole,
+			replacement.Warehouse, replacement.ValidityInSeconds,
+			replacement.MasterValidityInSeconds)
+		if err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, `DELETE FROM _sessions WHERE token = ?`, oldToken)
+		return err
+	})
+}
+
 // DeleteExpired deletes all expired sessions and returns the count.
 func (s *Store) DeleteExpired(ctx context.Context) (int, error) {
 	// First count expired sessions
@@ -154,7 +221,11 @@ func (s *Store) DeleteExpired(ctx context.Context) (int, error) {
 func (s *Store) ListAll(ctx context.Context) ([]*Session, error) {
 	selectSQL := `
 		SELECT token, id, username, database_name, current_schema,
-			   created_at, last_accessed_at, expires_at, parameters
+			   created_at, last_accessed_at, expires_at, parameters,
+			   COALESCE(master_token, ''), COALESCE(user_id, ''),
+			   COALESCE(active_role_id, ''), COALESCE(active_role, ''),
+			   COALESCE(warehouse, ''), COALESCE(validity_seconds, 0),
+			   COALESCE(master_validity_seconds, 0)
 		FROM _sessions
 		ORDER BY created_at DESC
 	`
@@ -180,6 +251,13 @@ func (s *Store) ListAll(ctx context.Context) ([]*Session, error) {
 			&session.LastAccessedAt,
 			&session.ExpiresAt,
 			&paramsJSON,
+			&session.MasterToken,
+			&session.UserID,
+			&session.ActiveRoleID,
+			&session.ActiveRole,
+			&session.Warehouse,
+			&session.ValidityInSeconds,
+			&session.MasterValidityInSeconds,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan session: %w", err)
@@ -205,4 +283,30 @@ func NewManagerWithStore(sessionTimeout time.Duration, store *Store) *Manager {
 	mgr := NewManager(sessionTimeout)
 	mgr.store = store
 	return mgr
+}
+
+// NewPersistentManager restores unexpired sessions and their master tokens.
+func NewPersistentManager(ctx context.Context, sessionTimeout time.Duration, store *Store) (*Manager, error) {
+	mgr := NewManagerWithStore(sessionTimeout, store)
+	sessions, err := store.ListAll(ctx)
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now()
+	for _, value := range sessions {
+		if now.After(value.ExpiresAt) {
+			continue
+		}
+		if value.ValidityInSeconds == 0 {
+			value.ValidityInSeconds = int64(sessionTimeout.Seconds())
+		}
+		if value.MasterValidityInSeconds == 0 {
+			value.MasterValidityInSeconds = int64(sessionTimeout.Seconds()) * 4
+		}
+		mgr.sessions[value.Token] = value
+		if value.MasterToken != "" {
+			mgr.masterTokens[value.MasterToken] = value
+		}
+	}
+	return mgr, nil
 }

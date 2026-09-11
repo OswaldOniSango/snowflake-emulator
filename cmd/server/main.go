@@ -75,12 +75,22 @@ func main() {
 	// Identity is persisted now so future authentication and authorization
 	// layers can share one catalog. Query execution remains unauthenticated in
 	// this phase; constructing the service only bootstraps system identities.
-	if _, err := identity.NewService(context.Background(), repo); err != nil {
+	identityService, err := identity.NewService(context.Background(), repo)
+	if err != nil {
 		log.Printf("Failed to initialize identity catalog: %v", err)
 		return
 	}
 
-	sessionMgr := session.NewManager(24 * time.Hour)
+	sessionStore, err := session.NewStore(connMgr)
+	if err != nil {
+		log.Printf("Failed to initialize session store: %v", err)
+		return
+	}
+	sessionMgr, err := session.NewPersistentManager(context.Background(), 24*time.Hour, sessionStore)
+	if err != nil {
+		log.Printf("Failed to restore sessions: %v", err)
+		return
+	}
 	stmtMgr := query.NewStatementManager(1 * time.Hour)
 
 	// Statements are recorded so the console's history outlives the manager's
@@ -113,8 +123,8 @@ func main() {
 	defer stopWarehouses()
 	warehouseMgr.StartAutoSuspend(warehouseContext, time.Second)
 
-	sessionHandler := handlers.NewSessionHandler(sessionMgr, repo)
-	queryHandler := handlers.NewQueryHandler(executor, sessionMgr)
+	sessionHandler := handlers.NewSessionHandler(sessionMgr, repo, identityService, warehouseMgr)
+	queryHandler := handlers.NewQueryHandler(executor, sessionMgr, identityService)
 	restAPIHandler := handlers.NewRestAPIv2HandlerWithServices(executor, stmtMgr, repo, warehouseMgr, stageMgr)
 	taskScheduler := query.NewTaskScheduler(repo, executor, time.Second)
 	taskScheduler.Start(context.Background())

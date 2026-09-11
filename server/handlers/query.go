@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nnnkkk7/snowflake-emulator/pkg/config"
+	"github.com/nnnkkk7/snowflake-emulator/pkg/identity"
 	"github.com/nnnkkk7/snowflake-emulator/pkg/query"
 	"github.com/nnnkkk7/snowflake-emulator/pkg/session"
 	"github.com/nnnkkk7/snowflake-emulator/server/apierror"
@@ -21,13 +22,19 @@ import (
 type QueryHandler struct {
 	executor   *query.Executor
 	sessionMgr *session.Manager
+	identity   *identity.Service
 }
 
 // NewQueryHandler creates a new query handler.
-func NewQueryHandler(executor *query.Executor, sessionMgr *session.Manager) *QueryHandler {
+func NewQueryHandler(executor *query.Executor, sessionMgr *session.Manager, identityService ...*identity.Service) *QueryHandler {
+	var service *identity.Service
+	if len(identityService) != 0 {
+		service = identityService[0]
+	}
 	return &QueryHandler{
 		executor:   executor,
 		sessionMgr: sessionMgr,
+		identity:   service,
 	}
 }
 
@@ -54,6 +61,10 @@ func (h *QueryHandler) ExecuteQuery(w http.ResponseWriter, r *http.Request) {
 		Schema:    sess.CurrentSchema,
 		Warehouse: sess.Warehouse,
 		SessionID: fmt.Sprintf("%d", sess.ID),
+		Role:      sess.ActiveRole,
+		Principal: &query.PrincipalContext{
+			UserID: sess.UserID, Username: sess.Username, RoleID: sess.ActiveRoleID,
+		},
 	}
 
 	// Parse request using new gosnowflake protocol
@@ -67,6 +78,10 @@ func (h *QueryHandler) ExecuteQuery(w http.ResponseWriter, r *http.Request) {
 		sendError(w, apierror.NewSnowflakeError(apierror.CodeInvalidParameter, "SQL text is required"))
 		return
 	}
+	if roleName, handled, parseErr := query.ParseUseRole(req.SQLText); handled {
+		h.executeUseRole(ctx, w, sess, token, roleName, parseErr)
+		return
+	}
 
 	// Classify the SQL statement
 	classification := query.ClassifySQL(req.SQLText)
@@ -76,6 +91,34 @@ func (h *QueryHandler) ExecuteQuery(w http.ResponseWriter, r *http.Request) {
 	} else {
 		h.executeDML(w, ctx, executionContext, sessionID, req.SQLText)
 	}
+}
+
+func (h *QueryHandler) executeUseRole(ctx context.Context, w http.ResponseWriter, sess *session.Session, token, roleName string, parseErr error) {
+	if parseErr != nil {
+		sendError(w, apierror.WrapError(apierror.CodeSQLExecutionError, parseErr.Error(), parseErr))
+		return
+	}
+	if h.identity == nil || sess.UserID == "" {
+		err := fmt.Errorf("authenticated identity is required for USE ROLE")
+		sendError(w, apierror.WrapError(apierror.CodeSQLExecutionError, err.Error(), err))
+		return
+	}
+	role, err := h.identity.ResolveActiveRole(ctx, sess.UserID, roleName)
+	if err != nil {
+		sendError(w, apierror.WrapError(apierror.CodeSQLExecutionError, "role is not available to this user", err))
+		return
+	}
+	if err := h.sessionMgr.SetActiveRole(ctx, token, role.ID, role.Name); err != nil {
+		sendError(w, apierror.WrapError(apierror.CodeSQLExecutionError, "failed to update active role", err))
+		return
+	}
+	resp := types.QueryResponse{Success: true, Data: &types.QuerySuccessData{
+		QueryID: generateQueryID(), SQLState: apierror.SQLStateSuccess,
+		StatementTypeID: int64(config.StatementTypeDML), QueryResultFormat: config.QueryResultFormatJSON,
+	}}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 // executeQuery executes a SELECT query with gosnowflake protocol.
