@@ -216,6 +216,36 @@ func (r *Repository) UpdateUserRecord(ctx context.Context, user UserRecord) erro
 	})
 }
 
+// UpdateUserConfigurationRecord atomically replaces every mutable user field
+// and ensures the selected default role is granted in the same transaction.
+func (r *Repository) UpdateUserConfigurationRecord(ctx context.Context, user UserRecord) error {
+	return r.mgr.ExecTx(ctx, func(tx *sql.Tx) error {
+		if exists, err := identityExists(ctx, tx, identityRolesTable, user.DefaultRoleID); err != nil {
+			return err
+		} else if !exists {
+			return fmt.Errorf("%w: default role", ErrIdentityNotFound)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO _metadata_user_role_grants (user_id, role_id)
+			VALUES (?, ?) ON CONFLICT (user_id, role_id) DO NOTHING`, user.ID, user.DefaultRoleID); err != nil {
+			return err
+		}
+		result, err := tx.ExecContext(ctx, `UPDATE _metadata_users SET password_hash = ?, default_role_id = ?,
+			disabled = ?, must_change_password = ?, comment = ? WHERE id = ?`, user.PasswordHash,
+			user.DefaultRoleID, user.Disabled, user.MustChangePassword, user.Comment, user.ID)
+		if err != nil {
+			return err
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if affected == 0 {
+			return fmt.Errorf("%w: user %s", ErrIdentityNotFound, user.Name)
+		}
+		return nil
+	})
+}
+
 // SetDefaultUserRoleRecord atomically grants and selects a user's default role.
 func (r *Repository) SetDefaultUserRoleRecord(ctx context.Context, userID, roleID string) error {
 	return r.mgr.ExecTx(ctx, func(tx *sql.Tx) error {

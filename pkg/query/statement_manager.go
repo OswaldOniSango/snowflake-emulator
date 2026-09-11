@@ -145,7 +145,7 @@ func (sm *StatementManager) CreateStatement(sqlText, database, schema, warehouse
 	stmt := &Statement{
 		Handle:    handle,
 		Status:    StatementStatusPending,
-		SQLText:   sqlText,
+		SQLText:   RedactSensitiveSQL(sqlText),
 		Database:  database,
 		Schema:    schema,
 		Warehouse: warehouse,
