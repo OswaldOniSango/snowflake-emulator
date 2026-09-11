@@ -26,6 +26,8 @@ var (
 	revokeRoleSQL               = regexp.MustCompile(`(?is)^REVOKE\s+ROLE\s+(` + identityIdentifierSQL + `)\s+FROM\s+(USER|ROLE)\s+(` + identityIdentifierSQL + `)\s*;?\s*$`)
 	grantWarehousePrivilegeSQL  = regexp.MustCompile(`(?is)^GRANT\s+(USAGE|OPERATE)\s+ON\s+WAREHOUSE\s+(` + identityIdentifierSQL + `)\s+TO\s+ROLE\s+(` + identityIdentifierSQL + `)\s*;?\s*$`)
 	revokeWarehousePrivilegeSQL = regexp.MustCompile(`(?is)^REVOKE\s+(USAGE|OPERATE)\s+ON\s+WAREHOUSE\s+(` + identityIdentifierSQL + `)\s+FROM\s+ROLE\s+(` + identityIdentifierSQL + `)\s*;?\s*$`)
+	grantObjectPrivilegeSQL     = regexp.MustCompile(`(?is)^GRANT\s+(USAGE|SELECT|INSERT|UPDATE|DELETE|CREATE\s+TABLE)\s+ON\s+(DATABASE|SCHEMA|TABLE)\s+([^\s;]+)\s+TO\s+ROLE\s+(` + identityIdentifierSQL + `)\s*;?\s*$`)
+	revokeObjectPrivilegeSQL    = regexp.MustCompile(`(?is)^REVOKE\s+(USAGE|SELECT|INSERT|UPDATE|DELETE|CREATE\s+TABLE)\s+ON\s+(DATABASE|SCHEMA|TABLE)\s+([^\s;]+)\s+FROM\s+ROLE\s+(` + identityIdentifierSQL + `)\s*;?\s*$`)
 	showGrantsSQL               = regexp.MustCompile(`(?is)^SHOW\s+GRANTS\s+(TO\s+(USER|ROLE)|OF\s+ROLE)\s+(` + identityIdentifierSQL + `)\s*;?\s*$`)
 	passwordSQL                 = regexp.MustCompile(`(?is)(\bPASSWORD\s*=\s*)'(?:''|[^'])*'`)
 )
@@ -65,6 +67,16 @@ func (e *Executor) executeIdentityStatement(ctx context.Context, sql string) (*E
 	case revokeWarehousePrivilegeSQL.MatchString(statement):
 		match := revokeWarehousePrivilegeSQL.FindStringSubmatch(statement)
 		return &ExecResult{}, true, e.identityService.RevokeWarehousePrivilege(ctx, match[1], parseIdentityIdentifier(match[2]), parseIdentityIdentifier(match[3]))
+	case grantObjectPrivilegeSQL.MatchString(statement):
+		match := grantObjectPrivilegeSQL.FindStringSubmatch(statement)
+		objectName := normalizeGrantedObjectName(match[3])
+		if err := e.validateGrantedObject(ctx, match[2], objectName); err != nil {
+			return &ExecResult{}, true, err
+		}
+		return &ExecResult{}, true, e.identityService.GrantObjectPrivilege(ctx, strings.Join(strings.Fields(match[1]), " "), match[2], objectName, parseIdentityIdentifier(match[4]))
+	case revokeObjectPrivilegeSQL.MatchString(statement):
+		match := revokeObjectPrivilegeSQL.FindStringSubmatch(statement)
+		return &ExecResult{}, true, e.identityService.RevokeObjectPrivilege(ctx, strings.Join(strings.Fields(match[1]), " "), match[2], normalizeGrantedObjectName(match[3]), parseIdentityIdentifier(match[4]))
 	}
 	return nil, false, nil
 }
@@ -216,10 +228,63 @@ func (e *Executor) queryIdentityStatement(ctx context.Context, sql string) (*Res
 			for _, grant := range warehouseGrants {
 				rows = append(rows, []interface{}{grant.Privilege, "WAREHOUSE", grant.WarehouseName})
 			}
+			objectGrants, grantErr := e.identityService.ObjectGrantsToRole(ctx, name)
+			if grantErr != nil {
+				return nil, true, grantErr
+			}
+			for _, grant := range objectGrants {
+				rows = append(rows, []interface{}{grant.Privilege, grant.ObjectType, grant.ObjectName})
+			}
 		}
 		return identityResult(columns, rows), true, nil
 	}
 	return nil, false, nil
+}
+
+func normalizeGrantedObjectName(value string) string {
+	parts := strings.Split(value, ".")
+	for i := range parts {
+		parts[i] = parseIdentityIdentifier(parts[i])
+	}
+	return strings.Join(parts, ".")
+}
+
+func (e *Executor) validateGrantedObject(ctx context.Context, objectType, objectName string) error {
+	parts := strings.Split(objectName, ".")
+	switch strings.ToUpper(objectType) {
+	case "DATABASE":
+		if len(parts) != 1 {
+			return fmt.Errorf("database grant requires an unqualified database name")
+		}
+		_, err := e.repo.GetDatabaseByName(ctx, parts[0])
+		return err
+	case "SCHEMA":
+		if len(parts) != 2 {
+			return fmt.Errorf("schema grant requires database.schema")
+		}
+		database, err := e.repo.GetDatabaseByName(ctx, parts[0])
+		if err != nil {
+			return err
+		}
+		_, err = e.repo.GetSchemaByName(ctx, database.ID, parts[1])
+		return err
+	case "TABLE":
+		if len(parts) != 3 {
+			return fmt.Errorf("table grant requires database.schema.table")
+		}
+		database, err := e.repo.GetDatabaseByName(ctx, parts[0])
+		if err != nil {
+			return err
+		}
+		schema, err := e.repo.GetSchemaByName(ctx, database.ID, parts[1])
+		if err != nil {
+			return err
+		}
+		_, err = e.repo.GetTableByName(ctx, schema.ID, parts[2])
+		return err
+	default:
+		return fmt.Errorf("unsupported grant object type %s", objectType)
+	}
 }
 
 func identityResult(columns []string, rows [][]interface{}) *Result {

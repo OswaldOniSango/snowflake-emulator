@@ -404,13 +404,18 @@ func (r *Repository) DeleteRoleRecord(ctx context.Context, id string) error {
 		if err := tx.QueryRowContext(ctx, `SELECT
 			(SELECT COUNT(*) FROM _metadata_users WHERE default_role_id = ?) +
 			(SELECT COUNT(*) FROM _metadata_user_role_grants WHERE role_id = ?) +
-			(SELECT COUNT(*) FROM _metadata_role_role_grants WHERE child_role_id = ? OR parent_role_id = ?) +
-			(SELECT COUNT(*) FROM _metadata_warehouse_privilege_grants WHERE role_id = ?)`,
-			id, id, id, id, id).Scan(&references); err != nil {
+			(SELECT COUNT(*) FROM _metadata_role_role_grants WHERE child_role_id = ? OR parent_role_id = ?)`,
+			id, id, id, id).Scan(&references); err != nil {
 			return err
 		}
 		if references != 0 {
 			return ErrIdentityInUse
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM _metadata_warehouse_privilege_grants WHERE role_id = ?`, id); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM _metadata_object_privilege_grants WHERE role_id = ?`, id); err != nil {
+			return err
 		}
 		result, err := tx.ExecContext(ctx, `DELETE FROM _metadata_roles WHERE id = ?`, id)
 		if err != nil {

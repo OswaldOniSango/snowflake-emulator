@@ -36,8 +36,13 @@ var (
 )
 
 const (
-	PrivilegeUsage   = "USAGE"
-	PrivilegeOperate = "OPERATE"
+	PrivilegeUsage       = "USAGE"
+	PrivilegeOperate     = "OPERATE"
+	PrivilegeSelect      = "SELECT"
+	PrivilegeInsert      = "INSERT"
+	PrivilegeUpdate      = "UPDATE"
+	PrivilegeDelete      = "DELETE"
+	PrivilegeCreateTable = "CREATE TABLE"
 )
 
 type Principal struct {
@@ -49,6 +54,18 @@ type Principal struct {
 
 type Service struct {
 	repo *metadata.Repository
+}
+
+// WithRepository returns a service view bound to the supplied repository.
+// It is used by pinned procedure execution so authorization uses the same
+// DuckDB connection instead of waiting on the outer connection pool.
+func (s *Service) WithRepository(repo *metadata.Repository) *Service {
+	if s == nil {
+		return nil
+	}
+	clone := *s
+	clone.repo = repo
+	return &clone
 }
 
 // ResolveActiveRole resolves the requested role from a user's effective role
@@ -628,6 +645,95 @@ func (s *Service) AuthorizeWarehouse(ctx context.Context, activeRoleID, warehous
 		}
 	}
 	return fmt.Errorf("%w: role %s lacks %s on warehouse %s", ErrPrivilegeDenied, active.Name, strings.ToUpper(privilege), strings.ToUpper(warehouseName))
+}
+
+func (s *Service) GrantObjectPrivilege(ctx context.Context, privilege, objectType, objectName, roleName string) error {
+	if err := validateObjectPrivilege(privilege, objectType); err != nil {
+		return err
+	}
+	role, err := s.repo.GetRoleRecordByName(ctx, roleName)
+	if err != nil {
+		return err
+	}
+	return s.repo.GrantObjectPrivilegeRecord(ctx, role.ID, objectType, objectName, privilege)
+}
+
+func (s *Service) RevokeObjectPrivilege(ctx context.Context, privilege, objectType, objectName, roleName string) error {
+	if err := validateObjectPrivilege(privilege, objectType); err != nil {
+		return err
+	}
+	role, err := s.repo.GetRoleRecordByName(ctx, roleName)
+	if err != nil {
+		return err
+	}
+	return s.repo.RevokeObjectPrivilegeRecord(ctx, role.ID, objectType, objectName, privilege)
+}
+
+func validateObjectPrivilege(privilege, objectType string) error {
+	privilege, objectType = strings.ToUpper(strings.TrimSpace(privilege)), strings.ToUpper(strings.TrimSpace(objectType))
+	valid := (privilege == PrivilegeUsage && (objectType == "DATABASE" || objectType == "SCHEMA")) ||
+		(privilege == PrivilegeCreateTable && objectType == "SCHEMA") ||
+		((privilege == PrivilegeSelect || privilege == PrivilegeInsert || privilege == PrivilegeUpdate || privilege == PrivilegeDelete) && objectType == "TABLE")
+	if !valid {
+		return fmt.Errorf("privilege %s is not valid on %s", privilege, objectType)
+	}
+	return nil
+}
+
+func (s *Service) ObjectGrantsToRole(ctx context.Context, roleName string) ([]metadata.ObjectPrivilegeRecord, error) {
+	role, err := s.repo.GetRoleRecordByName(ctx, roleName)
+	if err != nil {
+		return nil, err
+	}
+	grants, err := s.repo.ListObjectPrivilegeRecords(ctx)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]metadata.ObjectPrivilegeRecord, 0)
+	for _, grant := range grants {
+		if grant.RoleID == role.ID {
+			result = append(result, grant)
+		}
+	}
+	return result, nil
+}
+
+func (s *Service) AuthorizeObject(ctx context.Context, activeRoleID, objectType, objectName, privilege string) error {
+	active, err := s.roleByID(ctx, activeRoleID)
+	if err != nil {
+		return err
+	}
+	if active.Name == RoleAccountAdmin {
+		return nil
+	}
+	roleGrants, err := s.repo.ListRoleGrantRecords(ctx)
+	if err != nil {
+		return err
+	}
+	effective := map[string]bool{}
+	var visit func(string)
+	visit = func(id string) {
+		if effective[id] {
+			return
+		}
+		effective[id] = true
+		for _, grant := range roleGrants {
+			if grant.ParentRoleID == id {
+				visit(grant.ChildRoleID)
+			}
+		}
+	}
+	visit(activeRoleID)
+	grants, err := s.repo.ListObjectPrivilegeRecords(ctx)
+	if err != nil {
+		return err
+	}
+	for _, grant := range grants {
+		if effective[grant.RoleID] && strings.EqualFold(grant.ObjectType, objectType) && strings.EqualFold(grant.ObjectName, objectName) && strings.EqualFold(grant.Privilege, privilege) {
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: role %s lacks %s on %s %s", ErrPrivilegeDenied, active.Name, strings.ToUpper(privilege), strings.ToUpper(objectType), strings.ToUpper(objectName))
 }
 
 func publicUser(record metadata.UserRecord) User {

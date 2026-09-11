@@ -198,6 +198,15 @@ func TestScheduledTaskUsesPersistedOwnerRoleAuthorization(t *testing.T) {
 	}
 	owner := authenticatedWarehouseContext(t, service, "task_user", "secret", "task_auth_wh")
 	owner.Database, owner.Schema = database.Name, "PUBLIC"
+	for _, grant := range []struct{ privilege, objectType, objectName string }{
+		{identity.PrivilegeUsage, "DATABASE", database.Name},
+		{identity.PrivilegeUsage, "SCHEMA", database.Name + ".PUBLIC"},
+		{identity.PrivilegeInsert, "TABLE", database.Name + ".PUBLIC.TASK_LOG"},
+	} {
+		if err := service.GrantObjectPrivilege(ctx, grant.privilege, grant.objectType, grant.objectName, role.Name); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if _, err := executor.ExecuteWithContext(ctx, owner, "CREATE TASK guarded_task WAREHOUSE=task_auth_wh SCHEDULE='1 SECOND' AS INSERT INTO task_log VALUES (1)"); err != nil {
 		t.Fatal(err)
 	}
@@ -256,6 +265,15 @@ func TestDynamicTableAuthorizationHappensBeforeAdmission(t *testing.T) {
 	}
 	executionContext := authenticatedWarehouseContext(t, service, "dynamic_user", "secret", "dynamic_auth_wh")
 	executionContext.Database, executionContext.Schema = database.Name, "PUBLIC"
+	for _, grant := range []struct{ privilege, objectType, objectName string }{
+		{identity.PrivilegeUsage, "DATABASE", database.Name},
+		{identity.PrivilegeUsage, "SCHEMA", database.Name + ".PUBLIC"},
+		{identity.PrivilegeCreateTable, "SCHEMA", database.Name + ".PUBLIC"},
+	} {
+		if err := service.GrantObjectPrivilege(ctx, grant.privilege, grant.objectType, grant.objectName, role.Name); err != nil {
+			t.Fatal(err)
+		}
+	}
 	statement := "CREATE DYNAMIC TABLE guarded TARGET_LAG='1 MINUTE' WAREHOUSE=dynamic_auth_wh AS SELECT 1 AS id"
 	if _, err := executor.ExecuteWithContext(ctx, executionContext, statement); !errors.Is(err, identity.ErrPrivilegeDenied) {
 		t.Fatalf("dynamic table creation bypassed USAGE: %v", err)
@@ -313,6 +331,11 @@ func TestCopyAndStreamConsumptionDenyBeforeWarehouseAdmission(t *testing.T) {
 		t.Fatal(err)
 	}
 	executionContext := authenticatedWarehouseContext(t, service, "loader_user", "secret", "data_wh")
+	database, err := executor.repo.CreateDatabase(ctx, "DATA_AUTH_DB", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	executionContext.Database, executionContext.Schema = database.Name, "PUBLIC"
 	statements := []string{
 		"COPY INTO target_table FROM @input_stage",
 		"INSERT INTO target_table SELECT * FROM source_stream",
@@ -353,6 +376,18 @@ func TestNestedCallAcquiresWarehouseOnceAndUsesCallerRights(t *testing.T) {
 	}
 	caller := authenticatedWarehouseContext(t, service, "caller_user", "secret", "call_wh")
 	caller.Database, caller.Schema = database.Name, "PUBLIC"
+	for _, grant := range []struct{ privilege, objectType, objectName string }{
+		{identity.PrivilegeUsage, "DATABASE", database.Name},
+		{identity.PrivilegeUsage, "SCHEMA", database.Name + ".PUBLIC"},
+		{identity.PrivilegeCreateTable, "SCHEMA", database.Name + ".PUBLIC"},
+		{identity.PrivilegeInsert, "TABLE", database.Name + ".PUBLIC.CALL_LOG"},
+		{identity.PrivilegeSelect, "TABLE", database.Name + ".PUBLIC.CALL_LOG"},
+		{identity.PrivilegeSelect, "TABLE", database.Name + ".PUBLIC.OWNED_STREAM"},
+	} {
+		if err := service.GrantObjectPrivilege(ctx, grant.privilege, grant.objectType, grant.objectName, role.Name); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if _, err := executor.ExecuteWithContext(ctx, caller, "CREATE PROCEDURE nested_write() RETURNS VARCHAR LANGUAGE SQL AS $$ BEGIN CREATE TABLE IF NOT EXISTS call_log (username VARCHAR, role_name VARCHAR); INSERT INTO call_log VALUES (CURRENT_USER(), CURRENT_ROLE()); RETURN 'ok'; END $$"); err != nil {
 		t.Fatal(err)
 	}
@@ -388,6 +423,15 @@ func TestNestedCallAcquiresWarehouseOnceAndUsesCallerRights(t *testing.T) {
 	}
 	if len(result.Rows) != 1 || result.Rows[0][0] != "CALLER_USER" || result.Rows[0][1] != role.Name {
 		t.Fatalf("procedure did not use caller role: %#v", result.Rows)
+	}
+	if err := service.RevokeObjectPrivilege(ctx, identity.PrivilegeInsert, "TABLE", database.Name+".PUBLIC.CALL_LOG", role.Name); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := executor.QueryWithContext(ctx, caller, "CALL nested_write()"); !errors.Is(err, identity.ErrPrivilegeDenied) {
+		t.Fatalf("nested procedure DML skipped object authorization: %v", err)
+	}
+	if err := service.GrantObjectPrivilege(ctx, identity.PrivilegeInsert, "TABLE", database.Name+".PUBLIC.CALL_LOG", role.Name); err != nil {
+		t.Fatal(err)
 	}
 
 	// Reconstruct the identity service and warehouse manager over the same

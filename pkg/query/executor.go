@@ -138,7 +138,7 @@ func (e *Executor) withPinnedConnection(ctx context.Context, fn func(*Executor) 
 		pinnedRepo := e.repo.WithManager(mgr)
 		pinned := NewExecutor(mgr, pinnedRepo, WithWarehouseValidator(e.warehouseValidator))
 		pinned.warehouseManager = e.warehouseManager
-		pinned.identityService = e.identityService
+		pinned.identityService = e.identityService.WithRepository(pinnedRepo)
 		if e.mergeProcessor != nil {
 			pinned.mergeProcessor = NewMergeProcessor(pinned)
 		}
@@ -167,6 +167,9 @@ func (e *Executor) QueryWithContext(ctx context.Context, executionContext Execut
 	}
 	if e.warehouseManager != nil && isShowWarehouses(sql) {
 		return e.showWarehouses(ctx)
+	}
+	if err := e.authorizeObjectStatement(ctx, executionContext, sql); err != nil {
+		return nil, err
 	}
 	if e.warehouseManager != nil && RequiresWarehouse(sql) && !executionContext.warehouseAcquired {
 		if executionContext.Warehouse == "" {
@@ -571,6 +574,9 @@ func (e *Executor) ExecuteWithContext(ctx context.Context, executionContext Exec
 		if result, handled, err := e.executeWarehouseStatement(ctx, sql); handled {
 			return result, err
 		}
+	}
+	if err := e.authorizeObjectStatement(ctx, executionContext, sql); err != nil {
+		return nil, err
 	}
 	if e.warehouseManager != nil && RequiresWarehouse(sql) && !executionContext.warehouseAcquired {
 		if executionContext.Warehouse == "" {
