@@ -219,6 +219,34 @@ func TestNestedWithConnectionSeesWhatTheOuterCallJustCreated(t *testing.T) {
 	}
 }
 
+func TestPinnedExecTxUsesThePinnedConnection(t *testing.T) {
+	db := setupTestDuckDB(t)
+	db.SetMaxOpenConns(1)
+	mgr := NewManager(db)
+	ctx := context.Background()
+
+	err := mgr.WithConnection(ctx, func(pinned *Manager) error {
+		if _, err := pinned.Exec(ctx, "CREATE TABLE tx_table (value INTEGER)"); err != nil {
+			return err
+		}
+		return pinned.ExecTx(ctx, func(tx *sql.Tx) error {
+			_, err := tx.ExecContext(ctx, "INSERT INTO tx_table VALUES (1)")
+			return err
+		})
+	})
+	if err != nil {
+		t.Fatalf("pinned ExecTx() error = %v", err)
+	}
+
+	var count int
+	if err := mgr.QueryRow(ctx, "SELECT COUNT(*) FROM tx_table").Scan(&count); err != nil {
+		t.Fatalf("query committed transaction: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("row count = %d, want 1", count)
+	}
+}
+
 // TestManager_Exec_Sequential tests sequential write operations.
 // Based on DESIGN.md Section 15.3.1.
 func TestManager_Exec_Sequential(t *testing.T) {
