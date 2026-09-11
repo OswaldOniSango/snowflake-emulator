@@ -85,9 +85,19 @@ func (p *DynamicTableProcessor) Create(ctx context.Context, executionContext Exe
 	if err := p.executor.validateExecutionContext(ctx, ExecutionContext{Warehouse: warehouse}); err != nil {
 		return nil, err
 	}
+	var lease interface{ Release() }
+	if p.executor.warehouseManager != nil {
+		acquired, acquireErr := p.executor.warehouseManager.Acquire(ctx, warehouse, nil)
+		if acquireErr != nil {
+			return nil, acquireErr
+		}
+		lease = acquired
+		defer lease.Release()
+	}
 	definition := strings.TrimSpace(match[5])
 	definitionContext := executionContext
 	definitionContext.Warehouse = warehouse
+	definitionContext.warehouseAcquired = lease != nil
 	translated, err := p.translatedDefinition(ctx, definitionContext, definition)
 	if err != nil {
 		return nil, err
@@ -115,7 +125,17 @@ func (p *DynamicTableProcessor) Refresh(ctx context.Context, executionContext Ex
 	if err := p.executor.validateExecutionContext(ctx, ExecutionContext{Warehouse: dynamicTable.Warehouse}); err != nil {
 		return nil, err
 	}
+	var lease interface{ Release() }
+	if p.executor.warehouseManager != nil {
+		acquired, acquireErr := p.executor.warehouseManager.Acquire(ctx, dynamicTable.Warehouse, nil)
+		if acquireErr != nil {
+			return nil, acquireErr
+		}
+		lease = acquired
+		defer lease.Release()
+	}
 	definitionContext := ExecutionContext{Database: dynamicTable.DefinitionDatabase, Schema: dynamicTable.DefinitionSchema, Warehouse: dynamicTable.Warehouse, Role: executionContext.Role, SessionID: executionContext.SessionID}
+	definitionContext.warehouseAcquired = lease != nil
 	translated, err := p.translatedDefinition(ctx, definitionContext, dynamicTable.Definition)
 	if err != nil {
 		return nil, err

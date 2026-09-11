@@ -1157,6 +1157,30 @@ table.grid .rn {
   gap: 7px;
 }
 
+.wh-settings {
+  display: grid;
+  grid-template-columns: 1fr 72px;
+  gap: 7px;
+}
+
+.wh-settings select,
+.wh-settings input[type="number"] {
+  min-width: 0;
+  background: var(--sunk);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 5px 7px;
+  color: var(--ink);
+}
+
+.wh-settings label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--ink-2);
+  font-size: 11px;
+}
+
 /* --- history --- */
 
 .tablewrap {

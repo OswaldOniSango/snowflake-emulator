@@ -29,6 +29,8 @@ import (
 	"time"
 )
 
+const exampleWarehouse = "DOCKER_TEST_WH"
+
 var baseURL = getBaseURL()
 
 func getBaseURL() string {
@@ -44,6 +46,7 @@ type StatementRequest struct {
 	Statement string `json:"statement"`
 	Database  string `json:"database,omitempty"`
 	Schema    string `json:"schema,omitempty"`
+	Warehouse string `json:"warehouse,omitempty"`
 }
 
 // StatementResponse represents the response from statement submission
@@ -92,8 +95,16 @@ func main() {
 		fmt.Println("   Database created successfully")
 	}
 
-	// Step 3: Execute SQL statements
-	fmt.Println("\n3. Executing SQL statements...")
+	// Step 3: Create the warehouse used by compute statements.
+	fmt.Printf("\n3. Creating warehouse '%s'...\n", exampleWarehouse)
+	if err := createWarehouse(exampleWarehouse); err != nil {
+		log.Printf("   Warning: %v (may already exist)", err)
+	} else {
+		fmt.Println("   Warehouse created successfully")
+	}
+
+	// Step 4: Execute SQL statements
+	fmt.Println("\n4. Executing SQL statements...")
 
 	// Create table
 	fmt.Println("\n   Creating table 'docker_test'...")
@@ -123,8 +134,8 @@ func main() {
 	}
 	fmt.Println("   3 rows inserted")
 
-	// Step 4: Query with Snowflake functions
-	fmt.Println("\n4. Querying with Snowflake SQL functions...")
+	// Step 5: Query with Snowflake functions
+	fmt.Println("\n5. Querying with Snowflake SQL functions...")
 
 	// IFF function
 	fmt.Println("\n   IFF function (value classification):")
@@ -167,8 +178,8 @@ func main() {
 	}
 	printResponse(resp)
 
-	// Step 5: Cleanup
-	fmt.Println("\n5. Cleanup...")
+	// Step 6: Cleanup
+	fmt.Println("\n6. Cleanup...")
 	_, _ = executeStatement("DROP TABLE IF EXISTS docker_test", "DOCKER_TEST_DB", "PUBLIC")
 	fmt.Println("   Table 'docker_test' dropped")
 
@@ -198,6 +209,7 @@ func executeStatement(sql, database, schema string) (*StatementResponse, error) 
 		Statement: sql,
 		Database:  database,
 		Schema:    schema,
+		Warehouse: exampleWarehouse,
 	}
 
 	body, _ := json.Marshal(req)
@@ -225,11 +237,24 @@ func executeStatement(sql, database, schema string) (*StatementResponse, error) 
 	return &result, nil
 }
 
+func createWarehouse(name string) error {
+	req := map[string]any{
+		"name":           name,
+		"warehouse_size": "X-SMALL",
+		"auto_resume":    true,
+		"auto_suspend":   60,
+	}
+	return createResource("/api/v2/warehouses", req)
+}
+
 func createDatabase(name string) error {
-	req := map[string]string{"name": name}
+	return createResource("/api/v2/databases", map[string]string{"name": name})
+}
+
+func createResource(path string, req any) error {
 	body, _ := json.Marshal(req)
 
-	resp, err := http.Post(baseURL+"/api/v2/databases", "application/json", bytes.NewReader(body))
+	resp, err := http.Post(baseURL+path, "application/json", bytes.NewReader(body))
 	if err != nil {
 		return err
 	}

@@ -3,6 +3,7 @@ package e2e
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -17,6 +18,7 @@ import (
 	"github.com/nnnkkk7/snowflake-emulator/pkg/connection"
 	"github.com/nnnkkk7/snowflake-emulator/pkg/metadata"
 	"github.com/nnnkkk7/snowflake-emulator/pkg/query"
+	"github.com/nnnkkk7/snowflake-emulator/pkg/warehouse"
 	"github.com/nnnkkk7/snowflake-emulator/server/handlers"
 	"github.com/nnnkkk7/snowflake-emulator/server/types"
 )
@@ -49,7 +51,11 @@ func setupRESTAPIV2Server(t *testing.T) *httptest.Server {
 	mergeProcessor := query.NewMergeProcessor(executor)
 	executor.Configure(query.WithMergeProcessor(mergeProcessor))
 
-	restHandler := handlers.NewRestAPIv2Handler(executor, stmtMgr, repo)
+	warehouseManager := warehouse.NewManager()
+	if _, err := warehouseManager.CreateWarehouse(context.Background(), "COMPUTE_WH", "X-SMALL", ""); err != nil {
+		t.Fatal(err)
+	}
+	restHandler := handlers.NewRestAPIv2HandlerWithWarehouse(executor, stmtMgr, repo, warehouseManager)
 
 	r := chi.NewRouter()
 	r.Route("/api/v2", func(r chi.Router) {
@@ -119,6 +125,7 @@ func TestRESTAPIV2_SubmitStatement(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			reqBody := types.SubmitStatementRequest{
 				Statement: tc.statement,
+				Warehouse: "COMPUTE_WH",
 			}
 			body, _ := json.Marshal(reqBody)
 
@@ -162,6 +169,7 @@ func TestRESTAPIV2_GetStatement(t *testing.T) {
 	// Submit a statement first
 	reqBody := types.SubmitStatementRequest{
 		Statement: "SELECT 42 AS answer",
+		Warehouse: "COMPUTE_WH",
 	}
 	body, _ := json.Marshal(reqBody)
 
@@ -690,6 +698,7 @@ func TestRESTAPIV2_SubmitStatement_DML(t *testing.T) {
 	// Create table via statement using {DATABASE}.{SCHEMA}_{TABLE} naming convention
 	createReq := types.SubmitStatementRequest{
 		Statement: "CREATE TABLE DML_TEST_DB.DML_TEST_SCHEMA_USERS (id INTEGER, name VARCHAR(100))",
+		Warehouse: "COMPUTE_WH",
 	}
 	body, _ = json.Marshal(createReq)
 	resp, _ = http.Post(server.URL+"/api/v2/statements", "application/json", bytes.NewReader(body))
@@ -699,6 +708,7 @@ func TestRESTAPIV2_SubmitStatement_DML(t *testing.T) {
 	t.Run("InsertViaStatement", func(t *testing.T) {
 		reqBody := types.SubmitStatementRequest{
 			Statement: "INSERT INTO DML_TEST_DB.DML_TEST_SCHEMA_USERS VALUES (1, 'Alice')",
+			Warehouse: "COMPUTE_WH",
 		}
 		body, _ := json.Marshal(reqBody)
 
@@ -729,6 +739,7 @@ func TestRESTAPIV2_SubmitStatement_DML(t *testing.T) {
 	t.Run("UpdateViaStatement", func(t *testing.T) {
 		reqBody := types.SubmitStatementRequest{
 			Statement: "UPDATE DML_TEST_DB.DML_TEST_SCHEMA_USERS SET name = 'Bob' WHERE id = 1",
+			Warehouse: "COMPUTE_WH",
 		}
 		body, _ := json.Marshal(reqBody)
 
@@ -759,6 +770,7 @@ func TestRESTAPIV2_SubmitStatement_DML(t *testing.T) {
 	t.Run("DeleteViaStatement", func(t *testing.T) {
 		reqBody := types.SubmitStatementRequest{
 			Statement: "DELETE FROM DML_TEST_DB.DML_TEST_SCHEMA_USERS WHERE id = 1",
+			Warehouse: "COMPUTE_WH",
 		}
 		body, _ := json.Marshal(reqBody)
 
@@ -846,6 +858,7 @@ func TestRESTAPIV2_CreatedOnMilliseconds(t *testing.T) {
 	// Submit a statement
 	reqBody := types.SubmitStatementRequest{
 		Statement: "SELECT 1 AS num",
+		Warehouse: "COMPUTE_WH",
 	}
 	body, _ := json.Marshal(reqBody)
 
@@ -885,6 +898,7 @@ func TestRESTAPIV2_BindingValidation(t *testing.T) {
 	t.Run("ValidDateBinding", func(t *testing.T) {
 		reqBody := types.SubmitStatementRequest{
 			Statement: "SELECT :1 AS dt",
+			Warehouse: "COMPUTE_WH",
 			Bindings: map[string]*types.BindingValue{
 				"1": {Type: "DATE", Value: "2024-01-15"},
 			},
@@ -942,6 +956,7 @@ func TestRESTAPIV2_BindingValidation(t *testing.T) {
 	t.Run("ValidTimeBinding", func(t *testing.T) {
 		reqBody := types.SubmitStatementRequest{
 			Statement: "SELECT :1 AS tm",
+			Warehouse: "COMPUTE_WH",
 			Bindings: map[string]*types.BindingValue{
 				"1": {Type: "TIME", Value: "14:30:00"},
 			},
@@ -972,6 +987,7 @@ func TestRESTAPIV2_BindingValidation(t *testing.T) {
 	t.Run("ValidTimestampBinding", func(t *testing.T) {
 		reqBody := types.SubmitStatementRequest{
 			Statement: "SELECT :1 AS ts",
+			Warehouse: "COMPUTE_WH",
 			Bindings: map[string]*types.BindingValue{
 				"1": {Type: "TIMESTAMP", Value: "2024-01-15T14:30:00Z"},
 			},
@@ -1033,6 +1049,7 @@ func TestRESTAPIV2_StatementStatusURL(t *testing.T) {
 
 	reqBody := types.SubmitStatementRequest{
 		Statement: "SELECT 1 AS num",
+		Warehouse: "COMPUTE_WH",
 	}
 	body, _ := json.Marshal(reqBody)
 
@@ -1068,6 +1085,7 @@ func TestRESTAPIV2_MergeStatement(t *testing.T) {
 	executeStatement := func(statement string) types.StatementResponse {
 		reqBody := types.SubmitStatementRequest{
 			Statement: statement,
+			Warehouse: "COMPUTE_WH",
 		}
 		body, _ := json.Marshal(reqBody)
 
@@ -1197,6 +1215,7 @@ func TestRESTAPIV2_AllSQLOperations(t *testing.T) {
 	executeStatement := func(statement string) types.StatementResponse {
 		reqBody := types.SubmitStatementRequest{
 			Statement: statement,
+			Warehouse: "COMPUTE_WH",
 		}
 		body, _ := json.Marshal(reqBody)
 

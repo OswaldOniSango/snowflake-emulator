@@ -354,6 +354,11 @@ export interface Warehouse {
   auto_suspend?: number;
   auto_resume?: boolean;
   created_on?: string;
+  running?: number;
+  queued?: number;
+  last_resumed_on?: string;
+  last_suspended_on?: string;
+  last_activity_on?: string;
 }
 
 /** One row of the statement history. */
@@ -421,6 +426,22 @@ export async function createWarehouse(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name, size }),
+  });
+  if (!response.ok) {
+    const body = (await response.json().catch(() => ({}))) as { message?: string };
+    throw new StatementError("warehouse", "", body.message ?? `HTTP ${response.status}`, "");
+  }
+}
+
+export async function alterWarehouse(
+  name: string,
+  settings: Pick<Warehouse, "size" | "auto_resume" | "auto_suspend">,
+  fetchFn: typeof fetch = fetch,
+): Promise<void> {
+  const response = await fetchFn(`/api/v2/warehouses/${encodeURIComponent(name)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(settings),
   });
   if (!response.ok) {
     const body = (await response.json().catch(() => ({}))) as { message?: string };

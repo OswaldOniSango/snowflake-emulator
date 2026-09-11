@@ -95,7 +95,14 @@ func main() {
 		query.WithStageManager(stageMgr),
 		query.WithMergeProcessor(mergeProcessor),
 	)
-	warehouseMgr := warehouse.NewManager()
+	warehouseMgr, err := warehouse.NewPersistentManager(context.Background(), repo)
+	if err != nil {
+		log.Printf("Failed to initialize warehouses: %v", err)
+		return
+	}
+	warehouseContext, stopWarehouses := context.WithCancel(context.Background())
+	defer stopWarehouses()
+	warehouseMgr.StartAutoSuspend(warehouseContext, time.Second)
 
 	sessionHandler := handlers.NewSessionHandler(sessionMgr, repo)
 	queryHandler := handlers.NewQueryHandler(executor, sessionMgr)
@@ -125,7 +132,8 @@ func main() {
 
 	log.Printf("Starting Snowflake Emulator on port %s", port) //nolint:gosec // G706: port is from env var at startup, not attacker-controlled
 	if err := server.ListenAndServe(); err != nil {
-		log.Fatalf("Server failed: %v", err) //nolint:gocritic // exitAfterDefer: intentional - OS cleans up on exit
+		log.Printf("Server failed: %v", err)
+		return
 	}
 }
 
@@ -203,6 +211,7 @@ func newRouter(
 		r.Get("/warehouses", restAPIHandler.ListWarehouses)
 		r.Post("/warehouses", restAPIHandler.CreateWarehouse)
 		r.Get("/warehouses/{warehouse}", restAPIHandler.GetWarehouse)
+		r.Put("/warehouses/{warehouse}", restAPIHandler.AlterWarehouse)
 		r.Delete("/warehouses/{warehouse}", restAPIHandler.DeleteWarehouse)
 		r.Post("/warehouses/{warehouse}:resume", restAPIHandler.ResumeWarehouse)
 		r.Post("/warehouses/{warehouse}:suspend", restAPIHandler.SuspendWarehouse)

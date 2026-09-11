@@ -369,3 +369,24 @@ func TestStatementManager_RetentionPeriod(t *testing.T) {
 		t.Errorf("RetentionPeriod() = %v, want 90m", got)
 	}
 }
+
+func TestStatementManagerRecordsQueueAndExecutionTimestamps(t *testing.T) {
+	manager := NewStatementManager(time.Hour)
+	statement := manager.CreateStatement("SELECT 1", "DB", "PUBLIC", "COMPUTE_WH")
+
+	if !manager.UpdateStatus(statement.Handle, StatementStatusQueued) {
+		t.Fatal("failed to mark statement queued")
+	}
+	queued, ok := manager.GetStatement(statement.Handle)
+	if !ok || queued.QueuedOn == nil || queued.StartedOn != nil {
+		t.Fatalf("queued statement timestamps = %#v", queued)
+	}
+
+	if !manager.UpdateStatus(statement.Handle, StatementStatusRunning) {
+		t.Fatal("failed to mark statement running")
+	}
+	running, _ := manager.GetStatement(statement.Handle)
+	if running.QueuedOn == nil || running.StartedOn == nil || running.StartedOn.Before(*running.QueuedOn) {
+		t.Fatalf("running statement timestamps = %#v", running)
+	}
+}

@@ -71,6 +71,11 @@ type ExecutionContext struct {
 	Warehouse string
 	Role      string
 	SessionID string
+	// Warehouse lifecycle callbacks are used by the statement API to expose
+	// queue transitions while Acquire is blocking.
+	OnWarehouseQueued  func()
+	OnWarehouseRunning func()
+	warehouseAcquired  bool
 
 	// RowLimit caps how many rows a query materializes. Zero uses the
 	// executor's default. It lives here because it is a property of one

@@ -311,6 +311,20 @@ func (r *Repository) initMetadataTables(ctx context.Context) error {
 			schema_name VARCHAR,
 			warehouse VARCHAR
 		)`,
+		`CREATE TABLE IF NOT EXISTS _metadata_warehouses (
+			id VARCHAR PRIMARY KEY,
+			name VARCHAR NOT NULL UNIQUE,
+			state VARCHAR NOT NULL DEFAULT 'SUSPENDED',
+			size VARCHAR NOT NULL DEFAULT 'X-SMALL',
+			comment VARCHAR,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			owner VARCHAR,
+			auto_resume BOOLEAN NOT NULL DEFAULT TRUE,
+			auto_suspend INTEGER NOT NULL DEFAULT 600,
+			last_resumed_at TIMESTAMP,
+			last_suspended_at TIMESTAMP,
+			last_activity_at TIMESTAMP
+		)`,
 		`CREATE TABLE IF NOT EXISTS _metadata_procedures (
 			id VARCHAR PRIMARY KEY,
 			schema_id VARCHAR NOT NULL,
@@ -394,6 +408,8 @@ func (r *Repository) initMetadataTables(ctx context.Context) error {
 		`ALTER TABLE _metadata_query_history ADD COLUMN IF NOT EXISTS database_name VARCHAR`,
 		`ALTER TABLE _metadata_query_history ADD COLUMN IF NOT EXISTS schema_name VARCHAR`,
 		`ALTER TABLE _metadata_query_history ADD COLUMN IF NOT EXISTS warehouse VARCHAR`,
+		`ALTER TABLE _metadata_query_history ADD COLUMN IF NOT EXISTS queued_at TIMESTAMP`,
+		`ALTER TABLE _metadata_query_history ADD COLUMN IF NOT EXISTS execution_started_at TIMESTAMP`,
 		`ALTER TABLE _metadata_dynamic_tables ADD COLUMN IF NOT EXISTS definition_database VARCHAR`,
 		`ALTER TABLE _metadata_dynamic_tables ADD COLUMN IF NOT EXISTS definition_schema VARCHAR`,
 	}

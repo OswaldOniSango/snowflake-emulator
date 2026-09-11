@@ -18,6 +18,7 @@ type StatementStatus string
 
 const (
 	StatementStatusPending  StatementStatus = "pending"
+	StatementStatusQueued   StatementStatus = "queued"
 	StatementStatusRunning  StatementStatus = "running"
 	StatementStatusSuccess  StatementStatus = "success"
 	StatementStatusFailed   StatementStatus = "failed"
@@ -33,6 +34,8 @@ type Statement struct {
 	Schema      string
 	Warehouse   string
 	CreatedOn   time.Time
+	QueuedOn    *time.Time
+	StartedOn   *time.Time
 	CompletedOn *time.Time
 	Result      *Result
 	// RowsAffected is set instead of Result for a successful DDL or DML
@@ -111,6 +114,8 @@ func (sm *StatementManager) record(summary *StatementSummary) {
 		Schema:       summary.Schema,
 		Warehouse:    summary.Warehouse,
 		CreatedOn:    summary.CreatedOn,
+		QueuedOn:     summary.QueuedOn,
+		StartedOn:    summary.StartedOn,
 		CompletedOn:  summary.CompletedOn,
 		RowCount:     summary.RowCount,
 		ErrorCode:    summary.ErrorCode,
@@ -199,8 +204,14 @@ func (sm *StatementManager) UpdateStatus(handle string, status StatementStatus) 
 	}
 
 	stmt.Status = status
+	now := time.Now()
+	if status == StatementStatusQueued && stmt.QueuedOn == nil {
+		stmt.QueuedOn = &now
+	}
+	if status == StatementStatusRunning && stmt.StartedOn == nil {
+		stmt.StartedOn = &now
+	}
 	if status == StatementStatusSuccess || status == StatementStatusFailed || status == StatementStatusCanceled {
-		now := time.Now()
 		stmt.CompletedOn = &now
 	}
 	summary := summarize(stmt)
@@ -379,6 +390,8 @@ type StatementSummary struct {
 	Schema       string
 	Warehouse    string
 	CreatedOn    time.Time
+	QueuedOn     *time.Time
+	StartedOn    *time.Time
 	CompletedOn  *time.Time
 	RowCount     int
 	ErrorCode    string
@@ -461,6 +474,8 @@ func (sm *StatementManager) recordedStatements(
 			Schema:       record.Schema,
 			Warehouse:    record.Warehouse,
 			CreatedOn:    record.CreatedOn,
+			QueuedOn:     record.QueuedOn,
+			StartedOn:    record.StartedOn,
 			CompletedOn:  record.CompletedOn,
 			RowCount:     record.RowCount,
 			ErrorCode:    record.ErrorCode,
@@ -479,6 +494,8 @@ func summarize(statement *Statement) StatementSummary {
 		Schema:      statement.Schema,
 		Warehouse:   statement.Warehouse,
 		CreatedOn:   statement.CreatedOn,
+		QueuedOn:    statement.QueuedOn,
+		StartedOn:   statement.StartedOn,
 		CompletedOn: statement.CompletedOn,
 	}
 

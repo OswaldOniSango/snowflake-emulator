@@ -1,4 +1,5 @@
 import {
+  alterWarehouse,
   createWarehouse,
   dropWarehouse,
   listWarehouses,
@@ -11,12 +12,11 @@ import { renderNotice } from "./grid";
 /**
  * The warehouses view.
  *
- * Compute is emulated: every statement runs on the same local DuckDB whatever
- * a warehouse is doing, so suspending one changes what the API reports and
- * nothing else. The view says so rather than implying idle capacity.
+ * Warehouses govern lifecycle and logical admission. DuckDB remains the shared
+ * local engine, so size controls slots rather than physical query speed.
  */
 
-const SIZES = ["X-Small", "Small", "Medium", "Large", "X-Large"];
+const SIZES = ["X-SMALL", "SMALL", "MEDIUM", "LARGE", "X-LARGE", "2X-LARGE", "3X-LARGE", "4X-LARGE", "5X-LARGE", "6X-LARGE"];
 
 /**
  * The states the emulator reports. It moves through RESUMING and SUSPENDING,
@@ -28,6 +28,7 @@ export function createWarehousesView(parent: HTMLElement): { refresh: () => Prom
   const root = document.createElement("div");
   root.className = "view";
   parent.append(root);
+  let refreshTimer: ReturnType<typeof setTimeout> | undefined;
 
   async function refresh(): Promise<void> {
     root.replaceChildren(header(), renderNotice("info", "Loading warehouses…"));
@@ -42,6 +43,12 @@ export function createWarehousesView(parent: HTMLElement): { refresh: () => Prom
           ? renderNotice("info", "No warehouses", "Create one to see how the API reports it.")
           : grid(warehouses),
       );
+      clearTimeout(refreshTimer);
+      if (warehouses.some((warehouse) => warehouse.state !== "SUSPENDED")) {
+        refreshTimer = setTimeout(() => {
+          if (root.isConnected) void refresh();
+        }, 1000);
+      }
     } catch (cause) {
       root.replaceChildren(header());
       root.append(renderNotice("error", "Could not load warehouses", messageOf(cause)));
@@ -57,7 +64,7 @@ export function createWarehousesView(parent: HTMLElement): { refresh: () => Prom
 
     const blurb = document.createElement("p");
     blurb.textContent =
-      "Emulated compute. Every statement runs on the same local DuckDB engine, so a suspended warehouse only changes what the API reports.";
+      "Warehouses control query admission, lifecycle and queues. Size represents logical capacity on the shared local DuckDB engine.";
 
     const text = document.createElement("div");
     text.append(heading, blurb);
@@ -136,10 +143,53 @@ export function createWarehousesView(parent: HTMLElement): { refresh: () => Prom
       stat("Size", warehouse.size),
       stat("Auto-suspend", warehouse.auto_suspend ? `${warehouse.auto_suspend}s` : "—"),
       stat("Auto-resume", warehouse.auto_resume ? "yes" : "no"),
+      stat("Running", String(warehouse.running ?? 0)),
+      stat("Queued", String(warehouse.queued ?? 0)),
+      stat("Last activity", warehouse.last_activity_on ? new Date(warehouse.last_activity_on).toLocaleString() : "—"),
     );
 
     const actions = document.createElement("div");
     actions.className = "wh-act";
+
+    const settings = document.createElement("form");
+    settings.className = "wh-settings";
+
+    const size = document.createElement("select");
+    size.setAttribute("aria-label", `Size for ${warehouse.name}`);
+    size.append(...SIZES.map((value) => {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = value;
+      option.selected = value === warehouse.size.toUpperCase();
+      return option;
+    }));
+
+    const autoResume = document.createElement("input");
+    autoResume.type = "checkbox";
+    autoResume.checked = warehouse.auto_resume ?? true;
+    autoResume.setAttribute("aria-label", `Auto-resume ${warehouse.name}`);
+
+    const autoSuspend = document.createElement("input");
+    autoSuspend.type = "number";
+    autoSuspend.min = "0";
+    autoSuspend.value = String(warehouse.auto_suspend ?? 600);
+    autoSuspend.setAttribute("aria-label", `Auto-suspend seconds for ${warehouse.name}`);
+
+    const save = document.createElement("button");
+    save.className = "ghost";
+    save.type = "submit";
+    save.textContent = "Save settings";
+    settings.addEventListener("submit", (event) => {
+      event.preventDefault();
+      void act(() => alterWarehouse(warehouse.name, {
+        size: size.value,
+        auto_resume: autoResume.checked,
+        auto_suspend: Number(autoSuspend.value),
+      }));
+    });
+    const autoResumeLabel = document.createElement("label");
+    autoResumeLabel.append(autoResume, " Auto-resume");
+    settings.append(size, autoSuspend, autoResumeLabel, save);
 
     const toggle = document.createElement("button");
     toggle.className = "ghost";
@@ -154,7 +204,7 @@ export function createWarehousesView(parent: HTMLElement): { refresh: () => Prom
     drop.addEventListener("click", () => void act(() => dropWarehouse(warehouse.name)));
 
     actions.append(toggle, drop);
-    article.append(top, stats, actions);
+    article.append(top, stats, settings, actions);
     return article;
   }
 
