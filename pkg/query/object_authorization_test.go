@@ -361,6 +361,16 @@ func TestPrivilegeCompatibilityAndNamespaceCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	invalidSQL := []string{
+		"GRANT SELECT ON DATABASE CLEAN_NAMESPACE_DB TO ROLE compat_role",
+		"GRANT USAGE ON TABLE CLEAN_NAMESPACE_DB.PUBLIC.MISSING TO ROLE compat_role",
+		"GRANT CREATE TABLE ON DATABASE CLEAN_NAMESPACE_DB TO ROLE compat_role",
+	}
+	for _, statement := range invalidSQL {
+		if _, err := executor.Execute(ctx, statement); err == nil {
+			t.Errorf("invalid privilege/object SQL succeeded: %s", statement)
+		}
+	}
 	if err := service.GrantObjectPrivilege(ctx, identity.PrivilegeUsage, "DATABASE", database.Name, role.Name); err != nil {
 		t.Fatal(err)
 	}
@@ -389,6 +399,82 @@ func TestPrivilegeCompatibilityAndNamespaceCleanup(t *testing.T) {
 	for _, grant := range grants {
 		if strings.HasPrefix(grant.ObjectName, database.Name) {
 			t.Fatalf("database grant survived drop: %+v", grant)
+		}
+	}
+}
+
+func TestCTEMutationsCommaSourcesAndMergeUsingCannotBypassAuthorization(t *testing.T) {
+	executor, service, manager := setupWarehouseAuthorization(t)
+	ctx := context.Background()
+	if _, err := manager.CreateWarehouse(ctx, "bypass_wh", defaultWarehouseSize, ""); err != nil {
+		t.Fatal(err)
+	}
+	database, err := executor.repo.CreateDatabase(ctx, "BYPASS_DB", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	admin := authenticatedWarehouseContext(t, service, identity.DemoAdminUser, identity.DemoAdminPassword, "bypass_wh")
+	admin.Database, admin.Schema = database.Name, "PUBLIC"
+	for _, statement := range []string{
+		"CREATE TABLE target (id INTEGER)", "CREATE TABLE source_a (id INTEGER)", "CREATE TABLE source_b (id INTEGER)",
+	} {
+		if _, err := executor.ExecuteWithContext(ctx, admin, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	role, err := service.CreateRole(ctx, "bypass_role", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.CreateUser(ctx, "bypass_user", "secret", role.Name, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.GrantWarehousePrivilege(ctx, identity.PrivilegeUsage, "bypass_wh", role.Name); err != nil {
+		t.Fatal(err)
+	}
+	for _, grant := range []struct{ p, typ, name string }{
+		{identity.PrivilegeUsage, "DATABASE", database.Name}, {identity.PrivilegeUsage, "SCHEMA", database.Name + ".PUBLIC"},
+		{identity.PrivilegeSelect, "TABLE", database.Name + ".PUBLIC.SOURCE_A"},
+	} {
+		if err := service.GrantObjectPrivilege(ctx, grant.p, grant.typ, grant.name, role.Name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	user := authenticatedWarehouseContext(t, service, "bypass_user", "secret", "bypass_wh")
+	user.Database, user.Schema = database.Name, "PUBLIC"
+
+	targetCases := []string{
+		"WITH c AS (SELECT id FROM source_a) INSERT INTO target SELECT id FROM c",
+		"WITH c AS (SELECT id FROM source_a) UPDATE target SET id=2 WHERE id IN (SELECT id FROM c)",
+		"WITH c AS (SELECT id FROM source_a) DELETE FROM target WHERE id IN (SELECT id FROM c)",
+	}
+	for _, statement := range targetCases {
+		if _, err := executor.ExecuteWithContext(ctx, user, statement); !errors.Is(err, identity.ErrPrivilegeDenied) {
+			t.Errorf("CTE mutation target bypass for %q: %v", statement, err)
+		}
+	}
+	if _, err := executor.QueryWithContext(ctx, user, "SELECT * FROM source_a, source_b"); !errors.Is(err, identity.ErrPrivilegeDenied) {
+		t.Fatalf("comma source bypassed SOURCE_B SELECT: %v", err)
+	}
+	merge := "MERGE INTO target USING source_b ON target.id=source_b.id WHEN MATCHED THEN UPDATE SET id=source_b.id"
+	if _, err := executor.ExecuteWithContext(ctx, user, merge); !errors.Is(err, identity.ErrPrivilegeDenied) {
+		t.Fatalf("MERGE USING source bypassed SELECT: %v", err)
+	}
+	state, _ := manager.GetWarehouse(ctx, "bypass_wh")
+	if state.State != warehouse.StateSuspended || state.Running != 0 || state.Queued != 0 {
+		t.Fatalf("bypass attempts admitted work: %+v", state)
+	}
+}
+
+func TestTopLevelStatementAfterWith(t *testing.T) {
+	tests := map[string]string{
+		"WITH c AS (SELECT * FROM s) INSERT INTO t SELECT * FROM c":             "INSERT INTO t SELECT * FROM c",
+		"WITH a AS (SELECT '(' AS value), b AS (SELECT * FROM a) DELETE FROM t": "DELETE FROM t",
+		"UPDATE t SET id=1": "UPDATE t SET id=1",
+	}
+	for input, want := range tests {
+		if got := topLevelStatementAfterWith(input); got != want {
+			t.Errorf("got %q, want %q", got, want)
 		}
 	}
 }

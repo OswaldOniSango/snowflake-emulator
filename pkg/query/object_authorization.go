@@ -16,6 +16,9 @@ var (
 	deleteTablePattern = regexp.MustCompile(`(?i)^\s*DELETE\s+FROM\s+([^\s;]+)`)
 	mergeTablePattern  = regexp.MustCompile(`(?i)^\s*MERGE\s+INTO\s+([^\s;]+)`)
 	createTablePattern = regexp.MustCompile(`(?i)^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:(?:TEMP|TEMPORARY|TRANSIENT)\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([^\s(;]+)`)
+	fromListPattern    = regexp.MustCompile(`(?is)\bFROM\s+([^;]+?)(?:\bWHERE\b|\bGROUP\b|\bORDER\b|\bQUALIFY\b|\bLIMIT\b|\bJOIN\b|\)|;|$)`)
+	mergeUsingPattern  = regexp.MustCompile(`(?is)\bUSING\s+([^\s,;()]+)`)
+	cteNamePattern     = regexp.MustCompile(`(?is)(?:\bWITH\b|,)\s*([A-Za-z_][A-Za-z0-9_$]*)\s+AS\s*\(`)
 )
 
 func (e *Executor) authorizeObjectStatement(ctx context.Context, executionContext ExecutionContext, sql string) error {
@@ -37,15 +40,16 @@ func (e *Executor) authorizeObjectStatement(ctx context.Context, executionContex
 		return e.identityService.AuthorizeObject(ctx, roleID, "TABLE", database+"."+schema+"."+table, privilege)
 	}
 	value := trimLeadingComments(sql)
+	mainStatement := topLevelStatementAfterWith(value)
 	upper := strings.ToUpper(value)
-	if strings.HasPrefix(strings.TrimSpace(upper), "MERGE ") && (strings.Contains(upper, "WHEN NOT MATCHED") || strings.Contains(upper, "THEN DELETE")) {
+	if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(mainStatement)), "MERGE ") && (strings.Contains(upper, "WHEN NOT MATCHED") || strings.Contains(upper, "THEN DELETE")) {
 		return fmt.Errorf("authorization for MERGE INSERT/DELETE branches is not supported")
 	}
 	needsObjectResolution := readTablePattern.MatchString(value) || insertTablePattern.MatchString(value) || updateTablePattern.MatchString(value) || deleteTablePattern.MatchString(value) || mergeTablePattern.MatchString(value) || createTablePattern.MatchString(value)
 	if needsObjectResolution && regexp.MustCompile(`"[^"]*\s+[^"]*"`).MatchString(value) {
 		return fmt.Errorf("authorization for quoted identifiers containing whitespace is not supported")
 	}
-	if match := createTablePattern.FindStringSubmatch(value); match != nil {
+	if match := createTablePattern.FindStringSubmatch(mainStatement); match != nil {
 		database, schema, _, err := resolveQualifiedObjectName(match[1], "table", executionContext)
 		if err != nil {
 			return err
@@ -70,18 +74,42 @@ func (e *Executor) authorizeObjectStatement(ctx context.Context, executionContex
 		{insertTablePattern, identity.PrivilegeInsert}, {updateTablePattern, identity.PrivilegeUpdate},
 		{deleteTablePattern, identity.PrivilegeDelete}, {mergeTablePattern, identity.PrivilegeUpdate},
 	} {
-		if match := target.pattern.FindStringSubmatch(value); match != nil {
+		if match := target.pattern.FindStringSubmatch(mainStatement); match != nil {
 			if err := authorizeTable(match[1], target.privilege); err != nil {
 				return err
 			}
 		}
 	}
+	cteNames := map[string]bool{}
+	for _, match := range cteNamePattern.FindAllStringSubmatch(value, -1) {
+		cteNames[strings.ToUpper(match[1])] = true
+	}
+	sources := make([]string, 0)
 	for _, match := range readTablePattern.FindAllStringSubmatch(value, -1) {
-		name := strings.Trim(match[1], `"`)
+		sources = append(sources, match[1])
+	}
+	for _, match := range fromListPattern.FindAllStringSubmatch(value, -1) {
+		for _, item := range strings.Split(match[1], ",") {
+			if fields := strings.Fields(strings.TrimSpace(item)); len(fields) > 0 {
+				sources = append(sources, fields[0])
+			}
+		}
+	}
+	if match := mergeUsingPattern.FindStringSubmatch(mainStatement); match != nil {
+		sources = append(sources, match[1])
+	}
+	seen := map[string]bool{}
+	for _, source := range sources {
+		name := strings.Trim(source, `"`)
+		key := strings.ToUpper(name)
+		if seen[key] || cteNames[key] {
+			continue
+		}
+		seen[key] = true
 		if strings.HasPrefix(name, "@") {
 			continue
 		}
-		if target := deleteTablePattern.FindStringSubmatch(value); target != nil && strings.EqualFold(name, target[1]) {
+		if target := deleteTablePattern.FindStringSubmatch(mainStatement); target != nil && strings.EqualFold(name, target[1]) {
 			continue
 		}
 		if err := authorizeTable(name, identity.PrivilegeSelect); err != nil {
@@ -89,4 +117,50 @@ func (e *Executor) authorizeObjectStatement(ctx context.Context, executionContex
 		}
 	}
 	return nil
+}
+
+func topLevelStatementAfterWith(sql string) string {
+	trimmed := strings.TrimSpace(sql)
+	if !strings.HasPrefix(strings.ToUpper(trimmed), "WITH ") {
+		return trimmed
+	}
+	depth, quote := 0, byte(0)
+	for i := 0; i < len(trimmed); i++ {
+		ch := trimmed[i]
+		if quote != 0 {
+			if ch == quote {
+				if i+1 < len(trimmed) && trimmed[i+1] == quote {
+					i++
+					continue
+				}
+				quote = 0
+			}
+			continue
+		}
+		if ch == '\'' || ch == '"' {
+			quote = ch
+			continue
+		}
+		if ch == '(' {
+			depth++
+			continue
+		}
+		if ch == ')' {
+			depth--
+			continue
+		}
+		if depth != 0 || (i > 0 && (isIdentifierChar(trimmed[i-1]))) {
+			continue
+		}
+		for _, keyword := range []string{"INSERT", "UPDATE", "DELETE", "MERGE", "SELECT", "CREATE"} {
+			if len(trimmed)-i >= len(keyword) && strings.EqualFold(trimmed[i:i+len(keyword)], keyword) && (i+len(keyword) == len(trimmed) || !isIdentifierChar(trimmed[i+len(keyword)])) {
+				return trimmed[i:]
+			}
+		}
+	}
+	return trimmed
+}
+
+func isIdentifierChar(ch byte) bool {
+	return ch == '_' || ch == '$' || ch >= '0' && ch <= '9' || ch >= 'A' && ch <= 'Z' || ch >= 'a' && ch <= 'z'
 }
