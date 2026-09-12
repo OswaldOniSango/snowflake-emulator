@@ -2,6 +2,7 @@ import "./style.css";
 import {
   cancelStatement,
   CODE_CANCELED,
+  listWarehouses,
   runStatement,
   StatementError,
   translateStatement,
@@ -20,10 +21,10 @@ import { createHistoryView } from "./history";
 import { createWarehousesView } from "./warehouses";
 import { createLimitationsButton } from "./limitations";
 import { createThemeToggle } from "./theme";
-import { createIdentityAdminView, roleNamesFromRows } from "./identity-admin";
+import { createIdentityAdminView, discoverAvailableRoles } from "./identity-admin";
 import { splitStatements, statementAt, type Statement as StatementRange } from "./statements";
 import { renderTranslation } from "./translation";
-import { login, logout, session, subscribe, useRole, type AuthSession } from "./auth";
+import { login, logout, rememberRole, session, subscribe, useRole, useWarehouse, type AuthSession } from "./auth";
 import {
   loadWorkspace,
   nextWorksheetName,
@@ -52,6 +53,7 @@ const MARK = `
 </svg>`;
 
 const SHELL = `
+<div class="login-screen" data-role="login"></div>
 <header class="topbar">
   <div class="brand">${MARK}<b>Mallard</b><span>local</span></div>
   <nav class="nav" data-role="nav">
@@ -75,6 +77,7 @@ const SHELL = `
     <div class="tabstrip" data-role="tabs" role="tablist" aria-label="Open worksheets"></div>
 
     <div class="ctxbar">
+      <div data-role="compute-context"></div>
       <div data-role="context"></div>
       <button class="run" data-role="run">Run <kbd data-role="shortcut"></kbd></button>
       <button class="ghost danger" data-role="cancel" hidden>Cancel</button>
@@ -133,6 +136,8 @@ function main(): void {
   const pill = pick(root, "pill");
   const meta = pick(root, "meta");
   const identity = pick(root, "identity");
+  const loginScreen = pick(root, "login");
+  const computeContext = pick(root, "compute-context");
 
   const workspace: Workspace = loadWorkspace();
   let activeTab: "results" | "translation" = "results";
@@ -149,6 +154,10 @@ function main(): void {
   let canceled = false;
   let translatedStatement = "";
   let running = false;
+  // Incremented whenever the visible execution belongs to a context that is
+  // no longer active (another worksheet or an ended login session). Late
+  // responses from an older generation must never repaint the UI.
+  let executionGeneration = 0;
 
   pick(root, "shortcut").textContent = isApplePlatform() ? "⌘↵" : "Ctrl+↵";
   pick(root, "theme").append(createThemeToggle());
@@ -189,15 +198,20 @@ function main(): void {
 
   subscribe((value) => {
     if (value) {
+      loginScreen.hidden = true;
       const next = { database: value.database, schema: value.schema };
       active().context = next;
       contextPicker.set(next);
       persist();
-    }
-    if (!value) {
+    } else {
+      resetOutput();
+      showTab("results");
+      loginScreen.hidden = false;
+      renderLogin(loginScreen, active().context);
       showView("worksheets");
     }
-    void renderIdentity(identity, active().context, value);
+    renderIdentity(identity, value);
+    void renderComputeContext(computeContext, active().context, value);
   });
 
   createExplorer({
@@ -281,6 +295,7 @@ function main(): void {
     }
 
     running = true;
+    const generation = executionGeneration;
     canceled = false;
     runningHandle = null;
     runButton.disabled = true;
@@ -300,8 +315,17 @@ function main(): void {
         editor.highlightRunning({ from: statement.start, to: statement.end });
 
         const result = await runStatement(statement.text, context, fetch, (handle) => {
-          runningHandle = handle;
+          if (generation === executionGeneration) {
+            runningHandle = handle;
+          } else {
+            void cancelStatement(handle);
+          }
         });
+        if (generation !== executionGeneration) {
+          return;
+        }
+        const changedRole = roleFromUseStatement(statement.text);
+        if (changedRole) rememberRole(changedRole);
         elapsed += result.elapsedMs;
 
         // A statement that created or dropped an object has just invalidated
@@ -334,6 +358,9 @@ function main(): void {
         }
       }
     } catch (cause) {
+      if (generation !== executionGeneration) {
+        return;
+      }
       const error = asStatementError(cause);
       shownResult = null;
       if (error.code === CODE_CANCELED) {
@@ -348,12 +375,14 @@ function main(): void {
         setStatus("err", "Failed", `${error.code} · SQLSTATE ${error.sqlState}`);
       }
     } finally {
-      running = false;
-      runningHandle = null;
-      runButton.disabled = false;
-      runAllButton.disabled = false;
-      cancelButton.hidden = true;
-      showTab("results");
+      if (generation === executionGeneration) {
+        running = false;
+        runningHandle = null;
+        runButton.disabled = false;
+        runAllButton.disabled = false;
+        cancelButton.hidden = true;
+        showTab("results");
+      }
     }
   }
 
@@ -408,8 +437,10 @@ function main(): void {
     }
 
     dock.replaceChildren(renderNotice("info", "Translating…"));
+    const generation = executionGeneration;
     void translateStatement(statement, active().context)
       .then((translation) => {
+        if (generation !== executionGeneration) return;
         translationPane = renderTranslation(translation);
         translatedStatement = statement;
         if (activeTab === "translation") {
@@ -417,6 +448,7 @@ function main(): void {
         }
       })
       .catch((cause: unknown) => {
+        if (generation !== executionGeneration) return;
         const error = asStatementError(cause);
         if (activeTab === "translation") {
           dock.replaceChildren(renderNotice("error", firstLine(error.message), error.message));
@@ -428,6 +460,17 @@ function main(): void {
 
   /** Output belongs to a worksheet, so moving to another one clears it. */
   function resetOutput(): void {
+    executionGeneration += 1;
+    canceled = true;
+    if (runningHandle) {
+      void cancelStatement(runningHandle);
+    }
+    running = false;
+    runningHandle = null;
+    runButton.disabled = false;
+    runAllButton.disabled = false;
+    cancelButton.hidden = true;
+    cancelButton.disabled = false;
     translationPane = null;
     translatedStatement = "";
     shownResult = null;
@@ -701,77 +744,216 @@ function main(): void {
   void showHealth(root);
 }
 
-async function renderIdentity(parent: HTMLElement, context: ExecutionContext, value: AuthSession | null = session()): Promise<void> {
-  parent.replaceChildren();
-  if (!value) {
-    const form = document.createElement("form");
-    form.className = "identity-login";
-    const username = input("Username", "ADMIN");
-    const password = input("Password", "admin", "password");
-    const submit = document.createElement("button");
-    submit.className = "ghost";
-    submit.type = "submit";
-    submit.textContent = "Sign in";
-    const error = document.createElement("span");
-    error.className = "identity-error";
-    form.append(username, password, submit, error);
-    form.addEventListener("submit", (event) => {
-      event.preventDefault();
-      submit.disabled = true;
-      error.textContent = "";
-      void login({ username: username.value, password: password.value, database: context.database, schema: context.schema })
-        .catch((cause: unknown) => { error.textContent = cause instanceof Error ? cause.message : "Login failed"; })
-        .finally(() => { submit.disabled = false; });
-    });
-    parent.append(form);
-    return;
-  }
+function roleFromUseStatement(statement: string): string | null {
+  const match = statement.trim().match(/^USE\s+ROLE\s+(?:"((?:[^"]|"")+)"|([A-Za-z_][A-Za-z0-9_$]*))\s*;?$/i);
+  if (!match) return null;
+  return match[1]?.replaceAll('""', '"') ?? match[2]?.toUpperCase() ?? null;
+}
 
+function renderLogin(parent: HTMLElement, context: ExecutionContext): void {
+  parent.replaceChildren();
+  const card = document.createElement("section");
+  card.className = "login-card";
+  const logo = document.createElement("div");
+  logo.className = "login-logo";
+  logo.innerHTML = MARK;
+  const title = document.createElement("h1");
+  title.textContent = "Sign in to Mallard";
+  const subtitle = document.createElement("p");
+  subtitle.textContent = "Snowflake Emulator · Local";
+  const form = document.createElement("form");
+  form.className = "login-form";
+  const username = labeledInput("Username", "ADMIN");
+  const password = labeledInput("Password", "admin", "password");
+  const submit = document.createElement("button");
+  submit.className = "login-submit";
+  submit.type = "submit";
+  submit.textContent = "Sign in";
+  const error = document.createElement("p");
+  error.className = "login-error";
+  error.setAttribute("role", "alert");
+  form.append(username.wrapper, password.wrapper, submit, error);
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    submit.disabled = true;
+    submit.textContent = "Signing in…";
+    error.textContent = "";
+    void login({ username: username.input.value, password: password.input.value, database: context.database, schema: context.schema })
+      .catch((cause: unknown) => { error.textContent = cause instanceof Error ? cause.message : "Login failed"; })
+      .finally(() => {
+        submit.disabled = false;
+        submit.textContent = "Sign in";
+      });
+  });
+  card.append(logo, title, subtitle, form);
+  parent.append(card);
+  username.input.focus();
+}
+
+function renderIdentity(parent: HTMLElement, value: AuthSession | null): void {
+  parent.replaceChildren();
+  if (!value) return;
   const label = document.createElement("span");
   label.className = "identity-user";
-  label.textContent = value.username;
-  const roles = document.createElement("select");
-  roles.setAttribute("aria-label", "Active role");
-  const roleNames = await discoverRoles(context, value.role);
-  for (const role of [...new Set(roleNames)]) {
-    const option = document.createElement("option");
-    option.value = role;
-    option.textContent = role;
-    option.selected = role === value.role;
-    roles.append(option);
-  }
-  roles.addEventListener("change", () => {
-    roles.disabled = true;
-    void useRole(roles.value).catch((cause: unknown) => {
-      roles.value = value.role;
-      window.alert(cause instanceof Error ? cause.message : "Role change failed");
-    }).finally(() => { roles.disabled = false; });
-  });
+  label.textContent = value.username.slice(0, 1).toUpperCase();
+  label.title = value.username;
   const out = document.createElement("button");
-  out.className = "ghost";
+  out.className = "identity-signout";
   out.textContent = "Sign out";
   out.addEventListener("click", () => void logout());
-  parent.append(label, roles, out);
+  parent.append(label, out);
 }
 
-async function discoverRoles(context: ExecutionContext, currentRole: string): Promise<string[]> {
-  try {
-    const result = await runStatement("SHOW ROLES", context);
-    return roleNamesFromRows(result.rows, currentRole);
-  } catch {
-    // A role list is optional for anonymous/local compatibility. Never offer
-    // guessed roles when the catalog could not confirm them.
-    return [currentRole];
-  }
+async function renderComputeContext(parent: HTMLElement, context: ExecutionContext, value: AuthSession | null): Promise<void> {
+  parent.replaceChildren();
+  if (!value) return;
+  const root = document.createElement("div");
+  root.className = "selector-shell compute-selector";
+  const trigger = document.createElement("button");
+  trigger.type = "button";
+  trigger.className = "context-trigger";
+  trigger.setAttribute("aria-label", "Choose role and warehouse");
+  trigger.setAttribute("aria-expanded", "false");
+  trigger.textContent = `${value.role} · ${value.warehouse || "Choose warehouse"} ⌄`;
+  const popover = document.createElement("div");
+  popover.className = "selector-popover compute-popover";
+  popover.hidden = true;
+  root.append(trigger, popover);
+  parent.append(root);
+
+  let [roles, warehouses] = await Promise.all([
+    discoverAvailableRoles(context, value.username, value.role),
+    listWarehouses().catch(() => []),
+  ]);
+
+  let selectorError = "";
+
+  const render = (): void => {
+    const current = session() ?? value;
+    const roleColumn = computeColumn("Use role…", roles, current.role, async (role) => {
+      selectorError = "";
+      try {
+        await useRole(role);
+        popover.hidden = true;
+        trigger.setAttribute("aria-expanded", "false");
+      } catch (cause: unknown) {
+        selectorError = cause instanceof Error ? cause.message : "Role change failed";
+        render();
+      }
+    });
+    const warehouseColumn =
+      computeColumn("Use warehouse…", warehouses.map((warehouse) => warehouse.name), current.warehouse, (warehouse) => {
+        useWarehouse(warehouse);
+      }, new Map(warehouses.map((warehouse) => [warehouse.name, `${warehouse.size} · ${warehouse.state.toLowerCase()}`])));
+    popover.replaceChildren(roleColumn, warehouseColumn);
+    if (selectorError) {
+      const error = document.createElement("p");
+      error.className = "selector-error";
+      error.setAttribute("role", "status");
+      error.textContent = selectorError;
+      popover.append(error);
+    }
+  };
+  trigger.addEventListener("click", () => {
+    const opening = popover.hidden;
+    if (opening) closeOtherSelectors(popover);
+    popover.hidden = !opening;
+    trigger.setAttribute("aria-expanded", String(!popover.hidden));
+    if (!popover.hidden) {
+      render();
+      void Promise.all([
+        discoverAvailableRoles(context, value.username, session()?.role ?? value.role),
+        listWarehouses().catch(() => []),
+      ]).then(([nextRoles, nextWarehouses]) => {
+        roles = nextRoles;
+        warehouses = nextWarehouses;
+        render();
+      });
+    }
+  });
+  root.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      popover.hidden = true;
+      trigger.setAttribute("aria-expanded", "false");
+    }
+  });
 }
 
-function input(label: string, value: string, type = "text"): HTMLInputElement {
-  const element = document.createElement("input");
-  element.type = type;
-  element.value = value;
-  element.placeholder = label;
-  element.setAttribute("aria-label", label);
-  return element;
+function closeOtherSelectors(current: HTMLElement): void {
+  document.querySelectorAll<HTMLElement>(".selector-popover").forEach((popover) => {
+    if (popover !== current) popover.hidden = true;
+  });
+  document.querySelectorAll<HTMLElement>('.context-trigger[aria-expanded="true"]').forEach((button) => {
+    if (button.nextElementSibling !== current) button.setAttribute("aria-expanded", "false");
+  });
+}
+
+function computeColumn(
+  placeholder: string,
+  names: string[],
+  selected: string,
+  choose: (name: string) => void | Promise<unknown>,
+  details = new Map<string, string>(),
+): HTMLElement {
+  const column = document.createElement("section");
+  column.className = "selector-column";
+  const search = document.createElement("input");
+  search.type = "search";
+  search.placeholder = placeholder;
+  search.setAttribute("aria-label", placeholder);
+  const list = document.createElement("div");
+  list.className = "selector-list";
+  const render = (): void => {
+    const query = search.value.trim().toLowerCase();
+    const found = names.filter((name) => name.toLowerCase().includes(query));
+    list.replaceChildren(...found.map((name) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "selector-option";
+      button.setAttribute("aria-current", name === selected ? "true" : "false");
+      const label = document.createElement("span");
+      label.textContent = name;
+      button.append(label);
+      const detail = details.get(name);
+      if (detail) {
+        const meta = document.createElement("small");
+        meta.textContent = detail;
+        button.append(meta);
+      }
+      if (name === selected) {
+        const check = document.createElement("span");
+        check.className = "selector-check";
+        check.textContent = "✓";
+        button.append(check);
+      }
+      button.addEventListener("click", () => void choose(name));
+      return button;
+    }));
+    if (found.length === 0) {
+      const empty = document.createElement("p");
+      empty.className = "selector-empty";
+      empty.textContent = "No matches";
+      list.append(empty);
+    }
+  };
+  search.addEventListener("input", render);
+  render();
+  column.append(search, list);
+  return column;
+}
+
+function labeledInput(label: string, value: string, type = "text"): { wrapper: HTMLElement; input: HTMLInputElement } {
+  const wrapper = document.createElement("label");
+  const caption = document.createElement("span");
+  caption.textContent = label;
+  const input = document.createElement("input");
+  input.type = type;
+  input.value = value;
+  input.autocomplete = type === "password" ? "current-password" : "username";
+  caption.setAttribute("for", `login-${type}`);
+  input.id = `login-${type}`;
+  wrapper.append(caption, input);
+  return { wrapper, input };
 }
 
 function summary(total: number, done: number, result: Statement, elapsedMs: number): string {

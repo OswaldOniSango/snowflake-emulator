@@ -1,14 +1,6 @@
 import { listDatabases, listSchemas } from "./api";
 import type { ExecutionContext } from "./workspace";
 
-/**
- * Chooses the database and schema statements run in.
- *
- * The namespace is per worksheet rather than global: two worksheets often look
- * at different schemas, and carrying one context across all of them makes the
- * second one silently wrong.
- */
-
 export interface ContextPickerOptions {
   parent: HTMLElement;
   initial: ExecutionContext;
@@ -16,133 +8,183 @@ export interface ContextPickerOptions {
 }
 
 export interface ContextPicker {
-  /** Shows a context chosen elsewhere, as when switching worksheets. */
   set(context: ExecutionContext): void;
 }
 
+/** Snowflake-style two-column database/schema picker. */
 export function createContextPicker(options: ContextPickerOptions): ContextPicker {
   let context = { ...options.initial };
+  let databases: string[] = [];
+  let schemas: string[] = [];
 
   const root = document.createElement("div");
-  root.className = "context-picker";
+  root.className = "selector-shell namespace-selector";
+  const trigger = document.createElement("button");
+  trigger.className = "context-trigger";
+  trigger.type = "button";
+  trigger.setAttribute("aria-label", "Choose database and schema");
+  trigger.setAttribute("aria-expanded", "false");
+  const popover = document.createElement("div");
+  popover.className = "selector-popover namespace-popover";
+  popover.hidden = true;
+  root.append(trigger, popover);
   options.parent.append(root);
 
-  const database = select("Database", () => {
-    context = { database: database.value, schema: "" };
-    void loadSchemas();
-  });
-  const schema = select("Schema", () => {
-    context = { ...context, schema: schema.value };
-    options.onChange({ ...context });
-  });
+  function renderTrigger(): void {
+    trigger.replaceChildren(icon("database"), text(context.database || "Database"), separator(), icon("schema"), text(context.schema || "Schema"), chevron());
+  }
 
-  root.append(database.field, schema.field);
+  function renderPopover(): void {
+    popover.replaceChildren(
+      column("Databases", databases, context.database, async (database) => {
+        context = { database, schema: "" };
+        renderTrigger();
+        await loadSchemas(database);
+        renderPopover();
+      }),
+      column("Schemas", schemas, context.schema, (schema) => {
+        context = { ...context, schema };
+        renderTrigger();
+        close();
+        options.onChange({ ...context });
+      }),
+    );
+  }
 
   async function loadDatabases(): Promise<void> {
     try {
-      const found = await listDatabases();
-      const names = found.map((entry) => entry.name);
-
-      // A stored context can outlive what it names: the emulator runs in
-      // memory by default, so a restart leaves the worksheet pointing at a
-      // database that no longer exists. Falling back to a real one keeps the
-      // console usable instead of leaving the picker blank.
-      const chosen = names.includes(context.database)
-        ? context.database
-        : (names[0] ?? context.database);
-
-      fill(database, names.length > 0 ? names : [context.database], chosen);
+      databases = (await listDatabases()).map((entry) => entry.name);
+      const chosen = databases.includes(context.database) ? context.database : (databases[0] ?? context.database);
       context = { ...context, database: chosen };
-      await loadSchemas();
+      await loadSchemas(chosen);
+      renderTrigger();
+      if (!popover.hidden) renderPopover();
     } catch {
-      // The catalog is unreachable; keep the stored context selectable so the
-      // worksheet still runs against what it was written for.
-      fill(database, [context.database], context.database);
-      fill(schema, [context.schema], context.schema);
+      databases = context.database ? [context.database] : [];
+      schemas = context.schema ? [context.schema] : [];
     }
   }
 
-  async function loadSchemas(): Promise<void> {
-    if (!database.value) {
-      fill(schema, [], "");
+  async function loadSchemas(database: string): Promise<void> {
+    if (!database) {
+      schemas = [];
       return;
     }
     try {
-      const found = await listSchemas(database.value);
-      const names = found.map((entry) => entry.name);
-      const chosen = names.includes(context.schema) ? context.schema : (names[0] ?? "");
-      fill(schema, names, chosen);
-      context = { database: database.value, schema: chosen };
+      schemas = (await listSchemas(database)).map((entry) => entry.name);
+      const chosen = schemas.includes(context.schema) ? context.schema : (schemas[0] ?? "");
+      context = { database, schema: chosen };
       options.onChange({ ...context });
     } catch {
-      fill(schema, [context.schema], context.schema);
+      schemas = context.schema ? [context.schema] : [];
     }
   }
 
+  function close(): void {
+    popover.hidden = true;
+    trigger.setAttribute("aria-expanded", "false");
+  }
+
+  trigger.addEventListener("click", () => {
+    const opening = popover.hidden;
+    if (opening) closeOtherSelectors(popover);
+    popover.hidden = !opening;
+    trigger.setAttribute("aria-expanded", String(!popover.hidden));
+    if (!popover.hidden) renderPopover();
+  });
+  root.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") close();
+  });
+
+  renderTrigger();
   void loadDatabases();
 
   return {
     set(next: ExecutionContext) {
       context = { ...next };
-      if (!hasOption(database, next.database)) {
-        fill(database, [next.database], next.database);
-      }
-      database.value = next.database;
-      if (!hasOption(schema, next.schema)) {
-        fill(schema, [next.schema], next.schema);
-      }
-      schema.value = next.schema;
-      void loadSchemas();
+      renderTrigger();
+      void loadSchemas(next.database);
     },
   };
 }
 
-interface Field {
-  field: HTMLElement;
-  element: HTMLSelectElement;
-  value: string;
-}
+function column(title: string, names: string[], selected: string, choose: (name: string) => void | Promise<void>): HTMLElement {
+  const section = document.createElement("section");
+  section.className = "selector-column";
+  const search = document.createElement("input");
+  search.type = "search";
+  search.placeholder = title;
+  search.setAttribute("aria-label", `Search ${title.toLowerCase()}`);
+  const list = document.createElement("div");
+  list.className = "selector-list";
 
-function select(label: string, onChange: () => void): Field {
-  const wrapper = document.createElement("label");
-  wrapper.className = "ctx";
-
-  const caption = document.createElement("span");
-  caption.className = "lab";
-  caption.textContent = label;
-
-  const element = document.createElement("select");
-  element.setAttribute("aria-label", label);
-  element.addEventListener("change", onChange);
-
-  wrapper.append(caption, element);
-
-  return {
-    field: wrapper,
-    element,
-    get value() {
-      return element.value;
-    },
-    set value(next: string) {
-      element.value = next;
-    },
+  const render = (): void => {
+    const query = search.value.trim().toLowerCase();
+    const filtered = names.filter((name) => name.toLowerCase().includes(query));
+    list.replaceChildren(...filtered.map((name) => option(name, name === selected, () => void choose(name))));
+    if (filtered.length === 0) list.append(empty(`No ${title.toLowerCase()} found`));
   };
+  search.addEventListener("input", render);
+  render();
+  section.append(search, list);
+  return section;
 }
 
-function fill(field: Field, names: string[], selected: string): void {
-  field.element.replaceChildren(
-    ...names.filter(Boolean).map((name) => {
-      const option = document.createElement("option");
-      option.value = name;
-      option.textContent = name;
-      return option;
-    }),
-  );
-  if (selected) {
-    field.element.value = selected;
-  }
+function option(name: string, selected: boolean, choose: () => void): HTMLButtonElement {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "selector-option";
+  button.setAttribute("aria-current", selected ? "true" : "false");
+  button.append(icon("item"), text(name));
+  if (selected) button.append(check());
+  button.addEventListener("click", choose);
+  return button;
 }
 
-function hasOption(field: Field, name: string): boolean {
-  return [...field.element.options].some((option) => option.value === name);
+function icon(kind: string): HTMLElement {
+  const element = document.createElement("span");
+  element.className = `selector-icon ${kind}`;
+  element.setAttribute("aria-hidden", "true");
+  return element;
+}
+
+function text(value: string): Text {
+  return document.createTextNode(value);
+}
+
+function separator(): HTMLElement {
+  const element = document.createElement("span");
+  element.className = "context-separator";
+  element.textContent = "·";
+  return element;
+}
+
+function chevron(): HTMLElement {
+  const element = document.createElement("span");
+  element.className = "selector-chevron";
+  element.textContent = "⌄";
+  return element;
+}
+
+function check(): HTMLElement {
+  const element = document.createElement("span");
+  element.className = "selector-check";
+  element.textContent = "✓";
+  return element;
+}
+
+function empty(message: string): HTMLElement {
+  const element = document.createElement("p");
+  element.className = "selector-empty";
+  element.textContent = message;
+  return element;
+}
+
+function closeOtherSelectors(current: HTMLElement): void {
+  document.querySelectorAll<HTMLElement>(".selector-popover").forEach((popover) => {
+    if (popover !== current) popover.hidden = true;
+  });
+  document.querySelectorAll<HTMLElement>('.context-trigger[aria-expanded="true"]').forEach((button) => {
+    if (button.nextElementSibling !== current) button.setAttribute("aria-expanded", "false");
+  });
 }

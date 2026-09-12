@@ -690,6 +690,12 @@ func (e *Executor) executeWithContext(ctx context.Context, executionContext Exec
 
 func (e *Executor) executeCatalogStatement(ctx context.Context, executionContext ExecutionContext, sql string, classifier *Classifier) (*ExecResult, bool, error) {
 	switch {
+	case classifier.IsCreateDatabase(sql):
+		result, err := e.executeCreateDatabase(ctx, sql)
+		return result, true, err
+	case classifier.IsDropDatabase(sql):
+		result, err := e.executeDropDatabase(ctx, sql)
+		return result, true, err
 	case classifier.IsCreateSchema(sql):
 		result, err := e.executeCreateSchema(ctx, executionContext, sql)
 		return result, true, err

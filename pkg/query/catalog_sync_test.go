@@ -6,6 +6,37 @@ import (
 	"testing"
 )
 
+func TestCreateAndDropDatabaseSQLSynchronizesCatalog(t *testing.T) {
+	executor, repo := setupTestExecutor(t)
+	ctx := context.Background()
+
+	if _, err := executor.Execute(ctx, "CREATE DATABASE phase7_db COMMENT = 'Identity tests'"); err != nil {
+		t.Fatalf("CREATE DATABASE error = %v", err)
+	}
+	database, err := repo.GetDatabaseByName(ctx, "PHASE7_DB")
+	if err != nil {
+		t.Fatalf("PHASE7_DB was not registered: %v", err)
+	}
+	if database.Comment != "Identity tests" {
+		t.Fatalf("database comment = %q, want Identity tests", database.Comment)
+	}
+	if _, err := repo.GetSchemaByName(ctx, database.ID, "PUBLIC"); err != nil {
+		t.Fatalf("PUBLIC schema was not created: %v", err)
+	}
+	if _, err := executor.Execute(ctx, "CREATE DATABASE IF NOT EXISTS phase7_db"); err != nil {
+		t.Fatalf("CREATE DATABASE IF NOT EXISTS error = %v", err)
+	}
+	if _, err := executor.Execute(ctx, "DROP DATABASE phase7_db"); err != nil {
+		t.Fatalf("DROP DATABASE error = %v", err)
+	}
+	if _, err := repo.GetDatabaseByName(ctx, "PHASE7_DB"); err == nil {
+		t.Fatal("PHASE7_DB remains after DROP DATABASE")
+	}
+	if _, err := executor.Execute(ctx, "DROP DATABASE IF EXISTS phase7_db"); err != nil {
+		t.Fatalf("DROP DATABASE IF EXISTS error = %v", err)
+	}
+}
+
 func TestCreateSchemaSQLRegistersInDatabaseCatalog(t *testing.T) {
 	executor, repo := setupTestExecutor(t)
 	ctx := context.Background()
@@ -143,6 +174,34 @@ func TestCreateAndDropTableSQLSynchronizesCatalog(t *testing.T) {
 	}
 	if _, err := repo.GetTableByName(ctx, schema.ID, "STAGED_USERS"); err != nil {
 		t.Fatalf("unrelated STAGED_USERS metadata was removed: %v", err)
+	}
+}
+
+func TestQualifiedCreateAndDropTableSQLSynchronizesCatalog(t *testing.T) {
+	executor, repo := setupTestExecutor(t)
+	ctx := context.Background()
+	database, err := repo.CreateDatabase(ctx, "PHASE7_DB", "")
+	if err != nil {
+		t.Fatalf("CreateDatabase() error = %v", err)
+	}
+	schema, err := repo.GetSchemaByName(ctx, database.ID, "PUBLIC")
+	if err != nil {
+		t.Fatalf("GetSchemaByName() error = %v", err)
+	}
+	executionContext := ExecutionContext{Database: "PHASE7_DB", Schema: "PUBLIC"}
+	if _, err := executor.ExecuteWithContext(ctx, executionContext,
+		"CREATE TABLE PHASE7_DB.PUBLIC.LESSON_USERS (id INTEGER)"); err != nil {
+		t.Fatalf("qualified CREATE TABLE error = %v", err)
+	}
+	if _, err := repo.GetTableByName(ctx, schema.ID, "LESSON_USERS"); err != nil {
+		t.Fatalf("qualified table was not registered: %v", err)
+	}
+	if _, err := executor.ExecuteWithContext(ctx, executionContext,
+		"DROP TABLE PHASE7_DB.PUBLIC.LESSON_USERS"); err != nil {
+		t.Fatalf("qualified DROP TABLE error = %v", err)
+	}
+	if _, err := repo.GetTableByName(ctx, schema.ID, "LESSON_USERS"); err == nil {
+		t.Fatal("qualified table metadata remains after DROP TABLE")
 	}
 }
 

@@ -112,7 +112,22 @@ export async function useRole(role: string, fetchFn: typeof fetch = fetch): Prom
   if (!response.ok || !body.success) {
     throw new Error(body.message ?? `Role change failed with HTTP ${response.status}.`);
   }
+  return rememberRole(role);
+}
+
+/** Keeps the browser context aligned after a successful worksheet USE ROLE. */
+export function rememberRole(role: string): AuthSession {
+  if (!current) throw new Error("Sign in before changing roles.");
   current = { ...current, role };
+  write(current);
+  notify();
+  return current;
+}
+
+/** Selects the warehouse used by subsequent REST worksheet statements. */
+export function useWarehouse(warehouse: string): AuthSession {
+  if (!current) throw new Error("Sign in before selecting a warehouse.");
+  current = { ...current, warehouse };
   write(current);
   notify();
   return current;

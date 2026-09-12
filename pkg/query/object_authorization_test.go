@@ -11,6 +11,37 @@ import (
 	"github.com/nnnkkk7/snowflake-emulator/pkg/warehouse"
 )
 
+func TestGrantReconcilesQualifiedPhysicalTableMissingFromMetadata(t *testing.T) {
+	executor, service, _ := setupWarehouseAuthorization(t)
+	ctx := context.Background()
+	database, err := executor.repo.CreateDatabase(ctx, "PHASE7_DB", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema, err := executor.repo.GetSchemaByName(ctx, database.ID, "PUBLIC")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := executor.mgr.Exec(ctx, "CREATE TABLE PHASE7_DB.PUBLIC_LESSON_USERS (id INTEGER)"); err != nil {
+		t.Fatalf("create legacy physical table: %v", err)
+	}
+	reader, err := service.CreateRole(ctx, "PHASE7_READER", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := executor.Execute(ctx,
+		"GRANT SELECT ON TABLE PHASE7_DB.PUBLIC.LESSON_USERS TO ROLE PHASE7_READER"); err != nil {
+		t.Fatalf("grant on reconciled table: %v", err)
+	}
+	if _, err := executor.repo.GetTableByName(ctx, schema.ID, "LESSON_USERS"); err != nil {
+		t.Fatalf("legacy table was not reconciled: %v", err)
+	}
+	grants, err := service.ObjectGrantsToRole(ctx, reader.Name)
+	if err != nil || len(grants) != 1 || grants[0].Privilege != identity.PrivilegeSelect {
+		t.Fatalf("SELECT grant was not recorded: grants=%+v err=%v", grants, err)
+	}
+}
+
 func TestObjectPrivilegesInheritedRevokedAndPreAdmission(t *testing.T) {
 	executor, service, manager := setupWarehouseAuthorization(t)
 	ctx := context.Background()

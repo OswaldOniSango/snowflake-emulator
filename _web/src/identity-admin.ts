@@ -58,6 +58,44 @@ export function roleNamesFromRows(rows: unknown[][], currentRole: string): strin
   return [...new Set([currentRole, ...roles])];
 }
 
+/** Returns only roles the authenticated user can activate, including inherited roles. */
+export async function discoverAvailableRoles(
+  context: ExecutionContext,
+  username: string,
+  currentRole: string,
+  execute: typeof runStatement = runStatement,
+): Promise<string[]> {
+  const available = new Set<string>([currentRole]);
+  const queue: string[] = [currentRole];
+  const queued = new Set<string>(queue);
+  const addRows = (rows: unknown[][]): void => {
+    for (const row of rows) {
+      const role = String(row[0] ?? "");
+      const grantedTo = String(row[1] ?? "").toUpperCase();
+      if (!role || (grantedTo !== "USER" && grantedTo !== "ROLE")) continue;
+      available.add(role);
+      if (!queued.has(role)) {
+        queued.add(role);
+        queue.push(role);
+      }
+    }
+  };
+
+  try {
+    const direct = await execute(`SHOW GRANTS TO USER ${identifier(username)}`, context);
+    addRows(direct.rows);
+    while (queue.length > 0) {
+      const role = queue.shift();
+      if (!role) continue;
+      const inherited = await execute(`SHOW GRANTS TO ROLE ${identifier(role)}`, context);
+      addRows(inherited.rows);
+    }
+  } catch {
+    return [currentRole];
+  }
+  return [currentRole, ...[...available].filter((role) => role !== currentRole).sort()];
+}
+
 function form(context: () => ExecutionContext, title: string, fields: HTMLInputElement[], sql: (values: string[]) => string): HTMLElement {
   const article = document.createElement("form");
   article.className = "identity-card";

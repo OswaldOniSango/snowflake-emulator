@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { isSupportedPrivilege, objectName, roleNamesFromRows, safeName } from "./identity-admin";
+import { discoverAvailableRoles, isSupportedPrivilege, objectName, roleNamesFromRows, safeName } from "./identity-admin";
+import type { Statement } from "./api";
 
 describe("identity administration validation", () => {
   it("reads SHOW ROLES names from the second column", () => {
@@ -8,6 +9,24 @@ describe("identity administration validation", () => {
       "ACCOUNTADMIN",
       "ANALYST",
     ]);
+  });
+
+  it("offers direct and inherited roles but not unrelated catalog roles", async () => {
+    const execute = async (sql: string): Promise<Statement> => {
+      const rows = sql.includes("TO USER")
+        ? [["ACCOUNTADMIN", "USER", "ADMIN"], ["PUBLIC", "USER", "ADMIN"]]
+        : sql.includes("ACCOUNTADMIN")
+          ? [["SYSADMIN", "ROLE", "ACCOUNTADMIN"], ["USAGE", "WAREHOUSE", "COMPUTE_WH"]]
+          : [];
+      return { rows } as Statement;
+    };
+
+    await expect(discoverAvailableRoles(
+      { database: "TEST_DB", schema: "PUBLIC" },
+      "ADMIN",
+      "ACCOUNTADMIN",
+      execute,
+    )).resolves.toEqual(["ACCOUNTADMIN", "PUBLIC", "SYSADMIN"]);
   });
 
   it("accepts only supported privilege and object shapes", () => {

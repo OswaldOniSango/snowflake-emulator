@@ -126,7 +126,7 @@ func main() {
 
 	sessionHandler := handlers.NewSessionHandler(sessionMgr, repo, identityService, warehouseMgr)
 	queryHandler := handlers.NewQueryHandler(executor, sessionMgr, identityService)
-	restAPIHandler := handlers.NewRestAPIv2HandlerWithServices(executor, stmtMgr, repo, warehouseMgr, stageMgr)
+	restAPIHandler := handlers.NewRestAPIv2HandlerWithServices(executor, stmtMgr, repo, warehouseMgr, stageMgr, sessionMgr, identityService)
 	taskScheduler := query.NewTaskScheduler(repo, executor, time.Second)
 	taskScheduler.Start(context.Background())
 	defer taskScheduler.Stop()
