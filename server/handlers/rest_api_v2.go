@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"strconv"
@@ -10,8 +11,10 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/nnnkkk7/snowflake-emulator/pkg/identity"
 	"github.com/nnnkkk7/snowflake-emulator/pkg/metadata"
 	"github.com/nnnkkk7/snowflake-emulator/pkg/query"
+	"github.com/nnnkkk7/snowflake-emulator/pkg/session"
 	"github.com/nnnkkk7/snowflake-emulator/pkg/stage"
 	"github.com/nnnkkk7/snowflake-emulator/pkg/warehouse"
 	"github.com/nnnkkk7/snowflake-emulator/server/apierror"
@@ -25,18 +28,32 @@ type RestAPIv2Handler struct {
 	repo         *metadata.Repository
 	warehouseMgr *warehouse.Manager
 	stageMgr     *stage.Manager
+	sessionMgr   *session.Manager
+	identity     *identity.Service
 }
 
 // NewRestAPIv2HandlerWithServices creates a handler with the server's shared
 // warehouse and internal-stage managers.
-func NewRestAPIv2HandlerWithServices(executor *query.Executor, stmtMgr *query.StatementManager, repo *metadata.Repository, warehouseMgr *warehouse.Manager, stageMgr *stage.Manager) *RestAPIv2Handler {
+func NewRestAPIv2HandlerWithServices(executor *query.Executor, stmtMgr *query.StatementManager, repo *metadata.Repository, warehouseMgr *warehouse.Manager, stageMgr *stage.Manager, services ...interface{}) *RestAPIv2Handler {
 	configureWarehouseValidation(executor, warehouseMgr)
+	var sessionMgr *session.Manager
+	var identityService *identity.Service
+	for _, service := range services {
+		switch value := service.(type) {
+		case *session.Manager:
+			sessionMgr = value
+		case *identity.Service:
+			identityService = value
+		}
+	}
 	return &RestAPIv2Handler{
 		executor:     executor,
 		stmtMgr:      stmtMgr,
 		repo:         repo,
 		warehouseMgr: warehouseMgr,
 		stageMgr:     stageMgr,
+		sessionMgr:   sessionMgr,
+		identity:     identityService,
 	}
 }
 
@@ -80,20 +97,50 @@ func (h *RestAPIv2Handler) SubmitStatement(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	stmt := h.stmtMgr.CreateStatement(req.Statement, req.Database, req.Schema, req.Warehouse)
-
 	executionContext := query.ExecutionContext{
 		Database:  req.Database,
 		Schema:    req.Schema,
 		Warehouse: req.Warehouse,
 		Role:      req.Role,
 		RowLimit:  req.RowLimit,
-		OnWarehouseQueued: func() {
-			h.stmtMgr.UpdateStatus(stmt.Handle, query.StatementStatusQueued)
-		},
-		OnWarehouseRunning: func() {
-			h.stmtMgr.UpdateStatus(stmt.Handle, query.StatementStatusRunning)
-		},
+	}
+	var authenticatedSession *session.Session
+	var sessionToken string
+	if h.sessionMgr != nil {
+		sessionToken = extractToken(r)
+		if sessionToken != "" {
+			sess, err := h.sessionMgr.ValidateSession(r.Context(), sessionToken)
+			if err != nil {
+				h.sendError(w, http.StatusUnauthorized, "Session expired or invalid", types.SQLState42000)
+				return
+			}
+			authenticatedSession = sess
+			executionContext.Role = sess.ActiveRole
+			executionContext.Principal = &query.PrincipalContext{
+				UserID: sess.UserID, Username: sess.Username, RoleID: sess.ActiveRoleID,
+			}
+			if executionContext.Database == "" {
+				executionContext.Database = sess.Database
+			}
+			if executionContext.Schema == "" {
+				executionContext.Schema = sess.CurrentSchema
+			}
+			if executionContext.Warehouse == "" {
+				executionContext.Warehouse = sess.Warehouse
+			}
+		}
+	}
+
+	stmt := h.stmtMgr.CreateStatement(req.Statement, executionContext.Database, executionContext.Schema, executionContext.Warehouse)
+	executionContext.OnWarehouseQueued = func() {
+		h.stmtMgr.UpdateStatus(stmt.Handle, query.StatementStatusQueued)
+	}
+	executionContext.OnWarehouseRunning = func() {
+		h.stmtMgr.UpdateStatus(stmt.Handle, query.StatementStatusRunning)
+	}
+	if roleName, handled, parseErr := query.ParseUseRole(req.Statement); handled {
+		h.submitUseRole(r.Context(), w, stmt, authenticatedSession, sessionToken, roleName, parseErr)
+		return
 	}
 	bindings := convertBindings(req.Bindings)
 
@@ -113,6 +160,37 @@ func (h *RestAPIv2Handler) SubmitStatement(w http.ResponseWriter, r *http.Reques
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(resp)
+}
+
+func (h *RestAPIv2Handler) submitUseRole(ctx context.Context, w http.ResponseWriter, stmt *query.Statement, sess *session.Session, token, roleName string, parseErr error) {
+	var err error
+	switch {
+	case parseErr != nil:
+		err = parseErr
+	case sess == nil || token == "" || h.sessionMgr == nil || h.identity == nil:
+		err = fmt.Errorf("authenticated identity is required for USE ROLE")
+	default:
+		var role *metadata.RoleRecord
+		role, err = h.identity.ResolveActiveRole(ctx, sess.UserID, roleName)
+		if err == nil {
+			err = h.sessionMgr.SetActiveRole(ctx, token, role.ID, role.Name)
+		}
+	}
+	var response types.StatementResponse
+	if err != nil {
+		h.stmtMgr.SetError(stmt.Handle, apierror.NewSnowflakeError(apierror.CodeSQLExecutionError, err.Error()))
+		response = types.StatementResponse{
+			StatementHandle: stmt.Handle, Code: apierror.CodeSQLExecutionError,
+			SQLState: types.SQLState42000, Message: err.Error(), CreatedOn: stmt.CreatedOn.UnixMilli(),
+			StatementStatusURL: "/api/v2/statements/" + stmt.Handle,
+		}
+	} else {
+		h.stmtMgr.SetExecResult(stmt.Handle, 0)
+		response = h.buildExecResponse(stmt, &query.ExecResult{})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(response)
 }
 
 // submitAsync accepts a statement and answers with its handle straight away,

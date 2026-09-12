@@ -17,8 +17,10 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/go-cmp/cmp"
 	"github.com/nnnkkk7/snowflake-emulator/pkg/connection"
+	"github.com/nnnkkk7/snowflake-emulator/pkg/identity"
 	"github.com/nnnkkk7/snowflake-emulator/pkg/metadata"
 	"github.com/nnnkkk7/snowflake-emulator/pkg/query"
+	"github.com/nnnkkk7/snowflake-emulator/pkg/session"
 	"github.com/nnnkkk7/snowflake-emulator/pkg/stage"
 	"github.com/nnnkkk7/snowflake-emulator/server/types"
 )
@@ -308,6 +310,101 @@ func TestRestAPIv2Handler_SubmitStatement_Sync(t *testing.T) {
 
 	if resp.Data == nil || len(resp.Data) == 0 {
 		t.Error("Expected data to be returned")
+	}
+}
+
+func TestRestAPIv2Handler_SubmitStatement_UsesAuthenticatedPrincipal(t *testing.T) {
+	handler, router := setupRestAPIv2Handler(t)
+	ctx := context.Background()
+	identityService, err := identity.NewService(ctx, handler.repo)
+	if err != nil {
+		t.Fatalf("failed to initialize identity service: %v", err)
+	}
+	handler.executor.Configure(query.WithIdentityService(identityService))
+	principal, err := identityService.Authenticate(ctx, identity.DemoAdminUser, identity.DemoAdminPassword)
+	if err != nil {
+		t.Fatalf("failed to authenticate demo administrator: %v", err)
+	}
+	role, err := identityService.ResolveActiveRole(ctx, principal.UserID, identity.RoleAccountAdmin)
+	if err != nil {
+		t.Fatalf("failed to resolve account administrator role: %v", err)
+	}
+	if err := handler.repo.UpsertWarehouse(ctx, &metadata.WarehouseRecord{
+		ID: "compute-wh", Name: "COMPUTE_WH", State: "SUSPENDED", Size: "X-SMALL",
+		CreatedAt: time.Now(), Owner: role.Name, AutoResume: true, AutoSuspend: 600,
+	}); err != nil {
+		t.Fatalf("failed to persist test warehouse: %v", err)
+	}
+	if err := identityService.GrantWarehousePrivilege(ctx, identity.PrivilegeUsage, "COMPUTE_WH", role.Name); err != nil {
+		t.Fatalf("failed to grant warehouse usage: %v", err)
+	}
+	sessionMgr := session.NewManager(time.Hour)
+	sess, err := sessionMgr.CreateAuthenticatedSession(ctx, session.CreateInput{
+		UserID: principal.UserID, Username: principal.Username,
+		ActiveRoleID: role.ID, ActiveRole: role.Name,
+		Database: "TEST_DB", Schema: "PUBLIC", Warehouse: "COMPUTE_WH",
+	})
+	if err != nil {
+		t.Fatalf("failed to create authenticated session: %v", err)
+	}
+	handler.sessionMgr = sessionMgr
+	handler.identity = identityService
+
+	body := `{"statement":"SELECT 1","database":"TEST_DB","schema":"PUBLIC","warehouse":"COMPUTE_WH","role":"UNAVAILABLE_ROLE"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v2/statements", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+sess.Token)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+
+	var response types.StatementResponse
+	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if response.SQLState != types.SQLState00000 {
+		t.Fatalf("authenticated REST statement failed: %+v", response)
+	}
+
+	createDatabase := `{"statement":"CREATE DATABASE PHASE7_DB","database":"TEST_DB","schema":"PUBLIC","role":"ACCOUNTADMIN"}`
+	req = httptest.NewRequest(http.MethodPost, "/api/v2/statements", strings.NewReader(createDatabase))
+	req.Header.Set("Authorization", "Bearer "+sess.Token)
+	recorder = httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+	response = types.StatementResponse{}
+	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+		t.Fatalf("failed to decode CREATE DATABASE response: %v", err)
+	}
+	if response.SQLState != types.SQLState00000 {
+		t.Fatalf("authenticated CREATE DATABASE failed: %+v", response)
+	}
+	if _, err := handler.repo.GetDatabaseByName(ctx, "PHASE7_DB"); err != nil {
+		t.Fatalf("authenticated CREATE DATABASE was not registered: %v", err)
+	}
+
+	reader, err := identityService.CreateRole(ctx, "PHASE7_READER", "")
+	if err != nil {
+		t.Fatalf("failed to create reader role: %v", err)
+	}
+	if err := identityService.GrantRoleToUser(ctx, reader.Name, principal.Username); err != nil {
+		t.Fatalf("failed to grant reader role: %v", err)
+	}
+	useRole := `{"statement":"USE ROLE PHASE7_READER","database":"TEST_DB","schema":"PUBLIC","async":true}`
+	req = httptest.NewRequest(http.MethodPost, "/api/v2/statements", strings.NewReader(useRole))
+	req.Header.Set("Authorization", "Bearer "+sess.Token)
+	recorder = httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+	response = types.StatementResponse{}
+	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+		t.Fatalf("failed to decode USE ROLE response: %v", err)
+	}
+	if response.SQLState != types.SQLState00000 {
+		t.Fatalf("authenticated USE ROLE failed: %+v", response)
+	}
+	updated, err := sessionMgr.ValidateSession(ctx, sess.Token)
+	if err != nil {
+		t.Fatalf("failed to reload session: %v", err)
+	}
+	if updated.ActiveRole != reader.Name || updated.ActiveRoleID != reader.ID {
+		t.Fatalf("active role was not updated: %+v", updated)
 	}
 }
 

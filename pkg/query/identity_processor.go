@@ -280,7 +280,18 @@ func (e *Executor) validateGrantedObject(ctx context.Context, objectType, object
 		if err != nil {
 			return err
 		}
-		_, err = e.repo.GetTableByName(ctx, schema.ID, parts[2])
+		if _, err = e.repo.GetTableByName(ctx, schema.ID, parts[2]); err == nil {
+			return nil
+		}
+		// Older qualified CREATE TABLE statements produced the physical DuckDB
+		// table but skipped _metadata_tables. Reconcile that legacy state when
+		// GRANT first needs the catalog entry.
+		tableContext := ExecutionContext{Database: parts[0], Schema: parts[1]}
+		columns, physicalErr := e.describePhysicalTable(ctx, tableContext, parts[2])
+		if physicalErr != nil {
+			return err
+		}
+		_, err = e.repo.RegisterTable(ctx, schema.ID, parts[2], baseTableType, columns)
 		return err
 	default:
 		return fmt.Errorf("unsupported grant object type %s", objectType)

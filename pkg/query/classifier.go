@@ -387,6 +387,18 @@ func (c *Classifier) IsCreateSchema(sql string) bool {
 		strings.HasPrefix(upperSQL, "CREATE OR REPLACE SCHEMA")
 }
 
+// IsCreateDatabase checks if the SQL creates a logical Snowflake database.
+func (c *Classifier) IsCreateDatabase(sql string) bool {
+	upperSQL := leadingSQL(sql)
+	return strings.HasPrefix(upperSQL, "CREATE DATABASE") ||
+		strings.HasPrefix(upperSQL, "CREATE OR REPLACE DATABASE")
+}
+
+// IsDropDatabase checks if the SQL drops a logical Snowflake database.
+func (c *Classifier) IsDropDatabase(sql string) bool {
+	return strings.HasPrefix(leadingSQL(sql), "DROP DATABASE")
+}
+
 // IsDropSchema checks if the SQL drops a logical Snowflake schema.
 func (c *Classifier) IsDropSchema(sql string) bool {
 	return strings.HasPrefix(leadingSQL(sql), "DROP SCHEMA")

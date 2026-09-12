@@ -16,11 +16,57 @@ const (
 )
 
 var (
-	createSchemaSQLPattern = regexp.MustCompile(`(?is)^\s*CREATE\s+(OR\s+REPLACE\s+)?SCHEMA\s+(IF\s+NOT\s+EXISTS\s+)?([^\s;]+)(?:\s+COMMENT\s*=\s*'((?:''|[^'])*)')?\s*;?\s*$`)
-	dropSchemaSQLPattern   = regexp.MustCompile(`(?is)^\s*DROP\s+SCHEMA\s+(IF\s+EXISTS\s+)?([^\s;]+)(?:\s+CASCADE|\s+RESTRICT)?\s*;?\s*$`)
-	createTableSQLPattern  = regexp.MustCompile(`(?is)^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:(TEMP|TEMPORARY|TRANSIENT)\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([^\s(;]+)`)
-	dropTableSQLPattern    = regexp.MustCompile(`(?is)^\s*DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?([^\s(;]+)`)
+	createDatabaseSQLPattern = regexp.MustCompile(`(?is)^\s*CREATE\s+(OR\s+REPLACE\s+)?DATABASE\s+(IF\s+NOT\s+EXISTS\s+)?([^\s;]+)(?:\s+COMMENT\s*=\s*'((?:''|[^'])*)')?\s*;?\s*$`)
+	dropDatabaseSQLPattern   = regexp.MustCompile(`(?is)^\s*DROP\s+DATABASE\s+(IF\s+EXISTS\s+)?([^\s;]+)(?:\s+CASCADE|\s+RESTRICT)?\s*;?\s*$`)
+	createSchemaSQLPattern   = regexp.MustCompile(`(?is)^\s*CREATE\s+(OR\s+REPLACE\s+)?SCHEMA\s+(IF\s+NOT\s+EXISTS\s+)?([^\s;]+)(?:\s+COMMENT\s*=\s*'((?:''|[^'])*)')?\s*;?\s*$`)
+	dropSchemaSQLPattern     = regexp.MustCompile(`(?is)^\s*DROP\s+SCHEMA\s+(IF\s+EXISTS\s+)?([^\s;]+)(?:\s+CASCADE|\s+RESTRICT)?\s*;?\s*$`)
+	createTableSQLPattern    = regexp.MustCompile(`(?is)^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:(TEMP|TEMPORARY|TRANSIENT)\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([^\s(;]+)`)
+	dropTableSQLPattern      = regexp.MustCompile(`(?is)^\s*DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?([^\s(;]+)`)
 )
+
+func (e *Executor) executeCreateDatabase(ctx context.Context, statement string) (*ExecResult, error) {
+	match := createDatabaseSQLPattern.FindStringSubmatch(trimLeadingComments(statement))
+	if match == nil {
+		return nil, fmt.Errorf("unsupported CREATE DATABASE syntax")
+	}
+	if strings.TrimSpace(match[1]) != "" {
+		return nil, fmt.Errorf("CREATE OR REPLACE DATABASE is not supported yet")
+	}
+	name := strings.ToUpper(strings.TrimSpace(match[3]))
+	if strings.Contains(name, ".") {
+		return nil, fmt.Errorf("invalid database name %s", match[3])
+	}
+	if _, err := e.repo.GetDatabaseByName(ctx, name); err == nil {
+		if strings.TrimSpace(match[2]) != "" {
+			return &ExecResult{}, nil
+		}
+		return nil, fmt.Errorf("database %s already exists", name)
+	}
+	comment := strings.ReplaceAll(match[4], "''", "'")
+	if _, err := e.repo.CreateDatabase(ctx, name, comment); err != nil {
+		return nil, err
+	}
+	return &ExecResult{}, nil
+}
+
+func (e *Executor) executeDropDatabase(ctx context.Context, statement string) (*ExecResult, error) {
+	match := dropDatabaseSQLPattern.FindStringSubmatch(trimLeadingComments(statement))
+	if match == nil {
+		return nil, fmt.Errorf("unsupported DROP DATABASE syntax")
+	}
+	name := strings.ToUpper(strings.TrimSpace(match[2]))
+	database, err := e.repo.GetDatabaseByName(ctx, name)
+	if err != nil {
+		if strings.TrimSpace(match[1]) != "" {
+			return &ExecResult{}, nil
+		}
+		return nil, err
+	}
+	if err := e.repo.DropDatabase(ctx, database.ID); err != nil {
+		return nil, err
+	}
+	return &ExecResult{}, nil
+}
 
 func (e *Executor) executeCreateSchema(ctx context.Context, executionContext ExecutionContext, statement string) (*ExecResult, error) {
 	match := createSchemaSQLPattern.FindStringSubmatch(trimLeadingComments(statement))
@@ -96,10 +142,9 @@ func resolveSchemaName(name string, executionContext ExecutionContext) (string, 
 
 func (e *Executor) registerSQLTable(ctx context.Context, executionContext ExecutionContext, statement string) error {
 	match := createTableSQLPattern.FindStringSubmatch(trimLeadingComments(statement))
-	if match == nil || executionContext.Database == "" || executionContext.Schema == "" || strings.Contains(match[2], ".") {
+	if match == nil {
 		return nil
 	}
-	tableName := strings.ToUpper(match[2])
 	tableType := baseTableType
 	switch strings.ToUpper(match[1]) {
 	case "TEMP", "TEMPORARY":
@@ -107,16 +152,30 @@ func (e *Executor) registerSQLTable(ctx context.Context, executionContext Execut
 	case transientTableType:
 		tableType = transientTableType
 	}
+	nameParts := strings.Split(match[2], ".")
+	if (len(nameParts) == 1 && (executionContext.Database == "" || executionContext.Schema == "")) ||
+		(len(nameParts) == 2 && executionContext.Database == "") ||
+		isPhysicalCatalogTableName(nameParts, executionContext) {
+		// Context-free Execute calls may intentionally use DuckDB's already
+		// physical DB.TABLE form. Preserve that low-level compatibility.
+		return nil
+	}
+	databaseName, schemaName, tableName, err := resolveQualifiedObjectName(match[2], "table", executionContext)
+	if err != nil {
+		return err
+	}
 
-	database, err := e.repo.GetDatabaseByName(ctx, executionContext.Database)
+	database, err := e.repo.GetDatabaseByName(ctx, databaseName)
 	if err != nil {
 		return err
 	}
-	schema, err := e.repo.GetSchemaByName(ctx, database.ID, executionContext.Schema)
+	schema, err := e.repo.GetSchemaByName(ctx, database.ID, schemaName)
 	if err != nil {
 		return err
 	}
-	columns, err := e.describePhysicalTable(ctx, executionContext, tableName)
+	tableContext := executionContext
+	tableContext.Database, tableContext.Schema = databaseName, schemaName
+	columns, err := e.describePhysicalTable(ctx, tableContext, tableName)
 	if err != nil {
 		return err
 	}
@@ -126,18 +185,34 @@ func (e *Executor) registerSQLTable(ctx context.Context, executionContext Execut
 
 func (e *Executor) unregisterSQLTable(ctx context.Context, executionContext ExecutionContext, statement string) error {
 	match := dropTableSQLPattern.FindStringSubmatch(trimLeadingComments(statement))
-	if match == nil || executionContext.Database == "" || executionContext.Schema == "" || strings.Contains(match[1], ".") {
+	if match == nil {
 		return nil
 	}
-	database, err := e.repo.GetDatabaseByName(ctx, executionContext.Database)
+	nameParts := strings.Split(match[1], ".")
+	if (len(nameParts) == 1 && (executionContext.Database == "" || executionContext.Schema == "")) ||
+		(len(nameParts) == 2 && executionContext.Database == "") ||
+		isPhysicalCatalogTableName(nameParts, executionContext) {
+		return nil
+	}
+	databaseName, schemaName, tableName, err := resolveQualifiedObjectName(match[1], "table", executionContext)
 	if err != nil {
 		return err
 	}
-	schema, err := e.repo.GetSchemaByName(ctx, database.ID, executionContext.Schema)
+	database, err := e.repo.GetDatabaseByName(ctx, databaseName)
 	if err != nil {
 		return err
 	}
-	return e.repo.DeleteTableMetadata(ctx, schema.ID, match[1])
+	schema, err := e.repo.GetSchemaByName(ctx, database.ID, schemaName)
+	if err != nil {
+		return err
+	}
+	return e.repo.DeleteTableMetadata(ctx, schema.ID, tableName)
+}
+
+func isPhysicalCatalogTableName(parts []string, executionContext ExecutionContext) bool {
+	return len(parts) == 2 &&
+		strings.EqualFold(parts[0], executionContext.Database) &&
+		strings.HasPrefix(strings.ToUpper(parts[1]), strings.ToUpper(executionContext.Schema)+"_")
 }
 
 func (e *Executor) describePhysicalTable(ctx context.Context, executionContext ExecutionContext, tableName string) ([]metadata.ColumnDef, error) {
