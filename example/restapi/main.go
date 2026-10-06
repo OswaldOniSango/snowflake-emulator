@@ -20,9 +20,15 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
+
+	"github.com/nnnkkk7/snowflake-emulator/example/internal/exampleauth"
 )
 
-var baseURL = getBaseURL()
+var (
+	baseURL      = getBaseURL()
+	sessionToken string
+)
 
 func getBaseURL() string {
 	host := os.Getenv("SNOWFLAKE_HOST")
@@ -87,6 +93,11 @@ type WarehouseRequest struct {
 }
 
 func main() {
+	var err error
+	sessionToken, err = exampleauth.Login(strings.TrimSuffix(baseURL, "/api/v2"))
+	if err != nil {
+		log.Fatalf("Failed to sign in: %v", err)
+	}
 	fmt.Println("=== Snowflake Emulator REST API v2 Example ===")
 
 	// Example 1: Create a database
@@ -227,11 +238,18 @@ func executeStatementWithBindings(sql, database, schema string, bindings map[str
 		Statement: sql,
 		Database:  database,
 		Schema:    schema,
+		Warehouse: "DEMO_WH",
 		Bindings:  bindings,
 	}
 
 	body, _ := json.Marshal(req)
-	resp, err := http.Post(baseURL+"/statements", "application/json", bytes.NewReader(body))
+	request, err := http.NewRequest(http.MethodPost, baseURL+"/statements", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", "Bearer "+sessionToken)
+	resp, err := http.DefaultClient.Do(request)
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
@@ -246,6 +264,9 @@ func executeStatementWithBindings(sql, database, schema string, bindings map[str
 
 	if resp.StatusCode >= 400 {
 		return &result, fmt.Errorf("statement failed: %s", result.Message)
+	}
+	if result.SQLState != "" && result.SQLState != "00000" {
+		return &result, fmt.Errorf("statement failed (SQLSTATE %s): %s", result.SQLState, result.Message)
 	}
 
 	return &result, nil
@@ -299,18 +320,14 @@ func listDatabases() {
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
-	var result map[string]any
+	var result []map[string]any
 	if err := json.Unmarshal(body, &result); err != nil {
 		log.Printf("Failed to parse response: %v", err)
 		return
 	}
 
-	if databases, ok := result["databases"].([]any); ok {
-		for _, db := range databases {
-			if dbMap, ok := db.(map[string]any); ok {
-				fmt.Printf("   - %s\n", dbMap["name"])
-			}
-		}
+	for _, db := range result {
+		fmt.Printf("   - %s\n", db["name"])
 	}
 }
 
@@ -323,19 +340,14 @@ func listWarehouses() {
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
-	var result map[string]any
+	var result []map[string]any
 	if err := json.Unmarshal(body, &result); err != nil {
 		log.Printf("Failed to parse response: %v", err)
 		return
 	}
 
-	if warehouses, ok := result["warehouses"].([]any); ok {
-		for _, wh := range warehouses {
-			if whMap, ok := wh.(map[string]any); ok {
-				fmt.Printf("   - %s (size: %s, state: %s)\n",
-					whMap["name"], whMap["size"], whMap["state"])
-			}
-		}
+	for _, wh := range result {
+		fmt.Printf("   - %s (size: %s, state: %s)\n", wh["name"], wh["size"], wh["state"])
 	}
 }
 

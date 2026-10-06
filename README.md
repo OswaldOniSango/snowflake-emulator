@@ -51,9 +51,23 @@ These credentials are intentionally convenient for local study only. The
 `gosnowflake` login authenticates against this catalog, resolves the requested
 or default role, and persists that identity in the session. `USE ROLE`,
 `CURRENT_USER()`, and `CURRENT_ROLE()` use the authenticated session context.
-The REST statement API and browser console remain anonymous in this phase, and
-object privilege enforcement is planned separately, so this must not be
-treated as production security.
+The browser console and REST statement endpoints use authenticated sessions.
+Send the login token as `Authorization: Bearer <token>` when submitting,
+polling, canceling, or listing statements. Each user can access only their own
+statement results and history, including after signing in again. History uses
+stable user IDs and retains that ownership across restarts; legacy records
+without an owner are excluded from authenticated history. The current MVP
+does not provide an administrator override for another user's history.
+
+Execution revalidates the selected role against current grants. Revoking it
+prevents subsequent execution until the user selects an available role;
+disabling or deleting a user prevents use of their existing session. Logout
+clears displayed results and translation output, and late responses cannot
+repopulate a new session. Worksheet text remains a browser-local draft shared
+on that browser; it is not private per-user storage.
+
+This remains a local study environment: catalog and stage management REST
+endpoints are not yet protected by the same object authorization checks.
 
 ## Overview
 
@@ -269,22 +283,37 @@ func main() {
 ### Using REST API v2
 
 ```bash
+# Sign in (requires jq); use your own credentials if ADMIN was changed.
+SESSION_TOKEN=$(curl -sS http://localhost:8080/session/v1/login-request \
+  -H "Content-Type: application/json" \
+  -d '{"data":{"LOGIN_NAME":"ADMIN","PASSWORD":"admin"}}' | jq -r '.data.token')
+
+# Create a warehouse for compute statements
+curl -X POST http://localhost:8080/api/v2/statements \
+  -H "Authorization: Bearer $SESSION_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"statement":"CREATE WAREHOUSE STUDY_WH"}'
+
 # Submit a SQL statement
 curl -X POST http://localhost:8080/api/v2/statements \
+  -H "Authorization: Bearer $SESSION_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
     "statement": "SELECT IFF(1 > 0, '\''yes'\'', '\''no'\'')",
     "database": "TEST_DB",
-    "schema": "PUBLIC"
+    "schema": "PUBLIC",
+    "warehouse": "STUDY_WH"
   }'
 
 # Get statement result
-curl http://localhost:8080/api/v2/statements/{handle}
+curl http://localhost:8080/api/v2/statements/{handle} \
+  -H "Authorization: Bearer $SESSION_TOKEN"
 
 # Ask for more rows than the default cap
 curl -X POST http://localhost:8080/api/v2/statements \
+  -H "Authorization: Bearer $SESSION_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"statement": "SELECT * FROM orders", "rowLimit": 50000}'
+  -d '{"statement": "SELECT * FROM orders", "warehouse": "STUDY_WH", "rowLimit": 50000}'
 
 # Create a database
 curl -X POST http://localhost:8080/api/v2/databases \
@@ -661,7 +690,7 @@ again unless the first command used `PURGE = TRUE`.
 This emulator is designed for development and testing. The following features
 are not supported or have limited support:
 
-- Production authentication and object-level authorization — local `gosnowflake` sessions authenticate users and roles, while REST/UI requests remain anonymous. Authenticated sessions enforce warehouse `USAGE` and `OPERATE`; namespace `USAGE` on databases and schemas; `CREATE TABLE` on schemas; and `SELECT`, `INSERT`, `UPDATE`, and `DELETE` on tables. Grants are inherited through the active role hierarchy and are checked before warehouse admission. Ownership transfer, secondary roles, future grants, stage privileges, row policies, and database roles remain outside the current subset.
+- Production authentication and comprehensive object-level authorization — local `gosnowflake` and REST statement sessions authenticate users and roles. Statement results, cancellation, and history are restricted to their owning user. Authenticated SQL enforces warehouse `USAGE` and `OPERATE`; namespace `USAGE` on databases and schemas; `CREATE TABLE` on schemas; and `SELECT`, `INSERT`, `UPDATE`, and `DELETE` on tables. Grants are inherited through the active role hierarchy and are checked before warehouse admission. Catalog/stage management REST endpoints and browser-local worksheet drafts are not isolated by user. Ownership transfer, secondary roles, future grants, stage privileges, row policies, and database roles remain outside the current subset.
 - Procedures use caller-rights rather than Snowflake's full configurable caller/owner-rights model. `COPY INTO` and streams enforce warehouse compute authorization, but stage and table object privileges are not implemented.
 - Distributed processing / Clustering
 - Time Travel / Zero-Copy Cloning

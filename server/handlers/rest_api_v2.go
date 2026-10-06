@@ -104,34 +104,31 @@ func (h *RestAPIv2Handler) SubmitStatement(w http.ResponseWriter, r *http.Reques
 		Role:      req.Role,
 		RowLimit:  req.RowLimit,
 	}
-	var authenticatedSession *session.Session
-	var sessionToken string
-	if h.sessionMgr != nil {
-		sessionToken = extractToken(r)
-		if sessionToken != "" {
-			sess, err := h.sessionMgr.ValidateSession(r.Context(), sessionToken)
-			if err != nil {
-				h.sendError(w, http.StatusUnauthorized, "Session expired or invalid", types.SQLState42000)
-				return
-			}
-			authenticatedSession = sess
-			executionContext.Role = sess.ActiveRole
-			executionContext.Principal = &query.PrincipalContext{
-				UserID: sess.UserID, Username: sess.Username, RoleID: sess.ActiveRoleID,
-			}
-			if executionContext.Database == "" {
-				executionContext.Database = sess.Database
-			}
-			if executionContext.Schema == "" {
-				executionContext.Schema = sess.CurrentSchema
-			}
-			if executionContext.Warehouse == "" {
-				executionContext.Warehouse = sess.Warehouse
-			}
+	authenticatedSession, ok := h.statementSession(w, r)
+	if !ok {
+		return
+	}
+	sessionToken := extractToken(r)
+	userID := ""
+	if sess := authenticatedSession; sess != nil {
+		userID = sess.UserID
+		executionContext.SessionID = strconv.FormatInt(sess.ID, 10)
+		executionContext.Role = sess.ActiveRole
+		executionContext.Principal = &query.PrincipalContext{
+			UserID: sess.UserID, Username: sess.Username, RoleID: sess.ActiveRoleID,
+		}
+		if executionContext.Database == "" {
+			executionContext.Database = sess.Database
+		}
+		if executionContext.Schema == "" {
+			executionContext.Schema = sess.CurrentSchema
+		}
+		if executionContext.Warehouse == "" {
+			executionContext.Warehouse = sess.Warehouse
 		}
 	}
 
-	stmt := h.stmtMgr.CreateStatement(req.Statement, executionContext.Database, executionContext.Schema, executionContext.Warehouse)
+	stmt := h.stmtMgr.CreateStatementForUser(req.Statement, executionContext.Database, executionContext.Schema, executionContext.Warehouse, userID)
 	executionContext.OnWarehouseQueued = func() {
 		h.stmtMgr.UpdateStatus(stmt.Handle, query.StatementStatusQueued)
 	}
@@ -141,6 +138,13 @@ func (h *RestAPIv2Handler) SubmitStatement(w http.ResponseWriter, r *http.Reques
 	if roleName, handled, parseErr := query.ParseUseRole(req.Statement); handled {
 		h.submitUseRole(r.Context(), w, stmt, authenticatedSession, sessionToken, roleName, parseErr)
 		return
+	}
+	if authenticatedSession != nil {
+		if err := validateSessionRole(r.Context(), h.identity, authenticatedSession); err != nil {
+			h.stmtMgr.SetError(stmt.Handle, apierror.NewSnowflakeError(apierror.CodeSQLExecutionError, err.Error()))
+			h.sendError(w, http.StatusForbidden, "Active role is no longer available; select an available role", types.SQLState42000)
+			return
+		}
 	}
 	bindings := convertBindings(req.Bindings)
 
@@ -306,10 +310,14 @@ func (h *RestAPIv2Handler) runStatement(
 
 // GetStatement handles GET /api/v2/statements/{handle}.
 func (h *RestAPIv2Handler) GetStatement(w http.ResponseWriter, r *http.Request) {
+	userID, authorized := h.statementUser(w, r)
+	if !authorized {
+		return
+	}
 	handle := chi.URLParam(r, "handle")
 
 	stmt, ok := h.stmtMgr.GetStatement(handle)
-	if !ok {
+	if !ok || stmt.UserID != userID {
 		h.sendError(w, http.StatusNotFound, "Statement not found", types.SQLState02000)
 		return
 	}
@@ -379,10 +387,14 @@ func (h *RestAPIv2Handler) GetStatement(w http.ResponseWriter, r *http.Request) 
 
 // CancelStatement handles POST /api/v2/statements/{handle}/cancel.
 func (h *RestAPIv2Handler) CancelStatement(w http.ResponseWriter, r *http.Request) {
+	userID, authorized := h.statementUser(w, r)
+	if !authorized {
+		return
+	}
 	handle := chi.URLParam(r, "handle")
 
 	stmt, ok := h.stmtMgr.GetStatement(handle)
-	if !ok {
+	if !ok || stmt.UserID != userID {
 		h.sendError(w, http.StatusNotFound, "Statement not found", types.SQLState02000)
 		return
 	}
@@ -1530,6 +1542,10 @@ const defaultHistoryLimit = 200
 // given a database file. The response reports both, rather than leaving a
 // reader to guess why a statement they remember is missing.
 func (h *RestAPIv2Handler) ListStatements(w http.ResponseWriter, r *http.Request) {
+	userID, authorized := h.statementUser(w, r)
+	if !authorized {
+		return
+	}
 	limit := defaultHistoryLimit
 	if raw := r.URL.Query().Get("limit"); raw != "" {
 		parsed, err := strconv.Atoi(raw)
@@ -1540,7 +1556,7 @@ func (h *RestAPIv2Handler) ListStatements(w http.ResponseWriter, r *http.Request
 		limit = parsed
 	}
 
-	summaries := h.stmtMgr.ListStatementsWithContext(r.Context(), limit)
+	summaries := h.stmtMgr.ListStatementsForUser(r.Context(), userID, limit)
 	entries := make([]types.StatementHistoryEntry, 0, len(summaries))
 
 	for i := range summaries {

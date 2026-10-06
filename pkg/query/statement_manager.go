@@ -27,6 +27,7 @@ const (
 
 // Statement represents an executing or completed SQL statement.
 type Statement struct {
+	UserID      string
 	Handle      string
 	Status      StatementStatus
 	SQLText     string
@@ -107,6 +108,7 @@ func (sm *StatementManager) record(summary *StatementSummary) {
 	}
 
 	err := store.RecordStatement(context.Background(), &metadata.StatementRecord{
+		UserID:       summary.UserID,
 		Handle:       summary.Handle,
 		Status:       string(summary.Status),
 		SQLText:      summary.SQLText,
@@ -138,11 +140,17 @@ func NewStatementManager(ttl time.Duration) *StatementManager {
 
 // CreateStatement creates a new statement and returns its handle.
 func (sm *StatementManager) CreateStatement(sqlText, database, schema, warehouse string) *Statement {
+	return sm.CreateStatementForUser(sqlText, database, schema, warehouse, "")
+}
+
+// CreateStatementForUser binds a statement to a stable authenticated user ID.
+func (sm *StatementManager) CreateStatementForUser(sqlText, database, schema, warehouse, userID string) *Statement {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
 	handle := generateStatementHandle()
 	stmt := &Statement{
+		UserID:    userID,
 		Handle:    handle,
 		Status:    StatementStatusPending,
 		SQLText:   RedactSensitiveSQL(sqlText),
@@ -312,7 +320,7 @@ func (sm *StatementManager) CancelStatement(handle string) error {
 		return fmt.Errorf("statement not found: %s", handle)
 	}
 
-	if stmt.Status != StatementStatusRunning && stmt.Status != StatementStatusPending {
+	if stmt.Status != StatementStatusRunning && stmt.Status != StatementStatusPending && stmt.Status != StatementStatusQueued {
 		return fmt.Errorf("statement %s is not running (status: %s)", handle, stmt.Status)
 	}
 
@@ -383,6 +391,7 @@ func generateStatementHandle() string {
 // StatementSummary describes a finished or running statement for a history
 // listing. It carries no result set: a history is scanned, not read.
 type StatementSummary struct {
+	UserID       string
 	Handle       string
 	Status       StatementStatus
 	SQLText      string
@@ -434,6 +443,22 @@ func (sm *StatementManager) ListStatementsWithContext(ctx context.Context, limit
 	return summaries
 }
 
+// ListStatementsForUser filters before limiting, including persisted history.
+// Unattributed legacy records are never exposed to authenticated users.
+func (sm *StatementManager) ListStatementsForUser(ctx context.Context, userID string, limit int) []StatementSummary {
+	all := sm.ListStatementsWithContext(ctx, 0)
+	filtered := make([]StatementSummary, 0)
+	for i := range all {
+		if all[i].UserID == userID {
+			filtered = append(filtered, all[i])
+			if limit > 0 && len(filtered) == limit {
+				break
+			}
+		}
+	}
+	return filtered
+}
+
 // recordedStatements reads the persisted history, skipping handles memory
 // already covers. A store that cannot be read costs history, not a listing.
 func (sm *StatementManager) recordedStatements(
@@ -467,6 +492,7 @@ func (sm *StatementManager) recordedStatements(
 			continue
 		}
 		summaries = append(summaries, StatementSummary{
+			UserID:       record.UserID,
 			Handle:       record.Handle,
 			Status:       StatementStatus(record.Status),
 			SQLText:      record.SQLText,
@@ -487,6 +513,7 @@ func (sm *StatementManager) recordedStatements(
 
 func summarize(statement *Statement) StatementSummary {
 	summary := StatementSummary{
+		UserID:      statement.UserID,
 		Handle:      statement.Handle,
 		Status:      statement.Status,
 		SQLText:     statement.SQLText,

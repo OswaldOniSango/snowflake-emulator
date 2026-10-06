@@ -88,21 +88,24 @@ export async function login(input: LoginInput, fetchFn: typeof fetch = fetch): P
 }
 
 export async function logout(fetchFn: typeof fetch = fetch): Promise<void> {
-  if (current) {
-    await fetchFn("/session/logout", {
-      method: "POST",
-      headers: authHeaders(),
-      body: JSON.stringify({ token: current.token }),
-    }).catch(() => undefined);
-  }
+  const previous = current;
+  const headers = authHeaders();
   current = null;
   remove();
   notify();
+  if (previous) {
+    await fetchFn("/session/logout", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ token: previous.token }),
+    }).catch(() => undefined);
+  }
 }
 
 /** Changes the active role without creating a second browser session. */
 export async function useRole(role: string, fetchFn: typeof fetch = fetch): Promise<AuthSession> {
   if (!current) throw new Error("Sign in before changing roles.");
+  const token = current.token;
   const response = await fetchFn("/queries/v1/query-request", {
     method: "POST",
     headers: { ...authHeaders(), "Content-Type": "application/json" },
@@ -112,6 +115,7 @@ export async function useRole(role: string, fetchFn: typeof fetch = fetch): Prom
   if (!response.ok || !body.success) {
     throw new Error(body.message ?? `Role change failed with HTTP ${response.status}.`);
   }
+  if (current?.token !== token) throw new Error("Session changed while selecting a role.");
   return rememberRole(role);
 }
 

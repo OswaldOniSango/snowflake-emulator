@@ -56,6 +56,10 @@ func (h *QueryHandler) ExecuteQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sessionID := sess.ID
+	if err := validateSessionUser(ctx, h.identity, sess); err != nil {
+		sendError(w, apierror.NewSnowflakeError(apierror.CodeSessionExpired, "Authenticated user is no longer available"))
+		return
+	}
 	executionContext := query.ExecutionContext{
 		Database:  sess.Database,
 		Schema:    sess.CurrentSchema,
@@ -84,6 +88,10 @@ func (h *QueryHandler) ExecuteQuery(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Classify the SQL statement
+	if err := validateSessionRole(ctx, h.identity, sess); err != nil {
+		sendError(w, apierror.NewSnowflakeError(apierror.CodeSQLExecutionError, "Active role is no longer available; select an available role"))
+		return
+	}
 	classification := query.ClassifySQL(req.SQLText)
 
 	if classification.IsQuery {
