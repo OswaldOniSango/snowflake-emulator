@@ -85,7 +85,7 @@ npm --prefix _web run test:e2e
 ```
 
 It starts a disposable in-memory server on port 18089; it never reuses your study
-instance. See [release preparation](docs/releases/next-release.md) for the next
+instance. See [v0.5.0 release preparation](docs/releases/v0.5.0.md) for the
 release notes and Docker upgrade steps that preserve a persistent data volume.
 
 ## Overview
