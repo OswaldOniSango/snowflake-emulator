@@ -9,6 +9,19 @@ afterEach(() => {
 });
 
 describe("database and schema picker", () => {
+  it("offers a newly created database when reopened without reloading the page", async () => {
+    let databases = [{ name: "TEST_DB" }];
+    vi.stubGlobal("fetch", async (url: string) => response(url.endsWith("/schemas") ? [{ name: "PUBLIC" }] : databases));
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    createContextPicker({ parent, initial: { database: "TEST_DB", schema: "PUBLIC" }, onChange: vi.fn() });
+    await settle();
+    databases = [...databases, { name: "JOURNEY_DB" }];
+    parent.querySelector<HTMLButtonElement>(".context-trigger")!.click();
+    await settle();
+    expect([...parent.querySelectorAll(".selector-option")].some((button) => button.textContent?.includes("JOURNEY_DB"))).toBe(true);
+  });
+
   it("opens a searchable two-column picker and changes the namespace", async () => {
     vi.stubGlobal("fetch", async (input: string) => {
       if (input.includes("/OTHER_DB/schemas")) {
@@ -27,6 +40,7 @@ describe("database and schema picker", () => {
     onChange.mockClear();
 
     parent.querySelector<HTMLButtonElement>('[aria-label="Choose database and schema"]')?.click();
+    await settle();
     expect(parent.querySelectorAll(".selector-column")).toHaveLength(2);
     expect(parent.querySelector<HTMLInputElement>('[aria-label="Search databases"]')).not.toBeNull();
 

@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- Isolate authenticated statement results, cancellation, and persisted history by user.
+- Revalidate active roles and users before SQL execution, and prevent late browser responses from crossing login sessions.
+- Add a shared SQL/CSV learning journey with expected results and cleanup instructions.
+- Run the journey against the compiled console in Chromium, including upload, stream/procedure/task processing, dynamic table refresh, and role denials.
+- Reload the database/schema picker when opened so newly created databases are available.
+- Disable the role/warehouse picker until its initial options and click handler are ready.
+- Require login tokens for REST statements; update REST/Docker examples and document remaining local-only limitations.
+
+Release preparation and upgrade instructions: [next release](docs/releases/next-release.md).
+
 ## [v0.0.9](https://github.com/nnnkkk7/snowflake-emulator/compare/v0.0.8...v0.0.9) - 2026-01-19
 - chore: fix tagpr config by @nnnkkk7 in https://github.com/nnnkkk7/snowflake-emulator/pull/43
 

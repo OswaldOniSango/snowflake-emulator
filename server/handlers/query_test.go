@@ -147,12 +147,24 @@ func TestQueryHandlerUseRoleIsSessionScoped(t *testing.T) {
 }
 
 // TestQueryHandler_ExecuteQuery tests the query execution endpoint.
+func createTestQuerySession(ctx context.Context, handler *QueryHandler, manager *session.Manager) (*session.Session, error) {
+	principal, err := handler.identity.Authenticate(ctx, identity.DemoAdminUser, identity.DemoAdminPassword)
+	if err != nil {
+		return nil, err
+	}
+	return manager.CreateAuthenticatedSession(ctx, session.CreateInput{
+		UserID: principal.UserID, Username: principal.Username,
+		ActiveRoleID: principal.DefaultRoleID, ActiveRole: principal.DefaultRole,
+		Database: "TEST_DB", Schema: "PUBLIC",
+	})
+}
+
 func TestQueryHandler_ExecuteQuery(t *testing.T) {
 	handler, sessionMgr, _ := setupTestQueryHandler(t)
 	ctx := context.Background()
 
 	// Create a session for authentication
-	sess, err := sessionMgr.CreateSession(ctx, "testuser", "TEST_DB", "PUBLIC")
+	sess, err := createTestQuerySession(ctx, handler, sessionMgr)
 	if err != nil {
 		t.Fatalf("Failed to create session: %v", err)
 	}
@@ -299,7 +311,7 @@ func TestQueryHandler_ExecuteDML(t *testing.T) {
 	ctx := context.Background()
 
 	// Create session
-	sess, err := sessionMgr.CreateSession(ctx, "testuser", "TEST_DB", "PUBLIC")
+	sess, err := createTestQuerySession(ctx, handler, sessionMgr)
 	if err != nil {
 		t.Fatalf("Failed to create session: %v", err)
 	}
@@ -394,7 +406,7 @@ func TestQueryHandler_ConcurrentQueries(t *testing.T) {
 	ctx := context.Background()
 
 	// Create session
-	sess, err := sessionMgr.CreateSession(ctx, "testuser", "TEST_DB", "PUBLIC")
+	sess, err := createTestQuerySession(ctx, handler, sessionMgr)
 	if err != nil {
 		t.Fatalf("Failed to create session: %v", err)
 	}
@@ -449,7 +461,7 @@ func TestQueryHandler_QueryResultFormat(t *testing.T) {
 	handler, sessionMgr, _ := setupTestQueryHandler(t)
 	ctx := context.Background()
 
-	sess, err := sessionMgr.CreateSession(ctx, "testuser", "TEST_DB", "PUBLIC")
+	sess, err := createTestQuerySession(ctx, handler, sessionMgr)
 	if err != nil {
 		t.Fatalf("Failed to create session: %v", err)
 	}

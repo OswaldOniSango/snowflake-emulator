@@ -50,6 +50,8 @@ _web/node_modules/
 
 # Vite's own output directory; scripts/publish-dist.mjs copies it into the Go package
 _web/dist/
+_web/playwright-report/
+_web/test-results/
 
 # Vite output, embedded by server/ui. The placeholder stays tracked so that
 # go:embed compiles in a clone where nobody has run the frontend build.

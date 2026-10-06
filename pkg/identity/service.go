@@ -86,6 +86,9 @@ func (s *Service) ResolveActiveRole(ctx context.Context, userID, requestedRole s
 	if user == nil {
 		return nil, fmt.Errorf("%w: user", metadata.ErrIdentityNotFound)
 	}
+	if user.Disabled {
+		return nil, ErrUserDisabled
+	}
 	roleName := NormalizeName(requestedRole)
 	if roleName == "" {
 		role, roleErr := s.roleByID(ctx, user.DefaultRoleID)

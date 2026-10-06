@@ -24,7 +24,7 @@ import { createThemeToggle } from "./theme";
 import { createIdentityAdminView, discoverAvailableRoles } from "./identity-admin";
 import { splitStatements, statementAt, type Statement as StatementRange } from "./statements";
 import { renderTranslation } from "./translation";
-import { login, logout, rememberRole, session, subscribe, useRole, useWarehouse, type AuthSession } from "./auth";
+import { authHeaders, login, logout, rememberRole, session, subscribe, useRole, useWarehouse, type AuthSession } from "./auth";
 import {
   loadWorkspace,
   nextWorksheetName,
@@ -151,6 +151,7 @@ function main(): void {
   // The statement the emulator is running for us, so it can be cancelled. A
   // run of several statements cancels the one in flight and stops there.
   let runningHandle: string | null = null;
+  let runningHeaders: Record<string, string> = {};
   let canceled = false;
   let translatedStatement = "";
   let running = false;
@@ -158,6 +159,8 @@ function main(): void {
   // no longer active (another worksheet or an ended login session). Late
   // responses from an older generation must never repaint the UI.
   let executionGeneration = 0;
+  let sessionToken: string | undefined;
+  const views = new Map<string, { refresh: () => Promise<void> }>();
 
   pick(root, "shortcut").textContent = isApplePlatform() ? "⌘↵" : "Ctrl+↵";
   pick(root, "theme").append(createThemeToggle());
@@ -197,6 +200,13 @@ function main(): void {
   });
 
   subscribe((value) => {
+    if (value?.token !== sessionToken) {
+      sessionToken = value?.token;
+      resetOutput();
+      showTab("results");
+      views.clear();
+      root.querySelectorAll<HTMLElement>(".view-pane").forEach((pane) => pane.replaceChildren());
+    }
     if (value) {
       loginScreen.hidden = true;
       const next = { database: value.database, schema: value.schema };
@@ -296,6 +306,8 @@ function main(): void {
 
     running = true;
     const generation = executionGeneration;
+    const headers = authHeaders();
+    runningHeaders = headers;
     canceled = false;
     runningHandle = null;
     runButton.disabled = true;
@@ -318,7 +330,7 @@ function main(): void {
           if (generation === executionGeneration) {
             runningHandle = handle;
           } else {
-            void cancelStatement(handle);
+            void cancelStatement(handle, fetch, headers);
           }
         });
         if (generation !== executionGeneration) {
@@ -463,7 +475,7 @@ function main(): void {
     executionGeneration += 1;
     canceled = true;
     if (runningHandle) {
-      void cancelStatement(runningHandle);
+      void cancelStatement(runningHandle, fetch, runningHeaders);
     }
     running = false;
     runningHandle = null;
@@ -645,7 +657,6 @@ function main(): void {
 
   // The secondary views cost a request each, so they are built the first time
   // they are opened rather than on load.
-  const views = new Map<string, { refresh: () => Promise<void> }>();
 
   function showView(name: string): void {
     root!.querySelectorAll<HTMLElement>("[data-view-pane]").forEach((pane) => {
@@ -814,6 +825,7 @@ async function renderComputeContext(parent: HTMLElement, context: ExecutionConte
   trigger.className = "context-trigger";
   trigger.setAttribute("aria-label", "Choose role and warehouse");
   trigger.setAttribute("aria-expanded", "false");
+  trigger.disabled = true;
   trigger.textContent = `${value.role} · ${value.warehouse || "Choose warehouse"} ⌄`;
   const popover = document.createElement("div");
   popover.className = "selector-popover compute-popover";
@@ -877,6 +889,7 @@ async function renderComputeContext(parent: HTMLElement, context: ExecutionConte
       trigger.setAttribute("aria-expanded", "false");
     }
   });
+  trigger.disabled = false;
 }
 
 function closeOtherSelectors(current: HTMLElement): void {

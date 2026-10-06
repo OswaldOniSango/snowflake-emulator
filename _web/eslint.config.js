@@ -10,11 +10,11 @@ const nodeGlobals = {
 
 export default tseslint.config(
   // Vite's build output; publish-dist.mjs copies it into server/ui/dist.
-  { ignores: ["dist/**"] },
+  { ignores: ["dist/**", "playwright-report/**", "test-results/**"] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
-    files: ["scripts/**/*.mjs", "vite.config.ts"],
+    files: ["scripts/**/*.mjs", "vite.config.ts", "playwright.config.ts"],
     languageOptions: { globals: nodeGlobals },
   },
 );

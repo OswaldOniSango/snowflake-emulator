@@ -27,11 +27,16 @@ import (
 	"net/http"
 	"os"
 	"time"
+
+	"github.com/nnnkkk7/snowflake-emulator/example/internal/exampleauth"
 )
 
 const exampleWarehouse = "DOCKER_TEST_WH"
 
-var baseURL = getBaseURL()
+var (
+	baseURL      = getBaseURL()
+	sessionToken string
+)
 
 func getBaseURL() string {
 	host := os.Getenv("SNOWFLAKE_HOST")
@@ -86,6 +91,11 @@ func main() {
 		log.Fatalf("Emulator not ready: %v", err)
 	}
 	fmt.Println("   Emulator is healthy!")
+	var err error
+	sessionToken, err = exampleauth.Login(baseURL)
+	if err != nil {
+		log.Fatalf("Failed to sign in: %v", err)
+	}
 
 	// Step 2: Create database using REST API
 	fmt.Println("\n2. Creating database 'DOCKER_TEST_DB'...")
@@ -213,7 +223,13 @@ func executeStatement(sql, database, schema string) (*StatementResponse, error) 
 	}
 
 	body, _ := json.Marshal(req)
-	resp, err := http.Post(baseURL+"/api/v2/statements", "application/json", bytes.NewReader(body))
+	request, err := http.NewRequest(http.MethodPost, baseURL+"/api/v2/statements", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", "Bearer "+sessionToken)
+	resp, err := http.DefaultClient.Do(request)
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}

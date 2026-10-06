@@ -454,6 +454,7 @@ func (r *Repository) initMetadataTables(ctx context.Context) error {
 		`ALTER TABLE _metadata_query_history ADD COLUMN IF NOT EXISTS warehouse VARCHAR`,
 		`ALTER TABLE _metadata_query_history ADD COLUMN IF NOT EXISTS queued_at TIMESTAMP`,
 		`ALTER TABLE _metadata_query_history ADD COLUMN IF NOT EXISTS execution_started_at TIMESTAMP`,
+		`ALTER TABLE _metadata_query_history ADD COLUMN IF NOT EXISTS owner_user_id VARCHAR`,
 		`ALTER TABLE _metadata_dynamic_tables ADD COLUMN IF NOT EXISTS definition_database VARCHAR`,
 		`ALTER TABLE _metadata_dynamic_tables ADD COLUMN IF NOT EXISTS definition_schema VARCHAR`,
 	}

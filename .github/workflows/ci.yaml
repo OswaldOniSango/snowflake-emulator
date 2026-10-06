@@ -74,6 +74,21 @@ jobs:
       # embed handler is exercised against a real one.
       - name: Test the embed handler against the real bundle
         run: CGO_ENABLED=1 go test ./server/ui/...
+      - name: Install browser for the learning journey
+        working-directory: _web
+        run: npx playwright install --with-deps chromium
+      - name: Test the learning journey in Chromium
+        working-directory: _web
+        run: npx playwright test
+      - name: Upload browser failure evidence
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: browser-test-report
+          path: |
+            _web/playwright-report
+            _web/test-results
+          retention-days: 7
       - name: Upload console bundle
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:

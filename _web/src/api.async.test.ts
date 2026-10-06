@@ -1,7 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { login, logout } from "./auth";
 import { cancelStatement, CODE_CANCELED, runStatement, StatementError } from "./api";
 
 const context = { database: "TEST_DB", schema: "PUBLIC" };
+
+afterEach(async () => { await logout(fetchReturning({ success: true })); });
 
 /** A fetch that answers each call with the next body it was given. */
 function fetchReturning(...bodies: unknown[]): typeof fetch {
@@ -24,6 +27,23 @@ const succeeded = {
 };
 
 describe("runStatement", () => {
+  it("stops polling when a different user signs in", async () => {
+    const signIn = async (token: string): Promise<void> => {
+      await login({ username: token, password: "secret" }, fetchReturning({
+        success: true, data: { token, masterToken: "master", validityInSeconds: 3600,
+          sessionInfo: { databaseName: "TEST_DB", schemaName: "PUBLIC", warehouseName: "WH", roleName: "PUBLIC" } },
+      }));
+    };
+    await signIn("alice");
+    const fetchFn = fetchReturning(pending, succeeded);
+    const onHandle = vi.fn();
+    const execution = runStatement("SELECT 1", context, fetchFn, onHandle);
+    const rejected = expect(execution).rejects.toThrow("Session changed");
+    await vi.waitFor(() => expect(onHandle).toHaveBeenCalled());
+    await signIn("bob");
+    await rejected;
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
   it("submits asynchronously so the statement has a handle to cancel", async () => {
     const fetchFn = fetchReturning(succeeded);
     await runStatement("SELECT 1", context, fetchFn);
