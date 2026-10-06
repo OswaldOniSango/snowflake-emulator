@@ -1,4 +1,4 @@
-.PHONY: all build test test-unit test-integration test-e2e test-all test-coverage lint fmt ci clean run docker-build docker-up docker-down docker-test docker-logs ui-install ui-dev ui-build ui-test ui-lint ui-typecheck ui-clean ui-distclean
+.PHONY: all build test test-unit test-integration test-e2e test-all test-coverage lint fmt ci clean run docker-build docker-up docker-down docker-test docker-logs ui-install ui-dev ui-build ui-test ui-lint ui-typecheck ui-clean ui-distclean ui-e2e ui-e2e-install
 
 # npm lives in _web/ — the leading underscore keeps node_modules invisible to the
 # Go toolchain, which otherwise compiles Go files shipped inside npm packages.
@@ -45,7 +45,7 @@ fmt:
 	gofmt -w .
 
 # CI target: mirrors the GitHub Actions workflow
-ci: lint test-all ui-lint ui-typecheck ui-test ui-build
+ci: lint test-all ui-lint ui-typecheck ui-test ui-e2e
 
 # Clean build artifacts (keeps server/ui/dist/.gitkeep so go:embed still compiles).
 # Frontend dependencies survive; use ui-distclean to drop those too.
@@ -75,6 +75,13 @@ ui-build: _web/node_modules
 # Frontend unit tests
 ui-test: _web/node_modules
 	$(NPM) run test
+
+# Install Chromium once, then run the shared learning journey in a real browser.
+ui-e2e-install: _web/node_modules
+	$(NPM) run test:e2e:install
+
+ui-e2e: _web/node_modules
+	$(NPM) run test:e2e
 
 # Frontend linting
 ui-lint: _web/node_modules

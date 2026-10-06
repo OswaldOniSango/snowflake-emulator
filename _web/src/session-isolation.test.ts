@@ -13,7 +13,7 @@ vi.mock("./editor", () => ({
 vi.mock("./explorer", () => ({ createExplorer: vi.fn() }));
 vi.mock("./context-picker", () => ({ createContextPicker: () => ({ set: vi.fn() }) }));
 vi.mock("./catalog", () => ({ createCatalog: () => ({ load: vi.fn(), refresh: vi.fn() }), changesCatalog: () => false }));
-vi.mock("./identity-admin", () => ({ discoverAvailableRoles: async () => ["PUBLIC"] }));
+vi.mock("./identity-admin", () => ({ discoverAvailableRoles: vi.fn(async () => ["PUBLIC"]) }));
 vi.mock("./health", () => ({ checkHealth: async () => ({ status: "ok" }) }));
 vi.mock("./api", async (original) => ({
   ...await original<typeof import("./api")>(),
@@ -41,8 +41,18 @@ it("clears results and ignores old execution and translation responses after log
   };
   const signOut = async (): Promise<void> => { await logout(vi.fn<typeof fetch>().mockResolvedValue(new Response("{}"))); };
   await signIn("alice");
+  const { discoverAvailableRoles } = await import("./identity-admin");
+  let finishRoles!: (roles: string[]) => void;
+  vi.mocked(discoverAvailableRoles).mockImplementationOnce(() => new Promise((resolve) => { finishRoles = resolve; }));
   document.body.innerHTML = '<div id="app"></div>';
   await import("./main");
+  const selector = document.querySelector<HTMLButtonElement>('[aria-label="Choose role and warehouse"]')!;
+  expect(selector.disabled).toBe(true);
+  finishRoles(["PUBLIC"]);
+  await vi.waitFor(() => expect(selector.disabled).toBe(false));
+  selector.click();
+  expect(document.querySelector<HTMLElement>(".compute-popover")!.hidden).toBe(false);
+  selector.click();
   const result = { columns: [{ name: "secret", type: "TEXT", nullable: true }], rows: [["alice-private"]], totalRows: 1, handle: "alice-handle", elapsedMs: 1, rowsAffected: null };
   vi.mocked(runStatement).mockResolvedValue(result);
   const run = (): void => document.querySelector<HTMLButtonElement>('[data-role="run"]')!.click();

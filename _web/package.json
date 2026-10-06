@@ -12,6 +12,9 @@
     "typecheck": "npm run generate && tsc --noEmit",
     "lint": "eslint .",
     "test": "npm run generate && vitest run",
+    "test:e2e": "npm run build && playwright test",
+    "test:e2e:headed": "npm run build && playwright test --headed",
+    "test:e2e:install": "playwright install chromium",
     "preview": "vite preview",
     "generate": "node scripts/generate-limitations.mjs"
   },
@@ -22,6 +25,7 @@
     "@codemirror/state": "^6.7.2",
     "@codemirror/view": "^6.43.10",
     "@eslint/js": "^9.39.1",
+    "@playwright/test": "^1.63.0",
     "@types/node": "^24.10.1",
     "codemirror": "^6.0.2",
     "eslint": "^9.39.1",

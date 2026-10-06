@@ -15,6 +15,7 @@ export default defineConfig({
     sourcemap: false,
   },
   test: {
+    include: ["src/**/*.test.ts"],
     // The modules that render server data build real DOM nodes, so their tests
     // need a document. happy-dom is enough for that and starts far faster than
     // a browser.

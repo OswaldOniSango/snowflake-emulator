@@ -825,6 +825,7 @@ async function renderComputeContext(parent: HTMLElement, context: ExecutionConte
   trigger.className = "context-trigger";
   trigger.setAttribute("aria-label", "Choose role and warehouse");
   trigger.setAttribute("aria-expanded", "false");
+  trigger.disabled = true;
   trigger.textContent = `${value.role} · ${value.warehouse || "Choose warehouse"} ⌄`;
   const popover = document.createElement("div");
   popover.className = "selector-popover compute-popover";
@@ -888,6 +889,7 @@ async function renderComputeContext(parent: HTMLElement, context: ExecutionConte
       trigger.setAttribute("aria-expanded", "false");
     }
   });
+  trigger.disabled = false;
 }
 
 function closeOtherSelectors(current: HTMLElement): void {

@@ -90,7 +90,10 @@ export function createContextPicker(options: ContextPickerOptions): ContextPicke
     if (opening) closeOtherSelectors(popover);
     popover.hidden = !opening;
     trigger.setAttribute("aria-expanded", String(!popover.hidden));
-    if (!popover.hidden) renderPopover();
+    if (!popover.hidden) {
+      popover.replaceChildren(empty("Loading databases…"));
+      void loadDatabases().then(() => { if (!popover.hidden) renderPopover(); });
+    }
   });
   root.addEventListener("keydown", (event) => {
     if (event.key === "Escape") close();

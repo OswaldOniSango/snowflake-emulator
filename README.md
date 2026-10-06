@@ -69,6 +69,25 @@ on that browser; it is not private per-user storage.
 This remains a local study environment: catalog and stage management REST
 endpoints are not yet protected by the same object authorization checks.
 
+## Guided learning lab
+
+Follow the [SQL and CSV learning journey](examples/learning-journey/README.md)
+to practice stage uploads, COPY INTO, streams, procedures, tasks, dynamic tables,
+and reader/writer roles. Each chapter includes expected results and the lab has
+an explicit cleanup sequence. The same files are exercised through Chromium in CI.
+
+To run the browser test locally with the Node version in `_web/.nvmrc`:
+
+```bash
+npm --prefix _web ci
+npm --prefix _web run test:e2e:install
+npm --prefix _web run test:e2e
+```
+
+It starts a disposable in-memory server on port 18089; it never reuses your study
+instance. See [release preparation](docs/releases/next-release.md) for the next
+release notes and Docker upgrade steps that preserve a persistent data volume.
+
 ## Overview
 
 Snowflake Emulator provides a learning-oriented subset of the
