@@ -1,0 +1,80 @@
+# Next release — preparation draft
+
+This document prepares the release after v0.4.0. No new version number, Git tag,
+GitHub Release, or container publication is implied by this draft.
+
+## Release notes
+
+This release strengthens authenticated worksheet execution and adds a guided
+local learning journey backed by a real-browser regression test.
+
+- Statement results, cancellation, and history belong to the authenticated user.
+  History ownership persists across restarts. Legacy history without an owner is
+  excluded from authenticated listings.
+- New SQL execution rechecks role membership. Revoked roles cannot continue
+  executing; disabled/deleted users cannot use their existing session to submit SQL.
+- Logout clears visible results. Late query, translation, and role-selection
+  responses cannot overwrite a subsequent login. Logout also revokes the master
+  token after an access token expires.
+- The guided lab combines a CSV stage upload, COPY INTO, tables, a view,
+  append-only stream consumption, a procedure called by a task, manual dynamic
+  table refresh, and reader/writer accounts.
+- Chromium tests run the shared lab through the compiled console and are included
+  in CI. The database/schema selector reloads its catalog when opened, and the
+  role/warehouse selector waits for its initial options before accepting clicks.
+
+### Upgrade notes
+
+The REST statement endpoints now require a login token in the standard server:
+POST/GET `/api/v2/statements`, result polling and cancellation. Existing anonymous
+SQL scripts must log in and send `Authorization: Bearer <token>`. Updated Go
+examples show the flow. The console handles login automatically through its form.
+
+Persistent metadata migrates at startup. Back up the stopped instance's entire
+data volume (database and staged files) before upgrading. Existing local accounts
+are retained; ADMIN/admin is bootstrapped only when no users exist.
+
+Retained drafts are shared browser-local data. Catalog/stage REST endpoints are
+not yet covered by the statement authorization model. This is a learning tool,
+not a production security boundary or a fully compatible Snowflake replacement.
+Dynamic refresh is manual and this lab tests tasks through `EXECUTE TASK`, not
+their scheduler. It does not certify all supported SQL or all browsers.
+
+## Before publishing
+
+1. Merge the lab/testing PR into dev and promote the reviewed changes to main.
+2. Require green CI at the chosen commit: Go tests/race, lint, frontend tests,
+   typecheck/build, Chromium journey, and Docker build/example.
+3. Choose the release number, move the Unreleased changelog into that version,
+   and use the notes above for the GitHub Release.
+4. Tag the verified main commit. The existing **Publish Docker Image** workflow
+   triggers on `v*` tags and publishes amd64/arm64 images to GHCR; publishing a
+   GitHub Release itself is separate. Avoid recreating an existing version tag.
+5. Verify the workflow and test pulling the exact image tag before announcing it.
+   A Git tag `vX.Y.Z` produces a container tag `X.Y.Z` (without the `v`).
+
+## Docker upgrade without deleting study data
+
+For an instance originally started with a named volume mounted at `/data`:
+
+1. Note the existing container name, mounted volume name, image tag, and environment.
+2. Stop the container and back up that volume while the database is closed.
+3. Pull the chosen new version, remove only the stopped container, and start a
+   replacement mounting **the same volume**. Do not remove the volume.
+4. Keep `DB_PATH=/data/snowflake.db` and `STAGE_DIR=/data/stages` (or your original
+   values), then log in with the existing credentials and check study data.
+
+Example replacement command, after substituting the actual image version and
+your existing volume name:
+
+```bash
+docker run --name snowflake-emulator -p 8080:8080 \
+  -v snowflake-data:/data \
+  -e DB_PATH=/data/snowflake.db \
+  -e STAGE_DIR=/data/stages \
+  ghcr.io/oswaldonisango/snowflake-emulator:VERSION
+```
+
+An instance using the default in-memory database cannot preserve its database
+by restarting a container. For rollback after a metadata migration, restore the
+backup into a separate volume and use the previous image.
