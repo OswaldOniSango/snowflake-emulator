@@ -73,6 +73,28 @@ func TestRecordStatementRoundTrip(t *testing.T) {
 	}
 }
 
+func TestStatementOwnerSurvivesDatabaseReopen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "owners.db")
+	ctx := context.Background()
+	repo, closeDB := newHistoryRepo(t, path)
+	entry := record("owned", "success", time.Now())
+	entry.UserID = "alice-id"
+	if err := repo.RecordStatement(ctx, entry); err != nil {
+		closeDB()
+		t.Fatal(err)
+	}
+	closeDB()
+	reopened, closeReopened := newHistoryRepo(t, path)
+	defer closeReopened()
+	rows, err := reopened.ListStatementHistory(ctx, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].UserID != entry.UserID {
+		t.Fatalf("owner lost on restart: %+v", rows)
+	}
+}
+
 func TestRecordStatementUpdatesInPlace(t *testing.T) {
 	repo, closeDB := newHistoryRepo(t, ":memory:")
 	defer closeDB()

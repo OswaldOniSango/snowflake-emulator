@@ -35,6 +35,54 @@ func setupTestStore(t *testing.T) *Store {
 }
 
 // TestStore_SaveAndLoad tests saving and loading sessions.
+func TestSessionInspectionDoesNotWaitForBusyDatabase(t *testing.T) {
+	store := setupTestStore(t)
+	db := store.mgr.DB()
+	db.SetMaxOpenConns(1)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	manager, err := NewPersistentManager(ctx, time.Hour, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess, err := manager.CreateSession(ctx, "alice", "TEST_DB", "PUBLIC")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pinned, err := db.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pinned.Close()
+	waits := db.Stats().WaitCount
+	validated := make(chan error, 1)
+	go func() { _, err := manager.ValidateSession(ctx, sess.Token); validated <- err }()
+	for db.Stats().WaitCount == waits {
+		select {
+		case <-ctx.Done():
+			t.Fatal("validation did not wait for the busy connection")
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+	inspected := make(chan error, 1)
+	go func() { _, err := manager.InspectSession(sess.Token); inspected <- err }()
+	select {
+	case err := <-inspected:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-ctx.Done():
+		t.Fatal("token inspection blocked on database I/O")
+	}
+	if err := pinned.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-validated; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestStore_SaveAndLoad(t *testing.T) {
 	store := setupTestStore(t)
 	ctx := context.Background()

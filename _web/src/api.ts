@@ -102,12 +102,11 @@ const POLL_INTERVAL_MS = 150;
 
 /** Asks the emulator to stop a statement. Failing to cancel is not an error
  * worth surfacing: the statement may simply have finished first. */
-export async function cancelStatement(handle: string, fetchFn: typeof fetch = fetch): Promise<void> {
-  const headers = authHeaders();
+export async function cancelStatement(handle: string, fetchFn: typeof fetch = fetch, headers = authHeaders()): Promise<void> {
   await fetchFn(
     `/api/v2/statements/${encodeURIComponent(handle)}/cancel`,
     Object.keys(headers).length === 0 ? { method: "POST" } : { method: "POST", headers },
-  );
+  ).catch(() => undefined);
 }
 
 /**
@@ -129,10 +128,17 @@ export async function runStatement(
   onHandle?: (handle: string) => void,
 ): Promise<Statement> {
   const startedAt = performance.now();
+  const token = session()?.token;
+  const headers = authHeaders();
+  const ensureSameSession = (): void => {
+    if (session()?.token !== token) {
+      throw new StatementError(CODE_CANCELED, "", "Session changed during execution.", "");
+    }
+  };
 
   let response = await fetchFn("/api/v2/statements", {
     method: "POST",
-    headers: { ...authHeaders(), "Content-Type": "application/json" },
+    headers: { ...headers, "Content-Type": "application/json" },
     body: JSON.stringify({ statement, ...context, ...authContext(), async: true }),
   });
 
@@ -141,13 +147,16 @@ export async function runStatement(
   if (handle) {
     onHandle?.(handle);
   }
+  ensureSameSession();
 
   // Poll until it stops reporting itself as pending. A handle-less response is
   // a rejection — an empty statement, say — and is dealt with below.
   while (handle && body.code === CODE_PENDING) {
     await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
-    response = await fetchFn(`/api/v2/statements/${encodeURIComponent(handle)}`, { headers: authHeaders() });
+    ensureSameSession();
+    response = await fetchFn(`/api/v2/statements/${encodeURIComponent(handle)}`, { headers });
     body = (await response.json()) as RawResponse;
+    ensureSameSession();
   }
 
   const elapsedMs = Math.round(performance.now() - startedAt);

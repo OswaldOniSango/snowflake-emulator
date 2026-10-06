@@ -6,6 +6,35 @@ beforeEach(() => {
 });
 
 describe("browser authentication", () => {
+  async function signInAs(token: string): Promise<void> {
+    await login({ username: token, password: "secret" }, vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      success: true, data: { token, masterToken: "master", validityInSeconds: 3600,
+        sessionInfo: { databaseName: "TEST_DB", schemaName: "PUBLIC", warehouseName: "WH", roleName: "PUBLIC" } },
+    }))));
+  }
+
+  it("clears locally before a slow logout and preserves a subsequent login", async () => {
+    await signInAs("alice");
+    let finish!: (response: Response) => void;
+    const pending = logout(vi.fn<typeof fetch>().mockImplementation(() => new Promise((resolve) => { finish = resolve; })));
+    expect(session()).toBeNull();
+    await signInAs("bob");
+    finish(new Response("{}"));
+    await pending;
+    expect(session()?.username).toBe("bob");
+  });
+
+  it("does not apply an old role selection to a new user", async () => {
+    await signInAs("alice");
+    let finish!: (response: Response) => void;
+    const pending = useRole("SYSADMIN", vi.fn<typeof fetch>().mockImplementation(() => new Promise((resolve) => { finish = resolve; })));
+    const rejected = expect(pending).rejects.toThrow("Session changed");
+    await logout(vi.fn<typeof fetch>().mockResolvedValue(new Response("{}")));
+    await signInAs("bob");
+    finish(new Response('{"success":true}'));
+    await rejected;
+    expect(session()?.role).toBe("PUBLIC");
+  });
   it("logs in and keeps the token in session storage", async () => {
     const fetchFn = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
       success: true,

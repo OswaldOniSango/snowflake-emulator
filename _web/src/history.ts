@@ -50,8 +50,8 @@ export function createHistoryView(options: HistoryOptions): { refresh: () => Pro
 
     const blurb = document.createElement("p");
     blurb.textContent = retainedFor
-      ? `Everything submitted through this emulator in the last ${humanise(retainedFor)}. Click a row to reopen it in a new worksheet.`
-      : "Everything submitted through this emulator. Click a row to reopen it in a new worksheet.";
+      ? `Your statements from the last ${humanise(retainedFor)}. Click a row to reopen it in a new worksheet.`
+      : "Your statements. Click a row to reopen it in a new worksheet.";
 
     const text = document.createElement("div");
     text.append(heading, blurb);

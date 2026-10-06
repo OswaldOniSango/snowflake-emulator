@@ -176,6 +176,33 @@ func (m *Manager) save(ctx context.Context, sess *Session) error {
 // ValidateSession validates a session token and returns the session if valid.
 // It also updates the LastAccessedAt timestamp.
 func (m *Manager) ValidateSession(ctx context.Context, token string) (*Session, error) {
+	if _, err := m.InspectSession(token); err != nil {
+		return nil, err
+	}
+	// Never hold the session mutex while waiting on DuckDB. A running query
+	// can occupy its sole connection, while cancellation needs that mutex to
+	// authenticate the request that will release the connection.
+	now := time.Now()
+	if m.store != nil {
+		if err := m.store.Touch(ctx, token, now); err != nil {
+			return nil, fmt.Errorf("failed to persist session activity: %w", err)
+		}
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	sess, exists := m.sessions[token]
+	if !exists || time.Now().After(sess.ExpiresAt) {
+		return nil, fmt.Errorf("session expired or closed")
+	}
+	if now.After(sess.LastAccessedAt) {
+		sess.LastAccessedAt = now
+	}
+	return sess.Copy(), nil
+}
+
+// InspectSession validates a token without database I/O, for cancellation and
+// result polling while a query may occupy the single execution connection.
+func (m *Manager) InspectSession(token string) (*Session, error) {
 	if token == "" {
 		return nil, fmt.Errorf("token cannot be empty")
 	}
@@ -195,16 +222,6 @@ func (m *Manager) ValidateSession(ctx context.Context, token string) (*Session, 
 		return nil, fmt.Errorf("session expired")
 	}
 
-	// Persist the touch before exposing it in memory, so a restart observes the
-	// same session activity that callers observed.
-	now := time.Now()
-	if m.store != nil {
-		if err := m.store.Touch(ctx, token, now); err != nil {
-			return nil, fmt.Errorf("failed to persist session activity: %w", err)
-		}
-	}
-	session.LastAccessedAt = now
-
 	return session.Copy(), nil
 }
 
@@ -219,6 +236,14 @@ func (m *Manager) CloseSession(ctx context.Context, token string) error {
 		// Delete both session token and master token
 		delete(m.sessions, token)
 		delete(m.masterTokens, session.MasterToken)
+	}
+	// Validation/cleanup may already have evicted an expired access token.
+	// Its master token must still be revoked on logout, otherwise it can
+	// resurrect the closed session through RenewToken.
+	for masterToken, sess := range m.masterTokens {
+		if sess.Token == token {
+			delete(m.masterTokens, masterToken)
+		}
 	}
 
 	// Delete from store if available

@@ -200,6 +200,35 @@ func TestManager_SessionExpiration(t *testing.T) {
 }
 
 // TestManager_CloseSession tests session closure/logout.
+func TestManager_LogoutRevokesMasterAfterExpiration(t *testing.T) {
+	for _, evict := range []string{"validate", "cleanup"} {
+		t.Run(evict, func(t *testing.T) {
+			mgr := NewManager(time.Hour)
+			ctx := context.Background()
+			sess, err := mgr.CreateSession(ctx, "alice", "TEST_DB", "PUBLIC")
+			if err != nil {
+				t.Fatal(err)
+			}
+			mgr.mu.Lock()
+			mgr.sessions[sess.Token].ExpiresAt = time.Now().Add(-time.Minute)
+			mgr.mu.Unlock()
+			if evict == "validate" {
+				if _, err := mgr.ValidateSession(ctx, sess.Token); err == nil {
+					t.Fatal("expired token accepted")
+				}
+			} else {
+				mgr.CleanupExpiredSessions(ctx)
+			}
+			if err := mgr.CloseSession(ctx, sess.Token); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := mgr.RenewToken(ctx, sess.MasterToken); err == nil {
+				t.Fatal("logout session resurrected")
+			}
+		})
+	}
+}
+
 func TestManager_CloseSession(t *testing.T) {
 	mgr := NewManager(1 * time.Hour)
 	ctx := context.Background()

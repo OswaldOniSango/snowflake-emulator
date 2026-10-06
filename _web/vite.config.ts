@@ -24,11 +24,12 @@ export default defineConfig({
     port: 5173,
     strictPort: true,
     // Same-origin in production (the binary serves the UI), so the proxy exists
-    // only to keep development free of CORS as well. The console talks to
-    // /api/v2 exclusively; the gosnowflake protocol routes (/session, /queries,
-    // /telemetry) are for drivers and are deliberately not proxied.
+    // only to keep development free of CORS as well. Authentication and role
+    // selection also use the session and query protocol endpoints.
     proxy: {
       "/api": { target: emulator, changeOrigin: false },
+      "/session": { target: emulator, changeOrigin: false },
+      "/queries": { target: emulator, changeOrigin: false },
       "/health": { target: emulator, changeOrigin: false },
     },
   },
