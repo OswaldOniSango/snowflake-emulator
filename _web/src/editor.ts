@@ -41,7 +41,7 @@ const theme = EditorView.theme({
   ".cm-activeLine": { backgroundColor: "var(--sunk)" },
   // Snowflake-style marker for the statement being run. It remains on the
   // most recently executed statement without obscuring the SQL with a fill.
-  ".cm-runningStatement": { boxShadow: "inset 3px 0 0 var(--ok)" },
+  ".cm-runningStatement": { boxShadow: "inset 3px 0 0 var(--accent)" },
   ".cm-activeLineGutter": { backgroundColor: "var(--panel-2)", color: "var(--ink-2)" },
   ".cm-selectionBackground, &.cm-focused .cm-selectionBackground": {
     backgroundColor: "var(--accent-soft)",

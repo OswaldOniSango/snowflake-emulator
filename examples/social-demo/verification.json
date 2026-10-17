@@ -1,0 +1,119 @@
+{
+  "database": "MALLARD_DEMO_DB",
+  "schema": "COMMERCE",
+  "warehouse": "MALLARD_DEMO_WH",
+  "statements": 52,
+  "pipelineCounts": [
+    [
+      12,
+      12,
+      0
+    ]
+  ],
+  "functions": 3,
+  "tasks": 3,
+  "result": [
+    [
+      "North America",
+      2,
+      4,
+      {
+        "Width": 12,
+        "Scale": 2,
+        "Value": 255493
+      },
+      {
+        "Width": 12,
+        "Scale": 2,
+        "Value": 63873
+      },
+      32.2,
+      "HIGH"
+    ],
+    [
+      "Europe",
+      2,
+      2,
+      {
+        "Width": 12,
+        "Scale": 2,
+        "Value": 197460
+      },
+      {
+        "Width": 12,
+        "Scale": 2,
+        "Value": 98730
+      },
+      24.9,
+      "HIGH"
+    ],
+    [
+      "Asia Pacific",
+      1,
+      2,
+      {
+        "Width": 12,
+        "Scale": 2,
+        "Value": 149815
+      },
+      {
+        "Width": 12,
+        "Scale": 2,
+        "Value": 74908
+      },
+      18.9,
+      "HIGH"
+    ],
+    [
+      "Latin America",
+      1,
+      2,
+      {
+        "Width": 12,
+        "Scale": 2,
+        "Value": 71400
+      },
+      {
+        "Width": 12,
+        "Scale": 2,
+        "Value": 35700
+      },
+      9,
+      "EMERGING"
+    ],
+    [
+      "Middle East",
+      1,
+      1,
+      {
+        "Width": 12,
+        "Scale": 2,
+        "Value": 70775
+      },
+      {
+        "Width": 12,
+        "Scale": 2,
+        "Value": 70775
+      },
+      8.9,
+      "EMERGING"
+    ],
+    [
+      "Africa",
+      1,
+      1,
+      {
+        "Width": 12,
+        "Scale": 2,
+        "Value": 48020
+      },
+      {
+        "Width": 12,
+        "Scale": 2,
+        "Value": 48020
+      },
+      6.1,
+      "EMERGING"
+    ]
+  ]
+}

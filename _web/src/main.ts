@@ -52,8 +52,8 @@ const MARK = `
 <svg viewBox="0 0 24 24" aria-hidden="true">
   <defs>
     <linearGradient id="mallard-mark" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#12866F" />
-      <stop offset="1" stop-color="#0B4E52" />
+      <stop offset="0" stop-color="#2466CF" />
+      <stop offset="1" stop-color="#174792" />
     </linearGradient>
   </defs>
   <rect width="24" height="24" rx="7" fill="url(#mallard-mark)" />
