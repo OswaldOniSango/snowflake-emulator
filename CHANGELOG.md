@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- Apply the dark palette when dark mode is selected explicitly, even when the system prefers light mode.
+
 ## v0.5.0
 
 - Isolate authenticated statement results, cancellation, and persisted history by user.
