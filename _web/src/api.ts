@@ -384,6 +384,9 @@ export interface Warehouse {
 
 /** One row of the statement history. */
 export interface HistoryEntry {
+  username?: string;
+  warehouseSize?: string;
+  warehouse?: string;
   statementHandle: string;
   status: string;
   statement: string;

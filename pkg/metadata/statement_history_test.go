@@ -79,6 +79,8 @@ func TestStatementOwnerSurvivesDatabaseReopen(t *testing.T) {
 	repo, closeDB := newHistoryRepo(t, path)
 	entry := record("owned", "success", time.Now())
 	entry.UserID = "alice-id"
+	entry.Username = "ALICE_AT_EXECUTION"
+	entry.WarehouseSize = "SMALL"
 	if err := repo.RecordStatement(ctx, entry); err != nil {
 		closeDB()
 		t.Fatal(err)
@@ -90,7 +92,7 @@ func TestStatementOwnerSurvivesDatabaseReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) != 1 || rows[0].UserID != entry.UserID {
+	if len(rows) != 1 || rows[0].UserID != entry.UserID || rows[0].Username != entry.Username || rows[0].WarehouseSize != entry.WarehouseSize {
 		t.Fatalf("owner lost on restart: %+v", rows)
 	}
 }

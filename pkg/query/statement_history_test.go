@@ -408,3 +408,16 @@ func TestCreateStatementDoesNotLeakTheManagersCopy(t *testing.T) {
 		t.Errorf("status = %q, want pending", held.Status)
 	}
 }
+
+func TestExecutionMetadataSurvivesHistoryReload(t *testing.T) {
+	manager, store := managerWithHistory(t)
+	stmt := manager.CreateStatementForUser("SELECT 1", "TEST_DB", "PUBLIC", "WH", "alice-id")
+	manager.SetExecutionMetadata(stmt.Handle, "ALICE", "SMALL")
+	manager.SetResult(stmt.Handle, &Result{Rows: [][]interface{}{{1}}})
+	restored := NewStatementManager(time.Hour)
+	restored.SetHistoryStore(store, 7*24*time.Hour, true)
+	rows := restored.ListStatementsForUser(context.Background(), "alice-id", 0)
+	if len(rows) != 1 || rows[0].Username != "ALICE" || rows[0].WarehouseSize != "SMALL" {
+		t.Fatalf("metadata lost on history reload: %+v", rows)
+	}
+}

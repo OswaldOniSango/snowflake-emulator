@@ -348,16 +348,18 @@ type StageFileResponse struct {
 
 // StatementHistoryEntry is one row of the statement history.
 type StatementHistoryEntry struct {
-	Handle      string `json:"statementHandle"`
-	Status      string `json:"status"`
-	Statement   string `json:"statement"`
-	Database    string `json:"database,omitempty"`
-	Schema      string `json:"schema,omitempty"`
-	Warehouse   string `json:"warehouse,omitempty"`
-	CreatedOn   int64  `json:"createdOn"`
-	QueuedOn    int64  `json:"queuedOn,omitempty"`
-	StartedOn   int64  `json:"startedOn,omitempty"`
-	CompletedOn int64  `json:"completedOn,omitempty"`
+	Username      string `json:"username,omitempty"`
+	WarehouseSize string `json:"warehouseSize,omitempty"`
+	Handle        string `json:"statementHandle"`
+	Status        string `json:"status"`
+	Statement     string `json:"statement"`
+	Database      string `json:"database,omitempty"`
+	Schema        string `json:"schema,omitempty"`
+	Warehouse     string `json:"warehouse,omitempty"`
+	CreatedOn     int64  `json:"createdOn"`
+	QueuedOn      int64  `json:"queuedOn,omitempty"`
+	StartedOn     int64  `json:"startedOn,omitempty"`
+	CompletedOn   int64  `json:"completedOn,omitempty"`
 
 	// DurationMs is set once a statement has finished.
 	DurationMs int64 `json:"durationMs,omitempty"`

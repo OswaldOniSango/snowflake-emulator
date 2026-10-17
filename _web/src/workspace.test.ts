@@ -208,3 +208,21 @@ describe("reorderWorksheets", () => {
     expect(names(list)).toEqual(["A", "B", "C"]);
   });
 });
+
+it("preserves saved closed worksheets separately from open tabs", () => {
+ const first = newWorksheet("Closed", DEFAULT_CONTEXT, "SELECT 35;");
+ const second = newWorksheet("Open", DEFAULT_CONTEXT, "SELECT 42;");
+ const workspace = { worksheets: [first, second], activeId: second.id, openWorksheetIds: [second.id] };
+ const storage = fakeStorage();
+ expect(saveWorkspace(workspace, storage)).toBe(true);
+ expect(loadWorkspace(storage)).toEqual(workspace);
+});
+it("removes stale and duplicate open tabs and keeps the active worksheet open", () => {
+ const worksheet = newWorksheet("Saved");
+ const storage = fakeStorage(stored({ worksheets: [worksheet], activeId: worksheet.id, openWorksheetIds: ["missing", "missing"] }));
+ expect(loadWorkspace(storage).openWorksheetIds).toEqual([worksheet.id]);
+});
+it("reports unavailable storage instead of claiming the worksheet is saved", () => {
+ expect(saveWorkspace(defaultish(), null)).toBe(false);
+ expect(saveWorkspace(defaultish(), fakeStorage({}, true))).toBe(false);
+});

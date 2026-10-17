@@ -38,13 +38,15 @@ function label(collapsed: boolean): string {
 export function createDockCollapseToggle(dock: HTMLElement): HTMLButtonElement {
   let collapsed = loadDockCollapsed();
   dock.hidden = collapsed;
+  dock.closest(".result-panel")?.classList.toggle("is-collapsed", collapsed);
 
   const button = document.createElement("button");
   button.className = "icon-btn";
   button.type = "button";
 
   const paint = (): void => {
-    button.textContent = collapsed ? "⌃" : "⌄";
+    button.innerHTML = `<svg viewBox="0 0 20 20" aria-hidden="true"><path d="${collapsed ? "m4 12 6-6 6 6" : "m4 8 6 6 6-6"}" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+    button.setAttribute("aria-expanded", String(!collapsed));
     button.setAttribute("aria-label", label(collapsed));
     button.title = label(collapsed);
   };
@@ -52,6 +54,7 @@ export function createDockCollapseToggle(dock: HTMLElement): HTMLButtonElement {
   button.addEventListener("click", () => {
     collapsed = !collapsed;
     dock.hidden = collapsed;
+    dock.closest(".result-panel")?.classList.toggle("is-collapsed", collapsed);
     saveDockCollapsed(collapsed);
     paint();
   });

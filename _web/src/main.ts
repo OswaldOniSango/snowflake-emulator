@@ -1,4 +1,9 @@
 import "./style.css";
+import { warehouseLabel } from "./warehouse-picker";
+import { renderWorksheetList } from "./worksheet-list";
+import { createResultTools } from "./result-tools";
+import { createRunMenu } from "./run-menu";
+import { renderProjects, createIngestionView } from "./console-views";
 import {
   cancelStatement,
   CODE_CANCELED,
@@ -7,24 +12,29 @@ import {
   StatementError,
   translateStatement,
   type Statement,
+  type Warehouse,
 } from "./api";
 import { createEditor, type Editor } from "./editor";
 import { createExplorer } from "./explorer";
 import { renderGrid, renderNotice } from "./grid";
 import { checkHealth } from "./health";
 import { createContextPicker } from "./context-picker";
+import { createSidebarResize } from "./sidebar-resize";
+import { createDockResize } from "./dock-resize";
 import { createDockCollapseToggle } from "./dock-collapse";
 import { changesCatalog, createCatalog } from "./catalog";
-import { createExportControls } from "./export";
+import { createWorksheetMenu, worksheetFilename } from "./worksheet-menu";
+import { createExportControls, download } from "./export";
 import { createCompletionSource } from "./completion";
 import { createHistoryView } from "./history";
 import { createWarehousesView } from "./warehouses";
 import { createLimitationsButton } from "./limitations";
-import { createThemeToggle } from "./theme";
+import { applyTheme, loadTheme } from "./theme";
+import { renderIdentity } from "./user-menu";
 import { createIdentityAdminView, discoverAvailableRoles } from "./identity-admin";
 import { splitStatements, statementAt, type Statement as StatementRange } from "./statements";
 import { renderTranslation } from "./translation";
-import { authHeaders, login, logout, rememberRole, session, subscribe, useRole, useWarehouse, type AuthSession } from "./auth";
+import { authHeaders, login, rememberRole, session, subscribe, useRole, useWarehouse, type AuthSession } from "./auth";
 import {
   loadWorkspace,
   nextWorksheetName,
@@ -54,56 +64,75 @@ const MARK = `
 
 const SHELL = `
 <div class="login-screen" data-role="login"></div>
+<aside class="app-rail">
+  <div class="rail-brand">${MARK.replaceAll("mallard-mark", "rail-mallard-mark")}<b>Mallard</b></div>
+  <button class="rail-toggle" data-role="rail-toggle" aria-label="Expand navigation" aria-expanded="false">⇥</button>
+  <nav class="rail-nav" data-role="nav">
+    <button data-view="projects" title="Home"><span aria-hidden="true">⌂</span><span>Home</span></button>
+    <p>Work with data</p>
+    <button data-view="worksheets" aria-current="page" title="Worksheets" aria-label="Worksheets"><span aria-hidden="true">▣</span><span>Projects</span></button>
+    <button data-view="ingestion" title="Ingestion"><span aria-hidden="true">↥</span><span>Ingestion</span></button>
+    <button data-view="history" title="History" aria-label="History"><span aria-hidden="true">◷</span><span>Monitoring</span></button>
+    <p>Manage</p>
+    <button data-view="warehouses" title="Warehouses" aria-label="Warehouses"><span aria-hidden="true">ϟ</span><span>Compute</span></button>
+    <button data-view="identity" title="Identity"><span aria-hidden="true">♙</span><span>Identity</span></button>
+  </nav>
+  <div data-role="identity"></div>
+</aside>
 <header class="topbar">
   <div class="brand">${MARK}<b>Mallard</b><span>local</span></div>
-  <nav class="nav" data-role="nav">
-    <button data-view="worksheets" aria-current="page">Worksheets</button>
-    <button data-view="warehouses">Warehouses</button>
-    <button data-view="history">History</button>
-    <button data-view="identity">Identity</button>
-  </nav>
   <div class="spacer"></div>
   <div class="conn" data-state="pending" role="status">
     <span class="dot"></span><span data-role="health">Checking emulator…</span>
   </div>
-  <div data-role="identity"></div>
-  <div data-role="theme"></div>
 </header>
 
 <main class="workspace" data-view-pane="worksheets">
-  <aside class="sidebar" data-role="sidebar"></aside>
+  <aside class="sidebar" data-role="sidebar">
+    <div class="explorer-tabs sidebar-switcher"><button data-sidebar="workspaces">Workspaces</button><button data-sidebar="databases" aria-current="page">Databases</button></div>
+    <div class="sidebar-content" data-role="workspace-files" hidden></div>
+    <div class="sidebar-content" data-role="database-explorer"></div>
+  </aside>
+  <div class="sidebar-resizer" data-role="sidebar-resizer"></div>
 
   <div class="center">
-    <div class="tabstrip" data-role="tabs" role="tablist" aria-label="Open worksheets"></div>
+    <div class="worksheet-topline"><div class="tabstrip" data-role="tabs" role="tablist" aria-label="Open worksheets"></div><button class="ghost focus-button" data-role="focus" aria-pressed="false">⛶ Focus</button></div>
 
+    <div class="worksheet-breadcrumb">My Workspace <span>›</span> <b data-role="worksheet-name"></b><span class="worksheet-save-state" data-role="worksheet-save-state" title="Worksheets are saved in this browser">Saved locally</span></div>
     <div class="ctxbar">
+      <div data-role="run-controls"></div>
+      <button class="ghost danger" data-role="cancel" hidden>Cancel</button>
+      <div class="spacer"></div>
       <div data-role="compute-context"></div>
       <div data-role="context"></div>
-      <button class="run" data-role="run">Run <kbd data-role="shortcut"></kbd></button>
-      <button class="ghost danger" data-role="cancel" hidden>Cancel</button>
-      <button class="ghost" data-role="run-all" hidden></button>
     </div>
 
     <section class="editor" data-role="editor"></section>
 
-    <div class="toolbar">
-      <div class="status">
-        <span class="pill idle" data-role="pill">Idle</span>
-        <span data-role="meta">no statement submitted</span>
+    <div class="dock-resizer" data-role="dock-resizer"></div>
+    <section class="result-panel" data-role="result-panel">
+      <div class="dock-head" data-role="dock-head">
+        <div role="tablist" aria-label="Statement output" class="dock-tabs">
+          <button class="dtab" data-tab="results" aria-selected="true" role="tab">Results</button>
+          <button class="dtab" data-tab="translation" aria-selected="false" role="tab">Translated SQL</button>
+        </div>
       </div>
-    </div>
-
-    <div class="dock-head" data-role="dock-head">
-      <div role="tablist" aria-label="Statement output" class="dock-tabs">
-        <button class="dtab" data-tab="results" aria-selected="true" role="tab">Results</button>
-        <button class="dtab" data-tab="translation" aria-selected="false" role="tab">Translated SQL</button>
+      <div class="dock-body" data-role="dock-body">
+        <div class="toolbar result-toolbar" data-role="result-toolbar">
+          <span class="result-table-label">Table</span>
+          <div class="status">
+            <span class="pill idle" data-role="pill">Idle</span>
+            <span data-role="meta">no statement submitted</span>
+          </div>
+        </div>
+        <section class="dock" data-role="dock" aria-live="polite"></section>
       </div>
-    </div>
-
-    <section class="dock" data-role="dock" aria-live="polite"></section>
+    </section>
   </div>
 </main>
 
+<div class="view-pane" data-view-pane="projects" hidden></div>
+<div class="view-pane" data-view-pane="ingestion" hidden></div>
 <div class="view-pane" data-view-pane="warehouses" hidden></div>
 <div class="view-pane" data-view-pane="history" hidden></div>
 <div class="view-pane" data-view-pane="identity" hidden></div>
@@ -130,8 +159,7 @@ function main(): void {
 
   const dock = pick(root, "dock");
   const tabstrip = pick(root, "tabs");
-  const runButton = pick<HTMLButtonElement>(root, "run");
-  const runAllButton = pick<HTMLButtonElement>(root, "run-all");
+  const runControls = createRunMenu(pick(root, "run-controls"), () => void run(), () => void runAll(), isApplePlatform() ? "⌘↵" : "Ctrl+↵");
   const cancelButton = pick<HTMLButtonElement>(root, "cancel");
   const pill = pick(root, "pill");
   const meta = pick(root, "meta");
@@ -140,6 +168,8 @@ function main(): void {
   const computeContext = pick(root, "compute-context");
 
   const workspace: Workspace = loadWorkspace();
+  workspace.openWorksheetIds ??= workspace.worksheets.map((worksheet) => worksheet.id);
+  const worksheetMenu = createWorksheetMenu();
   let activeTab: "results" | "translation" = "results";
   let resultsPane: HTMLElement = renderNotice("info", "Run a statement to see results here");
   let translationPane: HTMLElement | null = null;
@@ -162,10 +192,18 @@ function main(): void {
   let sessionToken: string | undefined;
   const views = new Map<string, { refresh: () => Promise<void> }>();
 
-  pick(root, "shortcut").textContent = isApplePlatform() ? "⌘↵" : "Ctrl+↵";
-  pick(root, "theme").append(createThemeToggle());
+  applyTheme(loadTheme());
+  document.addEventListener("click", (event) => {
+    root.querySelectorAll<HTMLDetailsElement>(".user-menu[open], .result-download[open], .result-popover[open]").forEach((menu) => {
+      if (event.target instanceof Node && !menu.contains(event.target)) menu.open = false;
+    });
+  });
+  const resultTools = createResultTools(pick(root, "result-toolbar"), () => shownResult, () => dock);
   const exportControls = createExportControls(() => shownResult);
-  pick(root, "dock-head").append(exportControls, createDockCollapseToggle(dock));
+  pick(root, "result-toolbar").append(exportControls);
+  pick(root, "dock-head").append(createDockCollapseToggle(pick(root, "dock-body")));
+  createSidebarResize(pick(root, "sidebar-resizer"), root.querySelector<HTMLElement>(".workspace")!);
+  createDockResize(pick(root, "dock-resizer"), pick(root, "editor"), pick(root, "result-panel"));
   pick(root, "limitations").append(createLimitationsButton());
 
   // Completion reads whatever the cache last loaded, so a namespace that has
@@ -177,6 +215,7 @@ function main(): void {
     initialValue: active().sql,
     completions: createCompletionSource(catalog),
     onRun: () => void run(),
+    onRunAll: () => void runAll(),
     onChange: (value) => {
       active().sql = value;
       persist();
@@ -225,7 +264,7 @@ function main(): void {
   });
 
   createExplorer({
-    parent: pick(root, "sidebar"),
+    parent: pick(root, "database-explorer"),
     context: () => active().context,
     onInsert: (name) => editor.insert(name),
   });
@@ -249,7 +288,11 @@ function main(): void {
   }
 
   function persist(): void {
-    saveWorkspace(workspace);
+    const saved = saveWorkspace(workspace);
+    const state = pick(root!, "worksheet-save-state");
+    state.textContent = saved ? "Saved locally" : "Not saved";
+    state.classList.toggle("save-error", !saved);
+    state.title = saved ? "Saved in this browser. Download a SQL file for a portable copy." : "Browser storage is unavailable or full. Download your worksheet to keep a copy.";
   }
 
   /** What Run will submit: the selection, or the statement around the cursor. */
@@ -278,8 +321,7 @@ function main(): void {
 
   function updateRunAll(): void {
     const count = splitStatements(editor.value()).length;
-    runAllButton.hidden = count < 2;
-    runAllButton.textContent = `Run all ${count}`;
+    runControls.setStatementCount(count);
   }
 
   async function run(): Promise<void> {
@@ -310,8 +352,7 @@ function main(): void {
     runningHeaders = headers;
     canceled = false;
     runningHandle = null;
-    runButton.disabled = true;
-    runAllButton.disabled = true;
+    runControls.setRunning(true);
     cancelButton.hidden = false;
     cancelButton.disabled = false;
     setStatus("run", "Running", statements.length === 1 ? "submitting statement" : `1 of ${statements.length}`);
@@ -390,9 +431,14 @@ function main(): void {
       if (generation === executionGeneration) {
         running = false;
         runningHandle = null;
-        runButton.disabled = false;
-        runAllButton.disabled = false;
+        runControls.setRunning(false);
         cancelButton.hidden = true;
+        void listWarehouses().then((warehouses) => {
+          if (generation !== executionGeneration) return;
+          const selected = session()?.warehouse;
+          const label = computeContext.querySelector(".context-trigger .warehouse-label");
+          if (label && selected) label.replaceWith(warehouseLabel(warehouses.find((warehouse) => warehouse.name === selected), selected));
+        }).catch(() => { /* Keep the last known state if the catalog is unavailable. */ });
         showTab("results");
       }
     }
@@ -410,6 +456,7 @@ function main(): void {
       return;
     }
     workspace.worksheets = reordered;
+    workspace.openWorksheetIds = reordered.filter((item) => workspace.openWorksheetIds!.includes(item.id)).map((item) => item.id);
     dragged = null;
     persist();
     renderTabs();
@@ -424,6 +471,8 @@ function main(): void {
     pill.className = `pill ${state}`;
     pill.textContent = label;
     meta.textContent = detail;
+    meta.hidden = state === "ok" && shownResult !== null;
+    if (state !== "ok") resultTools.refresh(false);
   }
 
   function showTab(tab: "results" | "translation"): void {
@@ -435,9 +484,11 @@ function main(): void {
 
     if (tab === "results") {
       dock.replaceChildren(resultsPane);
+      resultTools.refresh(true);
       return;
     }
 
+    resultTools.refresh(false);
     const statement = statementToRun();
     if (!statement) {
       dock.replaceChildren(renderNotice("info", "Write a statement to see how it translates"));
@@ -479,8 +530,7 @@ function main(): void {
     }
     running = false;
     runningHandle = null;
-    runButton.disabled = false;
-    runAllButton.disabled = false;
+    runControls.setRunning(false);
     cancelButton.hidden = true;
     cancelButton.disabled = false;
     translationPane = null;
@@ -494,6 +544,7 @@ function main(): void {
   }
 
   function switchTo(id: string): void {
+    if (!workspace.openWorksheetIds!.includes(id)) workspace.openWorksheetIds!.push(id);
     if (id === workspace.activeId) {
       return;
     }
@@ -512,6 +563,7 @@ function main(): void {
   function addWorksheet(): void {
     const worksheet = newWorksheet(nextWorksheetName(workspace.worksheets), active().context);
     workspace.worksheets.push(worksheet);
+    workspace.openWorksheetIds!.push(worksheet.id);
     workspace.activeId = worksheet.id;
     editor.setValue("");
     contextPicker.set(worksheet.context);
@@ -525,30 +577,33 @@ function main(): void {
   }
 
   function closeWorksheet(id: string): void {
-    const index = workspace.worksheets.findIndex((worksheet) => worksheet.id === id);
-    if (index < 0) {
-      return;
+    const open = workspace.openWorksheetIds!;
+    const index = open.indexOf(id);
+    if (index < 0) return;
+    open.splice(index, 1);
+    if (!open.length) {
+      const replacement = newWorksheet(nextWorksheetName(workspace.worksheets), active().context);
+      workspace.worksheets.push(replacement); open.push(replacement.id);
     }
+    if (workspace.activeId === id) {
+      switchTo(open[Math.max(0, index - 1)]!);
+    } else { persist(); renderTabs(); }
+  }
 
-    workspace.worksheets.splice(index, 1);
-    if (workspace.worksheets.length === 0) {
-      // Closing the last one leaves an empty worksheet rather than no console.
-      const replacement = newWorksheet("Worksheet 1");
-      workspace.worksheets.push(replacement);
-      workspace.activeId = replacement.id;
-    } else if (workspace.activeId === id) {
-      const neighbour = workspace.worksheets[Math.max(0, index - 1)] as Worksheet;
-      workspace.activeId = neighbour.id;
-    }
-
-    editor.setValue(active().sql);
-    contextPicker.set(active().context);
-    syncCatalog();
-    resetOutput();
-    persist();
-    renderTabs();
-    updateRunAll();
-    showTab("results");
+  function deleteWorksheet(worksheet: Worksheet): void {
+    const dialog = document.createElement("dialog"); dialog.className = "worksheet-delete-dialog";
+    dialog.setAttribute("aria-labelledby", "delete-worksheet-title");
+    dialog.innerHTML = '<h2 id="delete-worksheet-title">Delete worksheet?</h2><p></p><div class="load-actions"><button class="ghost" type="button">Cancel</button><button class="danger" type="button">Delete</button></div>';
+    dialog.querySelector("p")!.textContent = `Delete “${worksheet.name}” and its saved SQL from this browser?`;
+    dialog.querySelectorAll("button")[0]!.addEventListener("click", () => dialog.close());
+    dialog.querySelectorAll("button")[1]!.addEventListener("click", () => {
+      // Close while the active object still exists, then remove its saved file.
+      closeWorksheet(worksheet.id);
+      workspace.worksheets = workspace.worksheets.filter((item) => item.id !== worksheet.id);
+      persist(); renderTabs(); dialog.close();
+    });
+    dialog.addEventListener("close", () => dialog.remove());
+    document.body.append(dialog); dialog.showModal(); dialog.querySelector<HTMLButtonElement>("button")!.focus();
   }
 
   function renameWorksheet(worksheet: Worksheet, tab: HTMLElement): void {
@@ -557,7 +612,10 @@ function main(): void {
     input.value = worksheet.name;
     input.setAttribute("aria-label", "Worksheet name");
 
+    let finished = false;
     const commit = (): void => {
+      if (finished) return;
+      finished = true;
       const name = input.value.trim();
       if (name) {
         worksheet.name = name;
@@ -571,6 +629,7 @@ function main(): void {
       if (event.key === "Enter") {
         commit();
       } else if (event.key === "Escape") {
+        finished = true;
         renderTabs();
       }
     });
@@ -581,9 +640,12 @@ function main(): void {
   }
 
   function renderTabs(): void {
+    worksheetMenu.close();
+    renderWorksheetList(pick(root!, "workspace-files"), workspace, switchTo, addWorksheet);
+    pick(root!, "worksheet-name").textContent = active().name;
     tabstrip.replaceChildren();
 
-    for (const worksheet of workspace.worksheets) {
+    for (const worksheet of workspace.worksheets.filter((item) => workspace.openWorksheetIds!.includes(item.id))) {
       const tab = document.createElement("div");
       tab.className = "wtab";
       tab.setAttribute("role", "tab");
@@ -643,7 +705,12 @@ function main(): void {
         closeWorksheet(worksheet.id);
       });
 
-      tab.append(name, close);
+      const actions = worksheetMenu.trigger(worksheet, {
+        rename: () => renameWorksheet(worksheet, tab),
+        download: () => download(worksheetFilename(worksheet.name), "application/sql", worksheet.sql),
+        delete: () => deleteWorksheet(worksheet),
+      });
+      tab.append(name, actions, close);
       tabstrip.append(tab);
     }
 
@@ -659,6 +726,8 @@ function main(): void {
   // they are opened rather than on load.
 
   function showView(name: string): void {
+    worksheetMenu.close();
+    runControls.close();
     root!.querySelectorAll<HTMLElement>("[data-view-pane]").forEach((pane) => {
       pane.hidden = pane.dataset["viewPane"] !== name;
     });
@@ -670,7 +739,24 @@ function main(): void {
       }
     });
 
-    if (name === "worksheets") {
+    root!.classList.toggle("wide-navigation", name !== "worksheets");
+    const toggle = pick(root!, "rail-toggle");
+    toggle.setAttribute("aria-expanded", String(name !== "worksheets"));
+    toggle.setAttribute("aria-label", name === "worksheets" ? "Expand navigation" : "Collapse navigation");
+    if (name === "worksheets") { return; }
+    if (name === "projects") {
+      renderProjects(root!.querySelector<HTMLElement>('[data-view-pane="projects"]')!, workspace, (id) => {
+        switchTo(id);
+        showView("worksheets");
+      }, () => { addWorksheet(); showView("worksheets"); });
+      return;
+    }
+    if (name === "ingestion") {
+      const pane = root!.querySelector<HTMLElement>('[data-view-pane="ingestion"]')!;
+      createIngestionView(pane, active().context, (sql, context) => {
+        openInWorksheet(sql, context);
+        showView("worksheets");
+      });
       return;
     }
 
@@ -708,6 +794,7 @@ function main(): void {
   function openInWorksheet(sql: string, context: ExecutionContext): void {
     const worksheet = newWorksheet(nextWorksheetName(workspace.worksheets), context, sql);
     workspace.worksheets.push(worksheet);
+    workspace.openWorksheetIds!.push(worksheet.id);
     workspace.activeId = worksheet.id;
     editor.setValue(sql);
     contextPicker.set(context);
@@ -727,6 +814,26 @@ function main(): void {
     }
   });
 
+  root.querySelectorAll<HTMLButtonElement>("[data-sidebar]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const workspaces = button.dataset["sidebar"] === "workspaces";
+      pick(root, "workspace-files").hidden = !workspaces;
+      pick(root, "database-explorer").hidden = workspaces;
+      root.querySelectorAll("[data-sidebar]").forEach((tab) => { if (tab === button) tab.setAttribute("aria-current", "page"); else tab.removeAttribute("aria-current"); });
+    });
+  });
+
+  pick(root, "rail-toggle").addEventListener("click", () => {
+    const expanded = root.classList.toggle("wide-navigation");
+    const toggle = pick(root, "rail-toggle");
+    toggle.setAttribute("aria-expanded", String(expanded));
+    toggle.setAttribute("aria-label", expanded ? "Collapse navigation" : "Expand navigation");
+  });
+  pick(root, "focus").addEventListener("click", () => {
+    const focused = root.classList.toggle("focus-workspace");
+    pick(root, "focus").setAttribute("aria-pressed", String(focused));
+  });
+
   cancelButton.addEventListener("click", () => {
     if (!runningHandle) {
       return;
@@ -739,14 +846,13 @@ function main(): void {
     void cancelStatement(runningHandle);
   });
 
-  runButton.addEventListener("click", () => void run());
-  runAllButton.addEventListener("click", () => void runAll());
   root.querySelectorAll<HTMLElement>(".dtab").forEach((button) => {
     button.addEventListener("click", () => {
       showTab(button.dataset["tab"] === "translation" ? "translation" : "results");
     });
   });
 
+  persist();
   renderTabs();
   updateRunAll();
   showTab("results");
@@ -801,20 +907,6 @@ function renderLogin(parent: HTMLElement, context: ExecutionContext): void {
   username.input.focus();
 }
 
-function renderIdentity(parent: HTMLElement, value: AuthSession | null): void {
-  parent.replaceChildren();
-  if (!value) return;
-  const label = document.createElement("span");
-  label.className = "identity-user";
-  label.textContent = value.username.slice(0, 1).toUpperCase();
-  label.title = value.username;
-  const out = document.createElement("button");
-  out.className = "identity-signout";
-  out.textContent = "Sign out";
-  out.addEventListener("click", () => void logout());
-  parent.append(label, out);
-}
-
 async function renderComputeContext(parent: HTMLElement, context: ExecutionContext, value: AuthSession | null): Promise<void> {
   parent.replaceChildren();
   if (!value) return;
@@ -833,15 +925,16 @@ async function renderComputeContext(parent: HTMLElement, context: ExecutionConte
   root.append(trigger, popover);
   parent.append(root);
 
-  let [roles, warehouses] = await Promise.all([
-    discoverAvailableRoles(context, value.username, value.role),
-    listWarehouses().catch(() => []),
-  ]);
+  let roles = await discoverAvailableRoles(context, value.username, value.role);
+  // Fetch lifecycle metadata after role discovery: that discovery can overlap a
+  // query auto-resuming a warehouse, so an earlier snapshot would be stale.
+  let warehouses = await listWarehouses().catch(() => []);
 
   let selectorError = "";
 
   const render = (): void => {
     const current = session() ?? value;
+    trigger.replaceChildren(document.createTextNode(`${current.role} · `), warehouseLabel(warehouses.find((warehouse) => warehouse.name === current.warehouse), current.warehouse || "Choose warehouse"));
     const roleColumn = computeColumn("Use role…", roles, current.role, async (role) => {
       selectorError = "";
       try {
@@ -856,7 +949,7 @@ async function renderComputeContext(parent: HTMLElement, context: ExecutionConte
     const warehouseColumn =
       computeColumn("Use warehouse…", warehouses.map((warehouse) => warehouse.name), current.warehouse, (warehouse) => {
         useWarehouse(warehouse);
-      }, new Map(warehouses.map((warehouse) => [warehouse.name, `${warehouse.size} · ${warehouse.state.toLowerCase()}`])));
+      }, new Map(), new Map(warehouses.map((warehouse) => [warehouse.name, warehouse])));
     popover.replaceChildren(roleColumn, warehouseColumn);
     if (selectorError) {
       const error = document.createElement("p");
@@ -889,6 +982,7 @@ async function renderComputeContext(parent: HTMLElement, context: ExecutionConte
       trigger.setAttribute("aria-expanded", "false");
     }
   });
+  render();
   trigger.disabled = false;
 }
 
@@ -907,6 +1001,7 @@ function computeColumn(
   selected: string,
   choose: (name: string) => void | Promise<unknown>,
   details = new Map<string, string>(),
+  warehouseEntries = new Map<string, Warehouse>(),
 ): HTMLElement {
   const column = document.createElement("section");
   column.className = "selector-column";
@@ -926,7 +1021,7 @@ function computeColumn(
       button.setAttribute("aria-current", name === selected ? "true" : "false");
       const label = document.createElement("span");
       label.textContent = name;
-      button.append(label);
+      button.append(warehouseEntries.has(name) ? warehouseLabel(warehouseEntries.get(name)) : label);
       const detail = details.get(name);
       if (detail) {
         const meta = document.createElement("small");

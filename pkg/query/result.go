@@ -83,7 +83,9 @@ type ExecutionContext struct {
 	// queue transitions while Acquire is blocking.
 	OnWarehouseQueued  func()
 	OnWarehouseRunning func()
-	warehouseAcquired  bool
+	// OnWarehouseSize receives the immutable admission-time size.
+	OnWarehouseSize   func(string)
+	warehouseAcquired bool
 
 	// RowLimit caps how many rows a query materializes. Zero uses the
 	// executor's default. It lives here because it is a property of one

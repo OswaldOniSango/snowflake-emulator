@@ -1,0 +1,26 @@
+import { afterEach, expect, it, vi } from "vitest";
+import { createWorksheetMenu, worksheetFilename } from "./worksheet-menu";
+import { newWorksheet } from "./workspace";
+afterEach(() => { document.body.replaceChildren(); vi.restoreAllMocks(); });
+it("opens an accessible menu, dispatches actions and closes on Escape", () => {
+ const menu = createWorksheetMenu();
+ const actions = { rename: vi.fn(), download: vi.fn(), delete: vi.fn() };
+ const trigger = menu.trigger(newWorksheet("<img src=x>"), actions); document.body.append(trigger);
+ trigger.click();
+ expect(document.querySelector("img")).toBeNull();
+ expect(trigger.getAttribute("aria-expanded")).toBe("true");
+ const items = [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')];
+ expect(items.map((item) => item.textContent)).toEqual(["✎Rename", "↓Download", "⌫Delete"]);
+ document.querySelector<HTMLElement>('[role="menu"]')!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+ expect(document.activeElement).toBe(items[1]);
+ items[1]!.click(); expect(actions.download).toHaveBeenCalledOnce();
+ expect(document.querySelector('[role="menu"]')).toBeNull();
+ trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp" }));
+ expect(document.activeElement?.textContent).toBe("⌫Delete");
+ document.querySelector<HTMLElement>('[role="menu"]')!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+ expect(document.activeElement).toBe(trigger);
+ expect(trigger.getAttribute("aria-expanded")).toBe("false");
+ trigger.click(); document.body.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }));
+ expect(document.querySelector('[role="menu"]')).toBeNull();
+});
+it.each([["Analysis", "Analysis.sql"], ["Analysis.SQL", "Analysis.SQL"], ["../bad:name", ".._bad_name.sql"], ["...", "worksheet.sql"]])("makes %s a portable SQL filename", (name, expected) => expect(worksheetFilename(name)).toBe(expected));

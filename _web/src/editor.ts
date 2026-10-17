@@ -128,6 +128,7 @@ export interface EditorOptions {
   initialValue: string;
   /** Invoked by the run shortcut, so the keybinding lives with the editor. */
   onRun: () => void;
+  onRunAll?: () => void;
   /** Invoked when the buffer changes, so the worksheet can be persisted. */
   onChange?: (value: string) => void;
   /**
@@ -161,6 +162,15 @@ export function createEditor(options: EditorOptions): Editor {
   // outrank it rather than merely be registered first.
   const runKeymap: Extension = Prec.highest(
     keymap.of([
+      {
+        key: "Mod-Shift-Enter",
+        preventDefault: true,
+        run: () => {
+          if (!options.onRunAll) return false;
+          options.onRunAll();
+          return true;
+        },
+      },
       {
         key: "Mod-Enter",
         preventDefault: true,

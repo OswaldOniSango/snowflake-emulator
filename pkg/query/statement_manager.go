@@ -27,18 +27,20 @@ const (
 
 // Statement represents an executing or completed SQL statement.
 type Statement struct {
-	UserID      string
-	Handle      string
-	Status      StatementStatus
-	SQLText     string
-	Database    string
-	Schema      string
-	Warehouse   string
-	CreatedOn   time.Time
-	QueuedOn    *time.Time
-	StartedOn   *time.Time
-	CompletedOn *time.Time
-	Result      *Result
+	Username      string
+	WarehouseSize string
+	UserID        string
+	Handle        string
+	Status        StatementStatus
+	SQLText       string
+	Database      string
+	Schema        string
+	Warehouse     string
+	CreatedOn     time.Time
+	QueuedOn      *time.Time
+	StartedOn     *time.Time
+	CompletedOn   *time.Time
+	Result        *Result
 	// RowsAffected is set instead of Result for a successful DDL or DML
 	// statement, which has no rows to return. A pointer distinguishes "not a
 	// DDL/DML success" from "affected zero rows".
@@ -108,20 +110,22 @@ func (sm *StatementManager) record(summary *StatementSummary) {
 	}
 
 	err := store.RecordStatement(context.Background(), &metadata.StatementRecord{
-		UserID:       summary.UserID,
-		Handle:       summary.Handle,
-		Status:       string(summary.Status),
-		SQLText:      summary.SQLText,
-		Database:     summary.Database,
-		Schema:       summary.Schema,
-		Warehouse:    summary.Warehouse,
-		CreatedOn:    summary.CreatedOn,
-		QueuedOn:     summary.QueuedOn,
-		StartedOn:    summary.StartedOn,
-		CompletedOn:  summary.CompletedOn,
-		RowCount:     summary.RowCount,
-		ErrorCode:    summary.ErrorCode,
-		ErrorMessage: summary.ErrorMessage,
+		Username:      summary.Username,
+		WarehouseSize: summary.WarehouseSize,
+		UserID:        summary.UserID,
+		Handle:        summary.Handle,
+		Status:        string(summary.Status),
+		SQLText:       summary.SQLText,
+		Database:      summary.Database,
+		Schema:        summary.Schema,
+		Warehouse:     summary.Warehouse,
+		CreatedOn:     summary.CreatedOn,
+		QueuedOn:      summary.QueuedOn,
+		StartedOn:     summary.StartedOn,
+		CompletedOn:   summary.CompletedOn,
+		RowCount:      summary.RowCount,
+		ErrorCode:     summary.ErrorCode,
+		ErrorMessage:  summary.ErrorMessage,
 	})
 	if err != nil {
 		log.Printf("Failed to record statement %s in history: %v", summary.Handle, err)
@@ -391,20 +395,22 @@ func generateStatementHandle() string {
 // StatementSummary describes a finished or running statement for a history
 // listing. It carries no result set: a history is scanned, not read.
 type StatementSummary struct {
-	UserID       string
-	Handle       string
-	Status       StatementStatus
-	SQLText      string
-	Database     string
-	Schema       string
-	Warehouse    string
-	CreatedOn    time.Time
-	QueuedOn     *time.Time
-	StartedOn    *time.Time
-	CompletedOn  *time.Time
-	RowCount     int
-	ErrorCode    string
-	ErrorMessage string
+	Username      string
+	WarehouseSize string
+	UserID        string
+	Handle        string
+	Status        StatementStatus
+	SQLText       string
+	Database      string
+	Schema        string
+	Warehouse     string
+	CreatedOn     time.Time
+	QueuedOn      *time.Time
+	StartedOn     *time.Time
+	CompletedOn   *time.Time
+	RowCount      int
+	ErrorCode     string
+	ErrorMessage  string
 }
 
 // ListStatements returns the statements still held, most recent first.
@@ -492,20 +498,22 @@ func (sm *StatementManager) recordedStatements(
 			continue
 		}
 		summaries = append(summaries, StatementSummary{
-			UserID:       record.UserID,
-			Handle:       record.Handle,
-			Status:       StatementStatus(record.Status),
-			SQLText:      record.SQLText,
-			Database:     record.Database,
-			Schema:       record.Schema,
-			Warehouse:    record.Warehouse,
-			CreatedOn:    record.CreatedOn,
-			QueuedOn:     record.QueuedOn,
-			StartedOn:    record.StartedOn,
-			CompletedOn:  record.CompletedOn,
-			RowCount:     record.RowCount,
-			ErrorCode:    record.ErrorCode,
-			ErrorMessage: record.ErrorMessage,
+			Username:      record.Username,
+			WarehouseSize: record.WarehouseSize,
+			UserID:        record.UserID,
+			Handle:        record.Handle,
+			Status:        StatementStatus(record.Status),
+			SQLText:       record.SQLText,
+			Database:      record.Database,
+			Schema:        record.Schema,
+			Warehouse:     record.Warehouse,
+			CreatedOn:     record.CreatedOn,
+			QueuedOn:      record.QueuedOn,
+			StartedOn:     record.StartedOn,
+			CompletedOn:   record.CompletedOn,
+			RowCount:      record.RowCount,
+			ErrorCode:     record.ErrorCode,
+			ErrorMessage:  record.ErrorMessage,
 		})
 	}
 	return summaries
@@ -513,17 +521,19 @@ func (sm *StatementManager) recordedStatements(
 
 func summarize(statement *Statement) StatementSummary {
 	summary := StatementSummary{
-		UserID:      statement.UserID,
-		Handle:      statement.Handle,
-		Status:      statement.Status,
-		SQLText:     statement.SQLText,
-		Database:    statement.Database,
-		Schema:      statement.Schema,
-		Warehouse:   statement.Warehouse,
-		CreatedOn:   statement.CreatedOn,
-		QueuedOn:    statement.QueuedOn,
-		StartedOn:   statement.StartedOn,
-		CompletedOn: statement.CompletedOn,
+		Username:      statement.Username,
+		WarehouseSize: statement.WarehouseSize,
+		UserID:        statement.UserID,
+		Handle:        statement.Handle,
+		Status:        statement.Status,
+		SQLText:       statement.SQLText,
+		Database:      statement.Database,
+		Schema:        statement.Schema,
+		Warehouse:     statement.Warehouse,
+		CreatedOn:     statement.CreatedOn,
+		QueuedOn:      statement.QueuedOn,
+		StartedOn:     statement.StartedOn,
+		CompletedOn:   statement.CompletedOn,
 	}
 
 	if statement.Result != nil {
@@ -552,4 +562,15 @@ func (sm *StatementManager) HistoryIsPersistent() bool {
 	sm.historyMu.RLock()
 	defer sm.historyMu.RUnlock()
 	return sm.history != nil && sm.historyDurable
+}
+
+// SetExecutionMetadata captures history context before the next status transition.
+// It never resolves names or sizes from mutable catalog state when listing history.
+func (sm *StatementManager) SetExecutionMetadata(handle, username, warehouseSize string) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	if stmt, ok := sm.statements[handle]; ok {
+		stmt.Username = username
+		stmt.WarehouseSize = warehouseSize
+	}
 }

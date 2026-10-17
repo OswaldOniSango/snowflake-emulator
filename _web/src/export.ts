@@ -108,12 +108,26 @@ export function createExportControls(current: () => Statement | null): HTMLEleme
   const bar = document.createElement("div");
   bar.className = "dock-actions";
 
+  const menu = document.createElement("details");
+  menu.className = "result-download";
+  const trigger = document.createElement("summary");
+  trigger.setAttribute("aria-label", "Download results");
+  trigger.title = "Download results";
+  trigger.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v13m-6-6 6 6 6-6M3 21h18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  const choices = document.createElement("div");
+  choices.className = "download-choices";
+  menu.append(trigger, choices);
+  menu.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") { menu.open = false; trigger.focus(); }
+  });
+
   const button = (label: string, extension: string, mime: string, render: (s: Statement) => string) => {
     const element = document.createElement("button");
     element.className = "ghost";
     element.type = "button";
     element.textContent = label;
     element.addEventListener("click", () => {
+      menu.open = false;
       const statement = current();
       if (statement) {
         download(exportFilename(extension), mime, render(statement));
@@ -122,9 +136,10 @@ export function createExportControls(current: () => Statement | null): HTMLEleme
     return element;
   };
 
-  bar.append(
+  choices.append(
     button("Export CSV", "csv", "text/csv", toCSV),
     button("Export JSON", "json", "application/json", toJSON),
   );
+  bar.append(menu);
   return bar;
 }
