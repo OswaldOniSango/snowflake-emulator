@@ -5,6 +5,7 @@ export interface ContextPickerOptions {
   parent: HTMLElement;
   initial: ExecutionContext;
   onChange: (context: ExecutionContext) => void;
+  qualifiedLabel?: boolean;
 }
 
 export interface ContextPicker {
@@ -31,6 +32,10 @@ export function createContextPicker(options: ContextPickerOptions): ContextPicke
   options.parent.append(root);
 
   function renderTrigger(): void {
+    if (options.qualifiedLabel) {
+      trigger.replaceChildren(text(context.database && context.schema ? `Schema  ${context.database}.${context.schema}` : "No schema selected"), chevron());
+      return;
+    }
     trigger.replaceChildren(icon("database"), text(context.database || "Database"), separator(), icon("schema"), text(context.schema || "Schema"), chevron());
   }
 
@@ -96,9 +101,12 @@ export function createContextPicker(options: ContextPickerOptions): ContextPicke
     }
   });
   root.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") close();
+    if (event.key === "Escape" && !popover.hidden) { event.preventDefault(); event.stopPropagation(); close(); trigger.focus(); }
   });
 
+  options.parent.closest("dialog")?.addEventListener("click", (event) => {
+    if (event.target instanceof Node && !root.contains(event.target)) close();
+  });
   renderTrigger();
   void loadDatabases();
 
@@ -124,21 +132,24 @@ function column(title: string, names: string[], selected: string, choose: (name:
   const render = (): void => {
     const query = search.value.trim().toLowerCase();
     const filtered = names.filter((name) => name.toLowerCase().includes(query));
-    list.replaceChildren(...filtered.map((name) => option(name, name === selected, () => void choose(name))));
+    list.replaceChildren(...filtered.map((name) => option(name, name === selected, () => void choose(name), title === "Schemas" ? "schema" : "database")));
     if (filtered.length === 0) list.append(empty(`No ${title.toLowerCase()} found`));
   };
   search.addEventListener("input", render);
   render();
-  section.append(search, list);
+  const searchBox = document.createElement("label"); searchBox.className = "selector-search";
+  searchBox.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="7"/><path d="m15 15 6 6"/></svg>';
+  searchBox.append(search);
+  section.append(searchBox, list);
   return section;
 }
 
-function option(name: string, selected: boolean, choose: () => void): HTMLButtonElement {
+function option(name: string, selected: boolean, choose: () => void, kind: string): HTMLButtonElement {
   const button = document.createElement("button");
   button.type = "button";
   button.className = "selector-option";
   button.setAttribute("aria-current", selected ? "true" : "false");
-  button.append(icon("item"), text(name));
+  button.append(icon(kind), text(name));
   if (selected) button.append(check());
   button.addEventListener("click", choose);
   return button;

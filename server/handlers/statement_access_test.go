@@ -224,3 +224,34 @@ func TestStatementOwnershipAcrossSessionsAndRestart(t *testing.T) {
 		}
 	}
 }
+
+func TestHistoryCapturesExecutionUserAndWarehouseSize(t *testing.T) {
+	f := setupIsolation(t)
+	first := f.submit(t, f.reader.Token, "SELECT * FROM TEST_DB.PUBLIC.private_rows")
+	if err := f.handler.warehouseMgr.AlterWarehouse(context.Background(), "ISOLATION_WH", warehouse.Settings{Size: "LARGE", AutoResume: true}); err != nil {
+		t.Fatal(err)
+	}
+	second := f.submit(t, f.writer.Token, "INSERT INTO TEST_DB.PUBLIC.private_rows VALUES (1)")
+	for _, tc := range []struct{ token, handle, username, size string }{
+		{f.reader.Token, first.StatementHandle, f.reader.Username, "X-SMALL"},
+		{f.writer.Token, second.StatementHandle, f.writer.Username, "LARGE"},
+	} {
+		response := f.request(http.MethodGet, "/api/v2/statements", tc.token, "")
+		var history types.ListStatementsResponse
+		if err := json.Unmarshal(response.Body.Bytes(), &history); err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, entry := range history.Statements {
+			if entry.Handle == tc.handle {
+				found = true
+				if entry.Username != tc.username || entry.WarehouseSize != tc.size {
+					t.Fatalf("execution metadata changed: %+v", entry)
+				}
+			}
+		}
+		if !found {
+			t.Fatalf("missing statement %s: %s", tc.handle, response.Body.String())
+		}
+	}
+}

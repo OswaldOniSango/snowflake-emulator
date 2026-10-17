@@ -184,6 +184,9 @@ func (e *Executor) QueryWithContext(ctx context.Context, executionContext Execut
 		}
 		defer lease.Release()
 		executionContext.warehouseAcquired = true
+		if executionContext.OnWarehouseSize != nil {
+			executionContext.OnWarehouseSize(lease.Size)
+		}
 		if executionContext.OnWarehouseRunning != nil {
 			executionContext.OnWarehouseRunning()
 		}
@@ -591,6 +594,9 @@ func (e *Executor) ExecuteWithContext(ctx context.Context, executionContext Exec
 		}
 		defer lease.Release()
 		executionContext.warehouseAcquired = true
+		if executionContext.OnWarehouseSize != nil {
+			executionContext.OnWarehouseSize(lease.Size)
+		}
 		if executionContext.OnWarehouseRunning != nil {
 			executionContext.OnWarehouseRunning()
 		}

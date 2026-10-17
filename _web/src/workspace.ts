@@ -1,8 +1,8 @@
 /**
  * Where worksheets live between visits.
  *
- * Worksheets are per-browser: the emulator has no notion of a user, and a
- * scratch buffer is not something it should be asked to remember. Storage can
+ * Worksheets are saved in this browser, independently of server sessions.
+ * Closing a tab does not remove its saved file. Storage can
  * be missing or refuse to answer — a private window, blocked site data — so
  * every access is guarded and the console works without it, just without
  * remembering anything.
@@ -28,12 +28,14 @@ export interface Worksheet {
 export interface Workspace {
   worksheets: Worksheet[];
   activeId: string;
+  openWorksheetIds?: string[];
 }
 
 interface StoredWorkspace {
   version: number;
   worksheets: Worksheet[];
   activeId: string;
+  openWorksheetIds?: string[];
 }
 
 export const DEFAULT_CONTEXT: ExecutionContext = { database: "TEST_DB", schema: "PUBLIC" };
@@ -92,21 +94,28 @@ export function loadWorkspace(storage: Storage | null = safeStorage()): Workspac
     ? (stored.activeId as string)
     : (worksheets[0] as Worksheet).id;
 
-  return { worksheets, activeId };
+  const restored: Workspace = { worksheets, activeId };
+  if (Array.isArray(stored.openWorksheetIds)) {
+    restored.openWorksheetIds = [...new Set(stored.openWorksheetIds.filter((id) => worksheets.some((worksheet) => worksheet.id === id)))];
+    if (!restored.openWorksheetIds.includes(activeId)) restored.openWorksheetIds.push(activeId);
+  }
+  return restored;
 }
 
 export function saveWorkspace(
   workspace: Workspace,
   storage: Storage | null = safeStorage(),
-): void {
+): boolean {
   if (!storage) {
-    return;
+    return false;
   }
   const stored: StoredWorkspace = { version: SCHEMA_VERSION, ...workspace };
   try {
     storage.setItem(STORAGE_KEY, JSON.stringify(stored));
+    return true;
   } catch {
-    // Full or refused: the console keeps working, it just forgets.
+    // Full or refused: the caller can show that saving failed.
+    return false;
   }
 }
 

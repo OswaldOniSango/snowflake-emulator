@@ -46,6 +46,7 @@ type Settings struct {
 	AutoSuspend int
 }
 type waiter struct {
+	size     string
 	ready    chan error
 	admitted bool
 }
@@ -62,6 +63,8 @@ type Manager struct {
 }
 
 type Lease struct {
+	// Size is the warehouse size captured atomically at admission.
+	Size    string
 	manager *Manager
 	name    string
 	once    sync.Once
@@ -249,8 +252,9 @@ func (m *Manager) Acquire(ctx context.Context, name string, onQueued func()) (*L
 	if len(item.queue) == 0 && item.value.Running < capacity(item.value.Size) {
 		item.value.Running++
 		n := item.value.Name
+		size := item.value.Size
 		m.mu.Unlock()
-		return &Lease{manager: m, name: n}, nil
+		return &Lease{manager: m, name: n, Size: size}, nil
 	}
 	w := &waiter{ready: make(chan error, 1)}
 	item.queue = append(item.queue, w)
@@ -265,7 +269,7 @@ func (m *Manager) Acquire(ctx context.Context, name string, onQueued func()) (*L
 		if err != nil {
 			return nil, err
 		}
-		return &Lease{manager: m, name: normalized}, nil
+		return &Lease{manager: m, name: normalized, Size: w.size}, nil
 	case <-ctx.Done():
 		m.mu.Lock()
 		item, ok := m.warehouses[normalized]
@@ -353,6 +357,7 @@ func (m *Manager) admit(item *runtimeWarehouse) {
 		item.queue = item.queue[1:]
 		item.value.Queued--
 		item.value.Running++
+		w.size = item.value.Size
 		w.admitted = true
 		w.ready <- nil
 		close(w.ready)

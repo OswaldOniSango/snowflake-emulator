@@ -322,3 +322,38 @@ func TestManager_ConcurrentOperations(t *testing.T) {
 		t.Errorf("Expected 10 warehouses, got %d", len(warehouses))
 	}
 }
+
+func TestLeaseSizeIsAdmissionSnapshot(t *testing.T) {
+	m := NewManager()
+	ctx := context.Background()
+	if _, err := m.CreateWarehouse(ctx, "snapshot_wh", "X-SMALL", ""); err != nil {
+		t.Fatal(err)
+	}
+	first, err := m.Acquire(ctx, "snapshot_wh", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Release()
+	queued := make(chan struct{})
+	result := make(chan *Lease, 1)
+	go func() {
+		lease, err := m.Acquire(ctx, "snapshot_wh", func() { close(queued) })
+		if err != nil {
+			result <- nil
+			return
+		}
+		result <- lease
+	}()
+	<-queued
+	if err := m.AlterWarehouse(ctx, "snapshot_wh", Settings{Size: "LARGE", AutoResume: true}); err != nil {
+		t.Fatal(err)
+	}
+	second := <-result
+	if second == nil {
+		t.Fatal("queued acquisition failed")
+	}
+	defer second.Release()
+	if first.Size != "X-SMALL" || second.Size != "LARGE" {
+		t.Fatalf("wrong snapshots: %q, %q", first.Size, second.Size)
+	}
+}

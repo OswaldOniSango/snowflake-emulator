@@ -110,8 +110,10 @@ func (h *RestAPIv2Handler) SubmitStatement(w http.ResponseWriter, r *http.Reques
 	}
 	sessionToken := extractToken(r)
 	userID := ""
+	username := ""
 	if sess := authenticatedSession; sess != nil {
 		userID = sess.UserID
+		username = sess.Username
 		executionContext.SessionID = strconv.FormatInt(sess.ID, 10)
 		executionContext.Role = sess.ActiveRole
 		executionContext.Principal = &query.PrincipalContext{
@@ -129,6 +131,8 @@ func (h *RestAPIv2Handler) SubmitStatement(w http.ResponseWriter, r *http.Reques
 	}
 
 	stmt := h.stmtMgr.CreateStatementForUser(req.Statement, executionContext.Database, executionContext.Schema, executionContext.Warehouse, userID)
+	h.stmtMgr.SetExecutionMetadata(stmt.Handle, username, "")
+	executionContext.OnWarehouseSize = func(size string) { h.stmtMgr.SetExecutionMetadata(stmt.Handle, username, size) }
 	executionContext.OnWarehouseQueued = func() {
 		h.stmtMgr.UpdateStatus(stmt.Handle, query.StatementStatusQueued)
 	}
@@ -1562,16 +1566,18 @@ func (h *RestAPIv2Handler) ListStatements(w http.ResponseWriter, r *http.Request
 	for i := range summaries {
 		summary := &summaries[i]
 		entry := types.StatementHistoryEntry{
-			Handle:    summary.Handle,
-			Status:    string(summary.Status),
-			Statement: summary.SQLText,
-			Database:  summary.Database,
-			Schema:    summary.Schema,
-			Warehouse: summary.Warehouse,
-			CreatedOn: summary.CreatedOn.UnixMilli(),
-			NumRows:   summary.RowCount,
-			Code:      summary.ErrorCode,
-			Message:   summary.ErrorMessage,
+			Handle:        summary.Handle,
+			Status:        string(summary.Status),
+			Statement:     summary.SQLText,
+			Database:      summary.Database,
+			Schema:        summary.Schema,
+			Warehouse:     summary.Warehouse,
+			Username:      summary.Username,
+			WarehouseSize: summary.WarehouseSize,
+			CreatedOn:     summary.CreatedOn.UnixMilli(),
+			NumRows:       summary.RowCount,
+			Code:          summary.ErrorCode,
+			Message:       summary.ErrorMessage,
 		}
 		if summary.QueuedOn != nil {
 			entry.QueuedOn = summary.QueuedOn.UnixMilli()

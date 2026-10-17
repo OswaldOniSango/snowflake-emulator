@@ -216,6 +216,10 @@ assets and no separate process.
 <details>
 <summary><b>Developing the console</b></summary>
 
+The console includes compact/expanded navigation, browser-local projects, and
+internal-stage uploads with CSV import SQL preparation. See the
+[UI reference and limitations](docs/ui/snowsight-reference.md).
+
 The frontend is a TypeScript + Vite project in `_web/`. The leading underscore is
 deliberate: it hides `node_modules` from the Go toolchain, which would otherwise
 compile Go files that some npm packages ship. Vite writes its output to
