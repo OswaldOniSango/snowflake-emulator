@@ -46,7 +46,7 @@ describe("renderGrid", () => {
 
     const nulls = cells.filter((cell) => cell.classList.contains("nul"));
     expect(nulls).toHaveLength(1);
-    expect(nulls[0]?.textContent).toBe("NULL");
+    expect(nulls[0]?.textContent).toBe("null");
   });
 
   it("right-aligns a decimal column the type does not declare numeric", () => {
@@ -172,4 +172,47 @@ describe("renderGrid with no rows", () => {
     expect(grid.querySelector("img")).toBeNull();
     expect(grid.querySelector("thead th:nth-child(2)")?.textContent).toBe("<img src=x>TEXT");
   });
+});
+
+describe("result header type icons", () => {
+  it.each([
+    ["NUMBER", "number"], ["TEXT", "text"], ["TIMESTAMP_NTZ", "timestamp"],
+    ["TIMESTAMP_LTZ", "timestamp"], ["TIMESTAMP_TZ", "timestamp"], ["DATE", "date"],
+    ["TIME", "time"], ["BOOLEAN", "boolean"], ["VARIANT", "variant"], ["BINARY", "binary"],
+  ])("renders %s with an accessible type description", (type, kind) => {
+    const grid = renderGrid(statement({ columns: [{ name: "value", type, nullable: true }], rows: [[null]] }));
+    const header = grid.querySelector<HTMLTableCellElement>("th:not(.rn)")!;
+    expect(header.querySelector(`svg.type-${kind}`)).not.toBeNull();
+    expect(header.title).toBe(`value · ${type}`);
+    expect(header.querySelector(".ty")!.textContent).toBe(type);
+  });
+});
+
+it("sorts numeric headers both ways, preserves nulls and does not mutate results", () => {
+  const source = statement({ rows: [[10, "first"], [2, "second"], [2, "third"], [null, "last"]] });
+  const grid = renderGrid(source);
+  const header = grid.querySelector<HTMLElement>("th:nth-child(2)")!;
+  header.click();
+  expect(text(grid, "tbody td:nth-child(2)")).toEqual(["2", "2", "10", "null"]);
+  expect(text(grid, "tbody td:nth-child(3)")).toEqual(["second", "third", "first", "last"]);
+  expect(header.getAttribute("aria-sort")).toBe("ascending");
+  header.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
+  expect(text(grid, "tbody td:nth-child(2)")).toEqual(["null", "10", "2", "2"]);
+  expect(header.getAttribute("aria-sort")).toBe("descending");
+  expect(source.rows[0]![0]).toBe(10);
+  grid.querySelector<HTMLElement>("th:nth-child(3)")!.click();
+  expect(header.getAttribute("aria-sort")).toBe("none");
+});
+it("sorts timestamps by instant and large numeric strings precisely", () => {
+  const grid = renderGrid(statement({ columns: [{ name: "WHEN", type: "TIMESTAMP_TZ", nullable: true }, { name: "BIG", type: "NUMBER", nullable: true }], rows: [["2026-01-01T01:00:00+02:00", "9007199254740993"], ["2026-01-01T00:00:00Z", "9007199254740992"]] }));
+  grid.querySelector<HTMLElement>("th:nth-child(2)")!.click();
+  expect(text(grid, "tbody td:nth-child(3)")[0]).toBe("9007199254740993");
+  grid.querySelector<HTMLElement>("th:nth-child(3)")!.click();
+  expect(text(grid, "tbody td:nth-child(3)")[0]).toBe("9007199254740992");
+});
+
+it("preserves sub-millisecond timestamp ordering", () => {
+  const grid = renderGrid(statement({ columns: [{ name: "WHEN", type: "TIMESTAMP_NTZ", nullable: false }, { name: "LABEL", type: "TEXT", nullable: false }], rows: [["2026-01-01T00:00:00.123456Z", "later"], ["2026-01-01T00:00:00.123455Z", "earlier"]] }));
+  grid.querySelector<HTMLElement>("th:nth-child(2)")!.click();
+  expect(text(grid, "tbody td:nth-child(3)")).toEqual(["earlier", "later"]);
 });

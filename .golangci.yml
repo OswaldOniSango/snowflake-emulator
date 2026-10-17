@@ -86,12 +86,11 @@ linters:
         - unnamedResult     # Allow unnamed results for simple functions
       settings:
         hugeParam:
-          # ExecutionContext is 80 bytes and is threaded through most of the
-          # executor. It is a value by design — an immutable per-statement
-          # namespace — and copying it is cheaper than the aliasing and nil
-          # handling a pointer would introduce. Raised above its size so the
-          # check still catches genuinely large parameters.
-          sizeThreshold: 128
+          # ExecutionContext is 128 bytes on 64-bit platforms after adding
+          # admission-time warehouse metadata callbacks. Keep its per-statement
+          # value semantics: nested execution copies and updates the context.
+          # Leave the check enabled for parameters at or above 160 bytes.
+          sizeThreshold: 160
 
     revive:
       rules:

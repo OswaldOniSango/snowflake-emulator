@@ -1,4 +1,6 @@
+import { compareValues, sortableHeaders, type SortDirection } from "./table-sort";
 import { listHistory, type HistoryEntry } from "./api";
+import { warehouseSize } from "./warehouse-picker";
 import { renderNotice } from "./grid";
 
 /**
@@ -18,7 +20,7 @@ export interface HistoryOptions {
 
 export function createHistoryView(options: HistoryOptions): { refresh: () => Promise<void> } {
   const root = document.createElement("div");
-  root.className = "view";
+  root.className = "view query-history";
   options.parent.append(root);
 
   async function refresh(): Promise<void> {
@@ -46,7 +48,7 @@ export function createHistoryView(options: HistoryOptions): { refresh: () => Pro
     head.className = "view-head";
 
     const heading = document.createElement("h1");
-    heading.textContent = "Statement history";
+    heading.textContent = "Query History";
 
     const blurb = document.createElement("p");
     blurb.textContent = retainedFor
@@ -66,84 +68,96 @@ export function createHistoryView(options: HistoryOptions): { refresh: () => Pro
   }
 
   function table(entries: HistoryEntry[]): HTMLElement {
+    const area = document.createElement("section");
+    const controls = document.createElement("div");
+    controls.className = "history-controls";
+    controls.innerHTML = `<label>Status <select aria-label="History status"><option value="">All</option><option value="success">Success</option><option value="failed">Failed</option><option value="running">Running</option></select></label><label>User <select aria-label="History user"><option value="">All</option></select></label><label>◷ <select aria-label="History period"><option value="0">All retained</option><option value="86400000">Last day</option><option value="604800000">Last 7 days</option></select></label><input type="search" aria-label="Search query history" placeholder="Search SQL or query ID"><span class="history-count"></span><details class="history-columns"><summary>▥ Columns</summary></details>`;
     const wrapper = document.createElement("div");
     wrapper.className = "tablewrap";
-
     const element = document.createElement("table");
     element.className = "grid";
-
+    const columns = ["SQL TEXT", "QUERY ID", "STATUS", "USER", "WAREHOUSE", "WAREHOUSE SIZE", "DURATION", "STARTED", "ROWS"];
+    const visible = columns.map(() => true);
+    let sortColumn = -1;
+    let sortDirection: SortDirection = "ascending";
     const head = document.createElement("thead");
     const headRow = document.createElement("tr");
-    for (const [label, type] of [
-      ["Started", "local time"],
-      ["Statement", "TEXT"],
-      ["Status", "code"],
-      ["Duration", "ms"],
-      ["Rows", "NUMBER"],
-      ["Handle", "statementHandle"],
-    ]) {
+    headRow.append(document.createElement("th"));
+    columns.forEach((label, index) => {
       const th = document.createElement("th");
-      th.textContent = label ?? "";
-      const caption = document.createElement("span");
-      caption.className = "ty";
-      caption.textContent = type ?? "";
-      th.append(caption);
+      th.textContent = label;
       headRow.append(th);
-    }
-    head.append(headRow);
-
-    const body = document.createElement("tbody");
-    for (const entry of entries) {
-      body.append(row(entry));
-    }
-
-    element.append(head, body);
-    wrapper.append(element);
-    return wrapper;
-  }
-
-  function row(entry: HistoryEntry): HTMLElement {
-    const tr = document.createElement("tr");
-    tr.className = "history-row";
-    tr.tabIndex = 0;
-    tr.title = "Open in a new worksheet";
-
-    const open = (): void => options.onOpen(entry);
-    tr.addEventListener("click", open);
-    tr.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" || event.key === " ") {
-        event.preventDefault();
-        open();
-      }
+      const option = document.createElement("label");
+      const check = document.createElement("input");
+      check.type = "checkbox"; check.checked = true;
+      check.addEventListener("change", () => { visible[index] = check.checked; render(); });
+      option.append(check, label);
+      controls.querySelector("details")!.append(option);
     });
-
-    tr.append(cell(time(entry.createdOn)));
-
-    const statement = cell("");
-    const text = document.createElement("div");
-    text.className = "hist-sql";
-    text.textContent = entry.statement;
-    statement.append(text);
-    tr.append(statement);
-
-    const status = cell("");
-    const pill = document.createElement("span");
-    pill.className = `pill ${statusClass(entry.status)}`;
-    pill.textContent = entry.status;
-    status.append(pill);
-    if (entry.code) {
-      const code = document.createElement("span");
-      code.className = "hist-code";
-      code.textContent = entry.code;
-      status.append(code);
+    head.append(headRow);
+    const body = document.createElement("tbody");
+    element.append(head, body); wrapper.append(element); area.append(controls, wrapper);
+    const status = controls.querySelector<HTMLSelectElement>('[aria-label="History status"]')!;
+    const period = controls.querySelector<HTMLSelectElement>('[aria-label="History period"]')!;
+    const search = controls.querySelector<HTMLInputElement>('input[type="search"]')!;
+    const user = controls.querySelector<HTMLSelectElement>('[aria-label="History user"]')!;
+    for (const username of [...new Set(entries.map((entry) => entry.username).filter((name): name is string => !!name))].sort()) {
+      const option = document.createElement("option"); option.value = `user:${username}`; option.textContent = username; user.append(option);
     }
-    tr.append(status);
+    if (entries.some((entry) => !entry.username)) {
+      const option = document.createElement("option"); option.value = "missing"; option.textContent = "Not recorded"; user.append(option);
+    }
+    const sizeOrder = ["XSMALL", "SMALL", "MEDIUM", "LARGE", "XLARGE", "2XLARGE", "3XLARGE", "4XLARGE", "5XLARGE", "6XLARGE"];
+    function sortValue(entry: HistoryEntry): string | number | null {
+      switch (sortColumn) {
+        case 0: return entry.statement;
+        case 1: return entry.statementHandle;
+        case 2: return entry.status;
+        case 3: return entry.username || null;
+        case 4: return entry.warehouse || null;
+        case 5: return entry.warehouseSize ? sizeOrder.indexOf(entry.warehouseSize.toUpperCase().replaceAll(/[-_]/g, "")) : null;
+        case 6: return entry.durationMs ?? null;
+        case 7: return entry.createdOn;
+        case 8: return entry.numRows;
+        default: return null;
+      }
+    }
+    sortableHeaders([...headRow.children].slice(1) as HTMLElement[], (index, direction) => { sortColumn = index; sortDirection = direction; render(); });
 
-    tr.append(cell(entry.durationMs === undefined ? "—" : String(entry.durationMs), "num"));
-    tr.append(cell(String(entry.numRows), "num"));
-    tr.append(cell(entry.statementHandle));
-
-    return tr;
+    function render(): void {
+      const query = search.value.toLowerCase();
+      const filtered = entries.filter((entry) => (!status.value || entry.status === status.value)
+        && (!user.value || (user.value === "missing" ? !entry.username : `user:${entry.username}` === user.value))
+        && (!Number(period.value) || entry.createdOn >= Date.now() - Number(period.value))
+        && `${entry.statement} ${entry.statementHandle}`.toLowerCase().includes(query));
+      if (sortColumn >= 0) filtered.sort((a, b) => compareValues(sortValue(a), sortValue(b), sortColumn >= 5) * (sortDirection === "ascending" ? 1 : -1));
+      controls.querySelector(".history-count")!.textContent = `${filtered.length} Queries`;
+      body.replaceChildren();
+      [...headRow.children].forEach((th, index) => { (th as HTMLElement).hidden = index > 0 && !visible[index - 1]; });
+      filtered.forEach((entry, index) => {
+        const tr = document.createElement("tr");
+        tr.className = "history-row"; tr.tabIndex = 0; tr.title = "Open in a new worksheet";
+        tr.addEventListener("click", () => options.onOpen(entry));
+        tr.addEventListener("keydown", (event) => {
+          if (event.key === "Enter" || event.key === " ") { event.preventDefault(); options.onOpen(entry); }
+        });
+        tr.append(cell(String(index + 1), "history-index"));
+        const sql = cell(entry.statement, "hist-sql"); sql.title = entry.statement;
+        const state = cell("");
+        const badge = document.createElement("span");
+        badge.className = `pill ${statusClass(entry.status)}`;
+        badge.textContent = entry.status === "success" ? "Success" : entry.status === "failed" ? "Failed ⓘ" : entry.status;
+        badge.title = entry.message || entry.code || entry.status; state.append(badge);
+        const duration = entry.durationMs === undefined ? "—" : entry.durationMs < 1000 ? `${entry.durationMs}ms` : `${(entry.durationMs / 1000).toFixed(1)}s`;
+        tr.append(sql, cell(entry.statementHandle), state, cell(entry.username || "—"), cell(entry.warehouse || "—"), cell(entry.warehouseSize ? warehouseSize(entry.warehouseSize) : "—"), cell(duration, "num"), cell(new Date(entry.createdOn).toLocaleString()), cell(String(entry.numRows), "num"));
+        [...tr.children].forEach((td, i) => { (td as HTMLElement).hidden = i > 0 && !visible[i - 1]; });
+        body.append(tr);
+      });
+    }
+    user.addEventListener("change", render);
+    status.addEventListener("change", render); period.addEventListener("change", render); search.addEventListener("input", render);
+    render();
+    return area;
   }
 
   void refresh();
@@ -169,9 +183,6 @@ function statusClass(status: string): string {
   return "idle";
 }
 
-function time(epochMs: number): string {
-  return new Date(epochMs).toLocaleTimeString();
-}
 
 /** Turns a Go duration such as "1h0m0s" into something readable. */
 /**

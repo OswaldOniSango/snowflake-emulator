@@ -323,6 +323,47 @@ describe("createHistoryView", () => {
     expect(rows[0]?.textContent).toContain("01abc");
   });
 
+  it("filters history and toggles columns without losing row actions", async () => {
+    stubFetch({ "/statements": { statements: [entry, { ...entry, statementHandle: "failed-query", status: "failed", warehouse: "DEV_WH", username: "ALICE", warehouseSize: "X-SMALL" }], retainedFor: "1h0m0s" } });
+    const parent = host();
+    createHistoryView({ parent, onOpen: () => {} }); await settle();
+    const status = parent.querySelector<HTMLSelectElement>('[aria-label="History status"]')!;
+    status.value = "failed"; status.dispatchEvent(new Event("change"));
+    expect(parent.querySelectorAll(".history-row")).toHaveLength(1);
+    expect(parent.querySelector(".history-row")!.textContent).toContain("DEV_WH");
+    expect(parent.querySelector(".history-row")!.textContent).toContain("ALICE");
+    expect(parent.querySelector(".history-row")!.textContent).toContain("X-Small");
+    const check = parent.querySelector<HTMLInputElement>('.history-columns input')!;
+    check.checked = false; check.dispatchEvent(new Event("change"));
+    expect((parent.querySelector("tbody tr")!.children[1] as HTMLElement).hidden).toBe(true);
+    const search = parent.querySelector<HTMLInputElement>('[aria-label="Search query history"]')!;
+    search.value = "missing"; search.dispatchEvent(new Event("input"));
+    expect(parent.querySelector(".history-count")!.textContent).toBe("0 Queries");
+  });
+
+  it("combines user filtering with numeric history sorting", async () => {
+    stubFetch({ "/statements": { statements: [
+      { ...entry, username: "ALICE", durationMs: 10, statementHandle: "a" },
+      { ...entry, username: "BOB", durationMs: 1, statementHandle: "b" },
+      { ...entry, username: "ALICE", durationMs: 2, statementHandle: "c" },
+      { ...entry, statementHandle: "legacy" },
+    ], retainedFor: "1h0m0s" } });
+    const parent = host(); const opened: string[] = [];
+    createHistoryView({ parent, onOpen: (row) => opened.push(row.statementHandle) }); await settle();
+    const user = parent.querySelector<HTMLSelectElement>('[aria-label="History user"]')!;
+    user.value = "user:ALICE"; user.dispatchEvent(new Event("change"));
+    const duration = [...parent.querySelectorAll<HTMLElement>("thead th")].find((th) => th.textContent === "DURATION")!;
+    duration.click();
+    expect(parent.querySelector(".history-count")!.textContent).toBe("2 Queries");
+    parent.querySelector<HTMLElement>(".history-row")!.click();
+    expect(opened).toEqual(["c"]);
+    duration.click(); parent.querySelector<HTMLElement>(".history-row")!.click();
+    expect(opened).toEqual(["c", "a"]);
+    user.value = "missing"; user.dispatchEvent(new Event("change"));
+    expect(parent.querySelector(".history-count")!.textContent).toBe("1 Queries");
+    expect(parent.querySelector(".history-row")!.textContent).toContain("legacy");
+  });
+
   it("reopens a statement when its row is clicked", async () => {
     stubFetch({ "/statements": { statements: [entry], retainedFor: "1h0m0s" } });
     const parent = host();
@@ -359,5 +400,59 @@ describe("createHistoryView", () => {
 
     expect(parent.querySelector("script")).toBeNull();
     expect(parent.querySelector(".hist-sql")?.textContent).toContain("<script>");
+  });
+});
+
+describe("reference database explorer", () => {
+  async function expanded(onInsert = vi.fn()): Promise<HTMLElement> {
+    stubFetch({
+      "/objects": { objects: [
+        { name: "USERS", kind: "table" }, { name: "ORDERS", kind: "table" },
+        { name: "ACTIVE_USERS", kind: "view" }, { name: "SUMMARY", kind: "dynamic_table" },
+        { name: "LOAD", kind: "procedure" }, { name: "FILES", kind: "stage" },
+        { name: "CHANGES", kind: "stream" }, { name: "DAILY", kind: "task" },
+      ] },
+      "/schemas": [{ name: "PUBLIC" }],
+      "/databases": [{ name: "TEST_DB" }],
+    });
+    const parent = host();
+    createExplorer({ parent, context: () => ({ database: "TEST_DB", schema: "PUBLIC" }), onInsert });
+    await settle();
+    parent.querySelector<HTMLButtonElement>(".node")!.click(); await settle();
+    parent.querySelector<HTMLButtonElement>(".node.lvl1")!.click(); await settle();
+    return parent;
+  }
+  it.each(["database", "schema", "table", "view", "dynamic_table", "procedure", "stage", "stream", "task"])("uses an outline icon for %s", async (kind) => {
+    const parent = await expanded();
+    const icon = parent.querySelector(`svg.kind-${kind}`);
+    expect(icon?.getAttribute("aria-hidden")).toBe("true");
+    expect(icon?.querySelector("path")?.getAttribute("d")).toBeTruthy();
+    expect(parent.querySelector(".node .dot")).toBeNull();
+  });
+  it("counts real objects, collapses and reopens a group", async () => {
+    const parent = await expanded();
+    const group = parent.querySelector<HTMLButtonElement>(".object-group-heading")!;
+    expect(group.querySelector(".object-count")!.textContent).toBe("2");
+    group.click();
+    expect(group.getAttribute("aria-expanded")).toBe("false");
+    const children = parent.querySelector<HTMLElement>(`[id="${group.getAttribute("aria-controls")}"]`)!;
+    expect(children.hidden).toBe(true);
+    group.click();
+    expect(children.hidden).toBe(false);
+  });
+  it("selects an object and preserves insertion behavior", async () => {
+    const onInsert = vi.fn(); const parent = await expanded(onInsert);
+    const leaf = [...parent.querySelectorAll<HTMLButtonElement>(".node.lvl3")].find((node) => node.textContent === "USERS")!;
+    leaf.click();
+    expect(onInsert).toHaveBeenCalledWith("USERS");
+    expect(parent.querySelector('[aria-selected="true"] .nm')!.textContent).toBe("USERS");
+  });
+  it("searches loaded objects and updates group counts", async () => {
+    const parent = await expanded();
+    const search = parent.querySelector<HTMLInputElement>('input[type="search"]')!;
+    search.value = "ORDERS"; search.dispatchEvent(new Event("input"));
+    expect(parent.querySelectorAll(".object-group-heading")).toHaveLength(1);
+    expect(parent.querySelector(".object-count")!.textContent).toBe("1");
+    expect(parent.querySelector(".node.lvl3 .nm")!.textContent).toBe("ORDERS");
   });
 });

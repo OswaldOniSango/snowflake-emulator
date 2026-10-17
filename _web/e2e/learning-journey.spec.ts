@@ -10,10 +10,11 @@ async function login(page: Page, username: string, password: string): Promise<vo
   await page.getByLabel("Username", { exact: true }).fill(username);
   await page.getByLabel("Password", { exact: true }).fill(password);
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
-  await expect(page.getByRole("button", { name: "Sign out", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "User menu", exact: true })).toBeVisible();
 }
 
 async function logout(page: Page): Promise<void> {
+  await page.getByRole("button", { name: "User menu", exact: true }).click();
   await page.getByRole("button", { name: "Sign out", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Sign in to Mallard" })).toBeVisible();
 }
@@ -27,6 +28,7 @@ async function execute(page: Page, sql: string, succeeds = true, runAll = false)
     return request.method() === "POST" && response.url().endsWith("/api/v2/statements")
       && request.postDataJSON()?.statement === lastStatement.trim().replace(/;$/, "");
   }, { timeout: 15_000 });
+  if (runAll) await page.getByRole("button", { name: "Execution options", exact: true }).click();
   await page.locator(runAll ? '[data-role="run-all"]' : '[data-role="run"]').click();
   await submitted;
   await expect(page.locator('[data-role="pill"]')).toHaveText(succeeds ? "Succeeded" : "Failed");

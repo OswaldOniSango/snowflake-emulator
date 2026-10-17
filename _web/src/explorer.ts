@@ -39,6 +39,7 @@ export interface ExplorerOptions {
   context: () => { database: string; schema: string };
   /** Invoked with the name to write into the editor. */
   onInsert: (name: string) => void;
+  onProjects?: () => void;
 }
 
 export interface Explorer {
@@ -46,10 +47,14 @@ export interface Explorer {
   refresh(): Promise<void>;
 }
 
-const KIND_ORDER = ["table", "view", "dynamic_table", "stream", "procedure", "task", "stage"];
+let groupId = 0;
+
+const KIND_ORDER = ["table", "view", "dynamic_table", "procedure", "stage", "stream", "task"];
 
 export function createExplorer(options: ExplorerOptions): Explorer {
   let databases: DatabaseNode[] = [];
+  const collapsedGroups = new Set<string>();
+  let selected = "";
   let error: string | null = null;
   let filter = "";
   let refreshing = false;
@@ -185,7 +190,7 @@ export function createExplorer(options: ExplorerOptions): Explorer {
 
     const label = document.createElement("div");
     label.className = "eyebrow";
-    label.textContent = "Objects";
+    label.textContent = "Database Explorer";
 
     const reload = document.createElement("button");
     reload.type = "button";
@@ -207,6 +212,7 @@ export function createExplorer(options: ExplorerOptions): Explorer {
     search.value = filter;
     search.addEventListener("input", () => {
       filter = search.value;
+      collapsedGroups.clear();
       // Re-rendering would steal focus mid-typing, so only the list is redrawn.
       const list = root.querySelector(".tree");
       list?.replaceWith(tree());
@@ -214,9 +220,25 @@ export function createExplorer(options: ExplorerOptions): Explorer {
 
     const box = document.createElement("label");
     box.className = "filter";
-    box.append(search);
+    box.append(objectIcon("search"), search);
 
-    head.append(title, box);
+    if (options.onProjects) {
+      const tabs = document.createElement("div");
+      tabs.className = "explorer-tabs";
+      const projects = document.createElement("button");
+      projects.type = "button";
+      projects.textContent = "Workspaces";
+      projects.addEventListener("click", options.onProjects);
+      const databases = document.createElement("span");
+      databases.className = "explorer-active-tab";
+      databases.textContent = "Databases";
+      tabs.append(projects, databases);
+      head.append(tabs);
+    }
+    const objects = document.createElement("span");
+    objects.className = "explorer-objects";
+    objects.textContent = "Objects";
+    head.append(title, objects, box);
     return head;
   }
 
@@ -300,22 +322,48 @@ export function createExplorer(options: ExplorerOptions): Explorer {
         continue;
       }
 
-      rows.push(groupLabel(plural(kind)));
+      const key = JSON.stringify([database, schema.name, kind]);
+      const group = document.createElement("div");
+      group.className = "object-group";
+      group.setAttribute("role", "group");
+      group.id = `explorer-group-${groupId++}`;
+      group.hidden = collapsedGroups.has(key);
+      const heading = row({
+        label: plural(kind), kind, depth: 2,
+        expanded: !group.hidden,
+        onClick: () => {
+          group.hidden = !group.hidden;
+          if (group.hidden) collapsedGroups.add(key); else collapsedGroups.delete(key);
+          heading.setAttribute("aria-expanded", String(!group.hidden));
+        },
+      });
+      heading.classList.add("object-group-heading");
+      heading.setAttribute("aria-controls", group.id);
+      heading.querySelector(".nm")!.classList.add("group-label");
+      const count = document.createElement("span");
+      count.className = "object-count";
+      count.textContent = String(ofKind.length);
+      heading.append(count);
+      rows.push(heading, group);
       for (const object of ofKind) {
         const objectRow = row({
             label: object.name,
             kind: object.kind,
-            depth: 2,
+            depth: 3,
+            selected: selected === JSON.stringify([database, schema.name, object.kind, object.name]),
             ...(object.detail ? { detail: object.detail } : {}),
-            onClick: () =>
+            onClick: () => {
+              selected = JSON.stringify([database, schema.name, object.kind, object.name]);
+              render();
               options.onInsert(
                 nameToInsert(database, schema.name, object.name, options.context()),
-              ),
+              );
+            },
           });
         if (object.kind === "stage") {
-          rows.push(stageRow(objectRow, database, schema.name, object.name));
+          group.append(stageRow(objectRow, database, schema.name, object.name));
         } else {
-          rows.push(objectRow);
+          group.append(objectRow);
         }
       }
     }
@@ -402,6 +450,7 @@ interface RowOptions {
   depth: number;
   expanded?: boolean;
   detail?: string;
+  selected?: boolean;
   onClick: () => void;
 }
 
@@ -415,10 +464,12 @@ function row(options: RowOptions): HTMLElement {
 
   const twisty = document.createElement("span");
   twisty.className = "tw";
-  twisty.textContent = options.expanded === undefined ? "" : "▶";
+  twisty.textContent = options.expanded === undefined ? "" : "›";
+  twisty.setAttribute("aria-hidden", "true");
 
-  const dot = document.createElement("span");
-  dot.className = `dot kind-${options.kind}`;
+  const dot = objectIcon(options.kind);
+  button.setAttribute("aria-level", String(options.depth + 1));
+  if (options.selected !== undefined) button.setAttribute("aria-selected", String(options.selected));
 
   const name = document.createElement("span");
   name.className = "nm";
@@ -435,13 +486,6 @@ function row(options: RowOptions): HTMLElement {
 
   button.addEventListener("click", options.onClick);
   return button;
-}
-
-function groupLabel(text: string): HTMLElement {
-  const label = document.createElement("div");
-  label.className = "group-label";
-  label.textContent = text;
-  return label;
 }
 
 function note(text: string, depth = 0): HTMLElement {
@@ -479,4 +523,33 @@ export function nameToInsert(
 
 function messageOf(cause: unknown): string {
   return cause instanceof Error ? cause.message : "Request failed";
+}
+
+// Original outline icons; no external product assets are used.
+const ICON_PATHS: Record<string, string> = {
+  database: "M4 6c0-4 16-4 16 0s-16 4-16 0v12c0 4 16 4 16 0V6M4 12c0 4 16 4 16 0",
+  schema: "M8 4h13v12H8zM3 9h13v12H3z",
+  table: "M3 4h18v16H3zM3 9h18M9 4v16",
+  dynamic_table: "M3 4h18v16H3zM3 9h18M9 4v16M16 12l-2 3h4l-2 3",
+  view: "M3 4h18v16H3zM7 9l3 3-3 3M13 16h4",
+  procedure: "M5 5h5l4 7h5M5 19h5l4-7M3 3h4v4H3zM3 17h4v4H3zM18 10h4v4h-4z",
+  stage: "M3 7h18v13H3zM8 7V4h8v3M3 12h7v3h4v-3h7",
+  stream: "M3 8l4-3 4 3 4-3 6 3v4M3 12v2M3 17v2M8 19h2M13 19h2M19 19h2v-2",
+  task: "M5 17l5-5 4 2 5-9M3 15h4v4H3zM8 10h4v4H8zM17 3h4v4h-4z",
+  search: "M16 16l5 5M18 10a8 8 0 1 1-16 0 8 8 0 0 1 16 0",
+};
+function objectIcon(kind: string): SVGSVGElement {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "1.5");
+  svg.setAttribute("stroke-linejoin", "round");
+  svg.setAttribute("stroke-linecap", "round");
+  svg.setAttribute("aria-hidden", "true");
+  svg.classList.add("object-icon", `kind-${kind}`);
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("d", ICON_PATHS[kind] ?? ICON_PATHS["table"]!);
+  svg.append(path);
+  return svg;
 }
