@@ -707,7 +707,8 @@ again unless the first command used `PURGE = TRUE`.
 
 | Snowflake Type | DuckDB Type |
 |----------------|-------------|
-| NUMBER, NUMERIC, DECIMAL | DOUBLE / DECIMAL(p,s) |
+| NUMBER(p,s), NUMBER(p), NUMBER | DECIMAL(p,s), DECIMAL(p,0), DECIMAL(38,0) in CREATE TABLE column declarations |
+| NUMERIC, DECIMAL | DuckDB numeric/decimal types |
 | INTEGER, BIGINT, SMALLINT, TINYINT | INTEGER / BIGINT |
 | FLOAT, DOUBLE, REAL | DOUBLE |
 | VARCHAR, STRING, TEXT, CHAR | VARCHAR |

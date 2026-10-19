@@ -86,6 +86,11 @@ func (t *Translator) Translate(sql string) (string, error) {
 	// DuckDB table. Its Snowflake-specific kind will eventually live in the
 	// emulator catalog once SQL DDL and metadata creation are unified.
 	sql = translateCreateTableKind(sql)
+	var numberErr error
+	sql, numberErr = translateNumberDeclarations(sql)
+	if numberErr != nil {
+		return "", numberErr
+	}
 
 	// CREATE TABLE ... AS <query> has no column-definition list to protect —
 	// its body is a query like any other, and needs the same function
