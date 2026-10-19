@@ -216,3 +216,9 @@ it("preserves sub-millisecond timestamp ordering", () => {
   grid.querySelector<HTMLElement>("th:nth-child(2)")!.click();
   expect(text(grid, "tbody td:nth-child(3)")).toEqual(["earlier", "later"]);
 });
+
+ it("does not repeat a one-line error in its detail", () => {
+ const notice = renderNotice("error", "Invalid query", "Invalid query");
+ expect(notice.textContent).toBe("Invalid query");
+ expect(notice.querySelector("pre")).toBeNull();
+ });
