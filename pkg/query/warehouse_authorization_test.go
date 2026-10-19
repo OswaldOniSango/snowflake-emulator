@@ -309,11 +309,37 @@ func TestDynamicTableAuthorizationHappensBeforeAdmission(t *testing.T) {
 	if err != nil || value.Owner != role.ID {
 		t.Fatalf("dynamic owner after reconstruction = %#v, error = %v", value, err)
 	}
+
+	if _, err := executor.Execute(ctx, "CREATE TABLE DYNAMIC_AUTH_DB.PUBLIC.owner_source (id INTEGER)"); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.GrantObjectPrivilege(ctx, identity.PrivilegeSelect, "TABLE", database.Name+".PUBLIC.OWNER_SOURCE", role.Name); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := executor.ExecuteWithContext(ctx, executionContext, "CREATE OR REPLACE DYNAMIC TABLE guarded TARGET_LAG='1 MINUTE' WAREHOUSE=dynamic_auth_wh AS SELECT * FROM owner_source"); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.RevokeObjectPrivilege(ctx, identity.PrivilegeSelect, "TABLE", database.Name+".PUBLIC.OWNER_SOURCE", role.Name); err != nil {
+		t.Fatal(err)
+	}
+	scheduler := NewDynamicTableScheduler(executor, time.Second)
+	if err := scheduler.RunDueTables(ctx, time.Now().Add(time.Hour)); !errors.Is(err, identity.ErrPrivilegeDenied) {
+		t.Fatalf("scheduled refresh ignored revoked source SELECT: %v", err)
+	}
+	if err := service.GrantObjectPrivilege(ctx, identity.PrivilegeSelect, "TABLE", database.Name+".PUBLIC.OWNER_SOURCE", role.Name); err != nil {
+		t.Fatal(err)
+	}
+	if err := scheduler.RunDueTables(ctx, time.Now().Add(time.Hour+31*time.Second)); err != nil {
+		t.Fatalf("refresh after restoring source SELECT: %v", err)
+	}
 	if err := service.RevokeWarehousePrivilege(ctx, identity.PrivilegeUsage, "dynamic_auth_wh", role.Name); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := executor.ExecuteWithContext(ctx, executionContext, "ALTER DYNAMIC TABLE guarded REFRESH"); !errors.Is(err, identity.ErrPrivilegeDenied) {
 		t.Fatalf("dynamic refresh ignored revoked USAGE: %v", err)
+	}
+	if err := NewDynamicTableScheduler(executor, time.Second).RunDueTables(ctx, time.Now().Add(3*time.Hour)); !errors.Is(err, identity.ErrPrivilegeDenied) {
+		t.Fatalf("scheduled refresh ignored revoked owner warehouse grant: %v", err)
 	}
 }
 

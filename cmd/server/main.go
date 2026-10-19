@@ -130,6 +130,9 @@ func main() {
 	taskScheduler := query.NewTaskScheduler(repo, executor, time.Second)
 	taskScheduler.Start(context.Background())
 	defer taskScheduler.Stop()
+	dynamicScheduler := query.NewDynamicTableScheduler(executor, time.Second)
+	dynamicScheduler.Start(context.Background())
+	defer dynamicScheduler.Stop()
 
 	uiHandler, err := ui.Handler()
 	if err != nil {

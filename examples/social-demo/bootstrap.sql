@@ -172,7 +172,7 @@ FROM MALLARD_DEMO_DB.COMMERCE.ORDER_ITEMS i
 JOIN MALLARD_DEMO_DB.COMMERCE.PRODUCTS p ON i.product_id = p.product_id
 GROUP BY p.product_name, p.category;
 
--- TARGET_LAG is metadata in the current emulator; refresh is explicit.
+-- Time-based TARGET_LAG schedules full refreshes; refresh explicitly for immediate results.
 CREATE DYNAMIC TABLE MALLARD_DEMO_DB.COMMERCE.REGIONAL_REVENUE
 TARGET_LAG = '1 MINUTE' WAREHOUSE = MALLARD_DEMO_WH AS
 SELECT region, COUNT(*) AS orders, COUNT(DISTINCT company) AS customers,

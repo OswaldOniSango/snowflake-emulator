@@ -37,6 +37,7 @@ const defaultRowLimit = 1000
 
 // Executor executes SQL queries against DuckDB with Snowflake SQL translation.
 type Executor struct {
+	pinned                bool
 	mgr                   *connection.Manager
 	repo                  *metadata.Repository
 	translator            *Translator
@@ -137,6 +138,7 @@ func (e *Executor) withPinnedConnection(ctx context.Context, fn func(*Executor) 
 	return e.mgr.WithConnection(ctx, func(mgr *connection.Manager) error {
 		pinnedRepo := e.repo.WithManager(mgr)
 		pinned := NewExecutor(mgr, pinnedRepo, WithWarehouseValidator(e.warehouseValidator))
+		pinned.pinned = true
 		pinned.warehouseManager = e.warehouseManager
 		pinned.identityService = e.identityService.WithRepository(pinnedRepo)
 		if e.mergeProcessor != nil {

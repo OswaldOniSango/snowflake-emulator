@@ -171,6 +171,8 @@ type Task struct {
 
 // DynamicTable represents a materialized query refreshed on demand.
 type DynamicTable struct {
+	LastAttemptedAt    *time.Time
+	LastRefreshError   string
 	ID                 string
 	SchemaID           string
 	Name               string
@@ -457,6 +459,8 @@ func (r *Repository) initMetadataTables(ctx context.Context) error {
 		`ALTER TABLE _metadata_query_history ADD COLUMN IF NOT EXISTS owner_user_id VARCHAR`,
 		`ALTER TABLE _metadata_query_history ADD COLUMN IF NOT EXISTS execution_username VARCHAR`,
 		`ALTER TABLE _metadata_query_history ADD COLUMN IF NOT EXISTS warehouse_size VARCHAR`,
+		`ALTER TABLE _metadata_dynamic_tables ADD COLUMN IF NOT EXISTS last_attempted_at TIMESTAMP`,
+		`ALTER TABLE _metadata_dynamic_tables ADD COLUMN IF NOT EXISTS last_refresh_error VARCHAR`,
 		`ALTER TABLE _metadata_dynamic_tables ADD COLUMN IF NOT EXISTS definition_database VARCHAR`,
 		`ALTER TABLE _metadata_dynamic_tables ADD COLUMN IF NOT EXISTS definition_schema VARCHAR`,
 	}
@@ -1828,14 +1832,14 @@ func (r *Repository) UpsertDynamicTable(ctx context.Context, schemaID, name, tar
 // GetDynamicTableByName retrieves a dynamic table definition.
 func (r *Repository) GetDynamicTableByName(ctx context.Context, schemaID, name string) (*DynamicTable, error) {
 	row := r.mgr.QueryRow(ctx, `SELECT id, schema_id, name, target_lag, warehouse, definition, COALESCE(definition_database, ''), COALESCE(definition_schema, ''),
-		created_at, last_refreshed_at, owner FROM _metadata_dynamic_tables WHERE schema_id = ? AND name = ?`,
+		created_at, last_refreshed_at, owner, last_attempted_at, COALESCE(last_refresh_error, '') FROM _metadata_dynamic_tables WHERE schema_id = ? AND name = ?`,
 		schemaID, strings.ToUpper(name))
 	var value DynamicTable
 	var createdAt sql.NullTime
-	var refreshedAt sql.NullTime
+	var refreshedAt, attemptedAt sql.NullTime
 	var owner sql.NullString
 	if err := row.Scan(&value.ID, &value.SchemaID, &value.Name, &value.TargetLag, &value.Warehouse,
-		&value.Definition, &value.DefinitionDatabase, &value.DefinitionSchema, &createdAt, &refreshedAt, &owner); err != nil {
+		&value.Definition, &value.DefinitionDatabase, &value.DefinitionSchema, &createdAt, &refreshedAt, &owner, &attemptedAt, &value.LastRefreshError); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("dynamic table %s not found", name)
 		}
@@ -1843,6 +1847,9 @@ func (r *Repository) GetDynamicTableByName(ctx context.Context, schemaID, name s
 	}
 	if createdAt.Valid {
 		value.CreatedAt = createdAt.Time
+	}
+	if attemptedAt.Valid {
+		value.LastAttemptedAt = &attemptedAt.Time
 	}
 	if refreshedAt.Valid {
 		value.LastRefreshedAt = &refreshedAt.Time
@@ -1855,7 +1862,7 @@ func (r *Repository) GetDynamicTableByName(ctx context.Context, schemaID, name s
 
 // ListDynamicTables lists dynamic tables in one schema, or all schemas when schemaID is empty.
 func (r *Repository) ListDynamicTables(ctx context.Context, schemaID string) ([]*DynamicTable, error) {
-	query := `SELECT id, schema_id, name, target_lag, warehouse, definition, COALESCE(definition_database, ''), COALESCE(definition_schema, ''), created_at, last_refreshed_at, owner FROM _metadata_dynamic_tables`
+	query := `SELECT id, schema_id, name, target_lag, warehouse, definition, COALESCE(definition_database, ''), COALESCE(definition_schema, ''), created_at, last_refreshed_at, owner, last_attempted_at, COALESCE(last_refresh_error, '') FROM _metadata_dynamic_tables`
 	args := []interface{}{}
 	if schemaID != "" {
 		query += sqlWhereSchemaID
@@ -1870,13 +1877,16 @@ func (r *Repository) ListDynamicTables(ctx context.Context, schemaID string) ([]
 	values := make([]*DynamicTable, 0)
 	for rows.Next() {
 		var value DynamicTable
-		var createdAt, refreshedAt sql.NullTime
+		var createdAt, refreshedAt, attemptedAt sql.NullTime
 		var owner sql.NullString
-		if err := rows.Scan(&value.ID, &value.SchemaID, &value.Name, &value.TargetLag, &value.Warehouse, &value.Definition, &value.DefinitionDatabase, &value.DefinitionSchema, &createdAt, &refreshedAt, &owner); err != nil {
+		if err := rows.Scan(&value.ID, &value.SchemaID, &value.Name, &value.TargetLag, &value.Warehouse, &value.Definition, &value.DefinitionDatabase, &value.DefinitionSchema, &createdAt, &refreshedAt, &owner, &attemptedAt, &value.LastRefreshError); err != nil {
 			return nil, err
 		}
 		if createdAt.Valid {
 			value.CreatedAt = createdAt.Time
+		}
+		if attemptedAt.Valid {
+			value.LastAttemptedAt = &attemptedAt.Time
 		}
 		if refreshedAt.Valid {
 			value.LastRefreshedAt = &refreshedAt.Time
@@ -1928,7 +1938,7 @@ func (r *Repository) MaterializeDynamicTable(ctx context.Context, schemaID, name
 			warehouse = EXCLUDED.warehouse, definition = EXCLUDED.definition,
 			definition_database = EXCLUDED.definition_database, definition_schema = EXCLUDED.definition_schema,
 			created_at = EXCLUDED.created_at, last_refreshed_at = EXCLUDED.last_refreshed_at,
-			owner = EXCLUDED.owner`,
+			owner = EXCLUDED.owner, last_attempted_at = NULL, last_refresh_error = NULL`,
 			id, schemaID, strings.ToUpper(name), targetLag, strings.ToUpper(warehouse), definition, definitionDatabase, definitionSchema, ownerRoleID)
 		if err != nil {
 			return fmt.Errorf("failed to register dynamic table definition: %w", err)
@@ -1943,6 +1953,11 @@ func (r *Repository) MaterializeDynamicTable(ctx context.Context, schemaID, name
 
 // RefreshDynamicTable atomically refreshes physical rows, columns, and refresh timestamp.
 func (r *Repository) RefreshDynamicTable(ctx context.Context, value *DynamicTable, databaseName, physicalName, materializeSQL string) error {
+	return r.RefreshDynamicTableAt(ctx, value, databaseName, physicalName, materializeSQL, time.Now())
+}
+
+// RefreshDynamicTableAt allows a scheduler pass to use its injected clock.
+func (r *Repository) RefreshDynamicTableAt(ctx context.Context, value *DynamicTable, databaseName, physicalName, materializeSQL string, now time.Time) error {
 	return r.mgr.ExecTx(ctx, func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, materializeSQL); err != nil {
 			return fmt.Errorf("materialization failed: %w", err)
@@ -1954,7 +1969,7 @@ func (r *Repository) RefreshDynamicTable(ctx context.Context, value *DynamicTabl
 		if _, err := tx.ExecContext(ctx, `UPDATE _metadata_tables SET column_definitions = ? WHERE schema_id = ? AND name = ? AND table_type = 'DYNAMIC TABLE'`, serializeColumnDefs(columns), value.SchemaID, value.Name); err != nil {
 			return err
 		}
-		result, err := tx.ExecContext(ctx, `UPDATE _metadata_dynamic_tables SET last_refreshed_at = CURRENT_TIMESTAMP WHERE id = ?`, value.ID)
+		result, err := tx.ExecContext(ctx, `UPDATE _metadata_dynamic_tables SET last_refreshed_at = ?, last_attempted_at = ?, last_refresh_error = NULL WHERE id = ?`, now, now, value.ID)
 		if err != nil {
 			return err
 		}
@@ -2007,4 +2022,11 @@ func inspectDynamicColumns(ctx context.Context, tx *sql.Tx, databaseName, physic
 		return nil, fmt.Errorf("dynamic table %s has no inspectable columns", physicalName)
 	}
 	return columns, nil
+}
+
+// RecordDynamicTableFailure leaves the last successful materialization and its
+// timestamp intact. Failed attempts survive process restarts for retry backoff.
+func (r *Repository) RecordDynamicTableFailure(ctx context.Context, id string, now time.Time, message string) error {
+	_, err := r.mgr.Exec(ctx, `UPDATE _metadata_dynamic_tables SET last_attempted_at = ?, last_refresh_error = ? WHERE id = ?`, now, message, id)
+	return err
 }
