@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/nnnkkk7/snowflake-emulator/pkg/identity"
 	"github.com/nnnkkk7/snowflake-emulator/pkg/metadata"
@@ -17,7 +18,6 @@ var (
 	createDynamicTablePattern   = regexp.MustCompile(`(?is)^\s*CREATE\s+(OR\s+REPLACE\s+)?DYNAMIC\s+TABLE\s+([^\s;]+)\s+TARGET_LAG\s*=\s*'([^']+)'\s+WAREHOUSE\s*=\s*([^\s;]+)\s+AS\s+(.+?)\s*;?\s*$`)
 	alterDynamicTablePattern    = regexp.MustCompile(`(?is)^\s*ALTER\s+DYNAMIC\s+TABLE\s+([^\s;]+)\s+REFRESH\s*;?\s*$`)
 	dropDynamicTablePattern     = regexp.MustCompile(`(?is)^\s*DROP\s+DYNAMIC\s+TABLE\s+(IF\s+EXISTS\s+)?([^\s;]+)\s*;?\s*$`)
-	targetLagPattern            = regexp.MustCompile(`(?i)^(DOWNSTREAM|[1-9]\d*\s+(SECOND|MINUTE|HOUR|DAY)S?)$`)
 	dynamicTableMutationPattern = regexp.MustCompile(`(?is)^\s*(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM|TRUNCATE\s+TABLE|ALTER\s+TABLE|DROP\s+TABLE(?:\s+IF\s+EXISTS)?|MERGE\s+INTO|COPY\s+INTO|CREATE\s+OR\s+REPLACE\s+TABLE)\s+([^\s(;]+)`)
 )
 
@@ -59,7 +59,9 @@ func NewDynamicTableProcessor(repo *metadata.Repository, executor *Executor) *Dy
 }
 
 func (p *DynamicTableProcessor) Create(ctx context.Context, executionContext ExecutionContext, sql string) (*ExecResult, error) {
-	p.mu.Lock()
+	if err := p.lock(); err != nil {
+		return nil, err
+	}
 	defer p.mu.Unlock()
 	match := createDynamicTablePattern.FindStringSubmatch(trimLeadingComments(sql))
 	if match == nil {
@@ -79,8 +81,8 @@ func (p *DynamicTableProcessor) Create(ctx context.Context, executionContext Exe
 			return nil, fmt.Errorf("object %s already exists", name)
 		}
 	}
-	if !targetLagPattern.MatchString(strings.TrimSpace(match[3])) {
-		return nil, fmt.Errorf("unsupported TARGET_LAG %q", match[3])
+	if _, lagErr := parseTargetLag(match[3]); lagErr != nil {
+		return nil, lagErr
 	}
 	warehouse := strings.ToUpper(strings.Trim(match[4], `"`))
 	if err := p.executor.validateExecutionContext(ctx, ExecutionContext{Warehouse: warehouse}); err != nil {
@@ -122,8 +124,15 @@ func (p *DynamicTableProcessor) Create(ctx context.Context, executionContext Exe
 }
 
 func (p *DynamicTableProcessor) Refresh(ctx context.Context, executionContext ExecutionContext, sql string) (*ExecResult, error) {
-	p.mu.Lock()
+	if err := p.lock(); err != nil {
+		return nil, err
+	}
 	defer p.mu.Unlock()
+	return p.refreshLocked(ctx, executionContext, sql, time.Now())
+}
+
+// Caller holds the processor mutex, shared with create/drop and scheduled work.
+func (p *DynamicTableProcessor) refreshLocked(ctx context.Context, executionContext ExecutionContext, sql string, now time.Time) (*ExecResult, error) {
 	match := alterDynamicTablePattern.FindStringSubmatch(trimLeadingComments(sql))
 	if match == nil {
 		return nil, fmt.Errorf("unsupported ALTER DYNAMIC TABLE syntax")
@@ -157,14 +166,16 @@ func (p *DynamicTableProcessor) Refresh(ctx context.Context, executionContext Ex
 	}
 	physical := BuildTableName(objectContext.Database, objectContext.Schema, dynamicTable.Name)
 	materializeSQL := "CREATE OR REPLACE TABLE " + physical + " AS " + translated
-	if err := p.repo.RefreshDynamicTable(ctx, dynamicTable, objectContext.Database, strings.ToUpper(objectContext.Schema)+"_"+dynamicTable.Name, materializeSQL); err != nil {
+	if err := p.repo.RefreshDynamicTableAt(ctx, dynamicTable, objectContext.Database, strings.ToUpper(objectContext.Schema)+"_"+dynamicTable.Name, materializeSQL, now); err != nil {
 		return nil, err
 	}
 	return &ExecResult{}, nil
 }
 
 func (p *DynamicTableProcessor) Drop(ctx context.Context, executionContext ExecutionContext, sql string) (*ExecResult, error) {
-	p.mu.Lock()
+	if err := p.lock(); err != nil {
+		return nil, err
+	}
 	defer p.mu.Unlock()
 	match := dropDynamicTablePattern.FindStringSubmatch(trimLeadingComments(sql))
 	if match == nil {
@@ -210,16 +221,19 @@ func (p *DynamicTableProcessor) Show(ctx context.Context, executionContext Execu
 	if err != nil {
 		return nil, err
 	}
-	columns := []string{columnCreatedOn, columnName, columnDatabase, columnSchema, "target_lag", "warehouse", "definition", "last_refreshed_on"}
+	columns := []string{columnCreatedOn, columnName, columnDatabase, columnSchema, "target_lag", "warehouse", "definition", "last_refreshed_on", "last_attempted_on", "last_refresh_error"}
 	result := &Result{Columns: columns, ColumnTypes: textColumnMetadata(columns)}
 	for _, value := range values {
-		result.Rows = append(result.Rows, []interface{}{value.CreatedAt, value.Name, database.Name, schema.Name, value.TargetLag, value.Warehouse, value.Definition, value.LastRefreshedAt})
+		result.Rows = append(result.Rows, []interface{}{value.CreatedAt, value.Name, database.Name, schema.Name, value.TargetLag, value.Warehouse, value.Definition, value.LastRefreshedAt, value.LastAttemptedAt, value.LastRefreshError})
 	}
 	result.TotalRows = len(result.Rows)
 	return result, nil
 }
 
 func (p *DynamicTableProcessor) translatedDefinition(ctx context.Context, executionContext ExecutionContext, definition string) (string, error) {
+	if err := p.executor.authorizeObjectStatement(ctx, executionContext, definition); err != nil {
+		return "", err
+	}
 	rewritten, err := p.executor.rewriteTablesWithContext(ctx, executionContext, definition)
 	if err != nil {
 		return "", err
@@ -257,4 +271,17 @@ func (p *DynamicTableProcessor) resolveSchema(ctx context.Context, databaseName,
 		return nil, err
 	}
 	return p.repo.GetSchemaByName(ctx, database.ID, schemaName)
+}
+
+// A procedure already owns DuckDB's connection. Waiting for the refresh mutex
+// there could deadlock a scheduled operation that is waiting for that connection.
+func (p *DynamicTableProcessor) lock() error {
+	if p.executor.pinned {
+		if !p.mu.TryLock() {
+			return fmt.Errorf("dynamic table refresh is busy; retry the statement")
+		}
+		return nil
+	}
+	p.mu.Lock()
+	return nil
 }

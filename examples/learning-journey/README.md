@@ -58,7 +58,7 @@ no se vuelven a procesar en el pipeline append-only.
 ### Límites que se deben aprender correctamente
 
 - El stream de este ejercicio es append-only; no demuestra CDC completo de UPDATE/DELETE.
-- `TARGET_LAG` es metadata: las dynamic tables requieren refresh manual.
+- Los targets temporales programan refrescos completos automáticos. El laboratorio usa una hora para que los pasos manuales sean reproducibles antes del siguiente refresco. No se planifican dependencias ni propagación `DOWNSTREAM`.
 - TRANSIENT no implementa Time Travel ni Fail-safe. La tabla temporal demuestra
   creación/consulta; este ejercicio no certifica aislamiento de temporales entre sesiones.
 - El warehouse simula admisión y capacidad; el tamaño no garantiza aceleración física.
