@@ -16,7 +16,6 @@ var (
 	deleteTablePattern = regexp.MustCompile(`(?i)^\s*DELETE\s+FROM\s+([^\s;]+)`)
 	mergeTablePattern  = regexp.MustCompile(`(?i)^\s*MERGE\s+INTO\s+([^\s;]+)`)
 	createTablePattern = regexp.MustCompile(`(?i)^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:(?:TEMP|TEMPORARY|TRANSIENT)\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([^\s(;]+)`)
-	fromListPattern    = regexp.MustCompile(`(?is)\bFROM\s+([^;]+?)(?:\bWHERE\b|\bGROUP\b|\bORDER\b|\bQUALIFY\b|\bLIMIT\b|\bJOIN\b|\)|;|$)`)
 	mergeUsingPattern  = regexp.MustCompile(`(?is)\bUSING\s+([^\s,;()]+)`)
 	cteNamePattern     = regexp.MustCompile(`(?is)(?:\bWITH\b|,)\s*([A-Za-z_][A-Za-z0-9_$]*)\s+AS\s*\(`)
 )
@@ -33,7 +32,7 @@ func (e *Executor) authorizeObjectStatement(ctx context.Context, executionContex
 	if executionContext.Principal == nil || e.identityService == nil {
 		return nil
 	}
-	value := trimLeadingComments(sql)
+	value := maskSQLLiterals(trimLeadingComments(sql))
 	mainStatement := topLevelStatementAfterWith(value)
 	upper := strings.ToUpper(value)
 	if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(mainStatement)), "MERGE ") && (strings.Contains(upper, "WHEN NOT MATCHED") || strings.Contains(upper, "THEN DELETE")) {
@@ -116,17 +115,7 @@ func (e *Executor) authorizeStatementSources(ctx context.Context, executionConte
 	for _, match := range cteNamePattern.FindAllStringSubmatch(value, -1) {
 		cteNames[strings.ToUpper(match[1])] = true
 	}
-	sources := make([]string, 0)
-	for _, match := range readTablePattern.FindAllStringSubmatch(value, -1) {
-		sources = append(sources, match[1])
-	}
-	for _, match := range fromListPattern.FindAllStringSubmatch(value, -1) {
-		for _, item := range strings.Split(match[1], ",") {
-			if fields := strings.Fields(strings.TrimSpace(item)); len(fields) > 0 {
-				sources = append(sources, fields[0])
-			}
-		}
-	}
+	sources := statementReadSources(value)
 	if match := mergeUsingPattern.FindStringSubmatch(mainStatement); len(match) >= 2 {
 		sources = append(sources, match[1])
 	}
@@ -134,7 +123,7 @@ func (e *Executor) authorizeStatementSources(ctx context.Context, executionConte
 	for _, source := range sources {
 		name := strings.Trim(source, `"`)
 		key := strings.ToUpper(name)
-		if seen[key] || cteNames[key] {
+		if seen[key] || cteNames[key] || sqlKeywords[key] || strings.HasPrefix(name, "(") {
 			continue
 		}
 		seen[key] = true
@@ -195,4 +184,76 @@ func topLevelStatementAfterWith(sql string) string {
 
 func isIdentifierChar(ch byte) bool {
 	return ch == '_' || ch == '$' || ch >= '0' && ch <= '9' || ch >= 'A' && ch <= 'Z' || ch >= 'a' && ch <= 'z'
+}
+
+// statementReadSources scans FROM lists by parenthesis depth, so commas in
+// VALUES rows and function arguments cannot become table names. It still visits
+// nested queries and tables following a VALUES literal in a comma join.
+func statementReadSources(sql string) []string {
+	sql = maskSQLLiterals(sql)
+	var sources []string
+	depth := 0
+	inFrom := map[int]bool{}
+	expect := map[int]bool{}
+	for i := 0; i < len(sql); {
+		switch sql[i] {
+		case '(':
+			expect[depth] = false
+			depth++
+			i++
+			continue
+		case ')':
+			delete(inFrom, depth)
+			delete(expect, depth)
+			if depth > 0 {
+				depth--
+			}
+			i++
+			continue
+		case ',':
+			if inFrom[depth] {
+				expect[depth] = true
+			}
+			i++
+			continue
+		}
+		if expect[depth] && (isIdentifierStart(sql[i]) || sql[i] == '"' || sql[i] == '@') {
+			start := i
+			for i < len(sql) && !strings.ContainsRune(" \t\r\n(),;", rune(sql[i])) {
+				if sql[i] == '"' {
+					i = skipQuoted(sql, i, '"')
+				} else {
+					i++
+				}
+			}
+			name := sql[start:i]
+			if isOrdinarySource(sql, name, i) {
+				sources = append(sources, name)
+			}
+			expect[depth] = false
+			continue
+		}
+		name, end := readIdentifierAt(sql, i)
+		if name == "" {
+			i++
+			continue
+		}
+		switch strings.ToUpper(name) {
+		case sqlKeywordFrom:
+			inFrom[depth] = true
+			expect[depth] = true
+		case "JOIN":
+			expect[depth] = true
+		case "WHERE", "GROUP", "ORDER", "QUALIFY", "LIMIT", "HAVING", "UNION", "EXCEPT", "INTERSECT", "WINDOW":
+			inFrom[depth] = false
+			expect[depth] = false
+		}
+		i = end
+	}
+	return sources
+}
+
+func isOrdinarySource(sql, name string, end int) bool {
+	next := skipSpaceAndComments(sql, end)
+	return !sqlKeywords[strings.ToUpper(name)] && (next >= len(sql) || sql[next] != '(')
 }
