@@ -12,6 +12,8 @@ import (
 
 // Session represents an active Snowflake session.
 type Session struct {
+	// SQLVariables are process-local and live only as long as this session.
+	SQLVariables            *sync.Map
 	ID                      int64
 	Token                   string
 	MasterToken             string
@@ -105,6 +107,7 @@ func (m *Manager) CreateAuthenticatedSession(ctx context.Context, input CreateIn
 		ValidityInSeconds:       int64(m.sessionTimeout.Seconds()),
 		MasterValidityInSeconds: int64(m.sessionTimeout.Seconds()) * 4,
 		Parameters:              make(map[string]interface{}),
+		SQLVariables:            &sync.Map{},
 	}
 
 	m.mu.Lock()
@@ -380,7 +383,7 @@ func (m *Manager) UpdateLastAccessed(ctx context.Context, token string) error {
 	return nil
 }
 
-// Copy creates a deep copy of the session.
+// Copy snapshots identity and parameters, sharing synchronized SQL variable state.
 func (s *Session) Copy() *Session {
 	if s == nil {
 		return nil
@@ -393,6 +396,7 @@ func (s *Session) Copy() *Session {
 	}
 
 	return &Session{
+		SQLVariables:            s.SQLVariables,
 		ID:                      s.ID,
 		Token:                   s.Token,
 		MasterToken:             s.MasterToken,

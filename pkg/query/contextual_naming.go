@@ -41,7 +41,7 @@ var contextualTablePatterns = []*regexp.Regexp{
 // INSERT INTO and CREATE TABLE are deliberately absent. A parenthesis there
 // introduces a column list, and the name before it is a real table that still
 // has to be resolved: INSERT INTO users (id, email) must keep working.
-var tableFunctionPrefixes = []string{"FROM", "JOIN", "USING"}
+var tableFunctionPrefixes = []string{sqlKeywordFrom, "JOIN", "USING"}
 
 // isTableFunctionCall reports whether a match names a function being called
 // rather than a table. prefix is the keyword the pattern matched; call is the
@@ -249,7 +249,7 @@ func rewriteContextualTableReferences(sql string, executionContext ExecutionCont
 	aliases, _ := cteAliases(sql)
 	result := sql
 	for _, pattern := range contextualTablePatterns {
-		result = pattern.ReplaceAllStringFunc(result, func(match string) string {
+		result = replaceSQLCodeMatches(result, pattern, func(match string) string {
 			parts := pattern.FindStringSubmatch(match)
 			if len(parts) != 4 {
 				return match
@@ -280,7 +280,7 @@ func (e *Executor) rewriteTablesWithContext(ctx context.Context, executionContex
 	result := sql
 	var rewriteErr error
 	for _, pattern := range contextualTablePatterns {
-		result = pattern.ReplaceAllStringFunc(result, func(match string) string {
+		result = replaceSQLCodeMatches(result, pattern, func(match string) string {
 			if rewriteErr != nil {
 				return match
 			}

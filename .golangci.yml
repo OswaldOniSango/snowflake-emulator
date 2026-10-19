@@ -86,8 +86,8 @@ linters:
         - unnamedResult     # Allow unnamed results for simple functions
       settings:
         hugeParam:
-          # ExecutionContext is 128 bytes on 64-bit platforms after adding
-          # admission-time warehouse metadata callbacks. Keep its per-statement
+          # ExecutionContext is 136 bytes on 64-bit platforms after adding
+          # warehouse callbacks and the session variable store. Keep its per-statement
           # value semantics: nested execution copies and updates the context.
           # Leave the check enabled for parameters at or above 160 bytes.
           sizeThreshold: 160
