@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/nnnkkk7/snowflake-emulator/pkg/connection"
@@ -303,6 +304,7 @@ func NewPersistentManager(ctx context.Context, sessionTimeout time.Duration, sto
 		if value.MasterValidityInSeconds == 0 {
 			value.MasterValidityInSeconds = int64(sessionTimeout.Seconds()) * 4
 		}
+		value.SQLVariables = &sync.Map{}
 		mgr.sessions[value.Token] = value
 		if value.MasterToken != "" {
 			mgr.masterTokens[value.MasterToken] = value

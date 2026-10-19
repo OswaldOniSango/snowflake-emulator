@@ -162,6 +162,11 @@ func (e *Executor) Query(ctx context.Context, sql string) (*Result, error) {
 
 // QueryWithContext executes a query using Snowflake database/schema context.
 func (e *Executor) QueryWithContext(ctx context.Context, executionContext ExecutionContext, sql string) (*Result, error) {
+	var variableErr error
+	sql, variableErr = expandSessionVariables(sql, executionContext)
+	if variableErr != nil {
+		return nil, variableErr
+	}
 	if e.identityService != nil {
 		if result, handled, err := e.queryIdentityStatement(ctx, sql); handled {
 			return result, err
@@ -563,6 +568,14 @@ func (e *Executor) Execute(ctx context.Context, sql string) (*ExecResult, error)
 
 // ExecuteWithContext executes a statement using Snowflake database/schema context.
 func (e *Executor) ExecuteWithContext(ctx context.Context, executionContext ExecutionContext, sql string) (*ExecResult, error) {
+	if result, handled, err := e.executeSessionVariable(ctx, executionContext, sql); handled {
+		return result, err
+	}
+	var variableErr error
+	sql, variableErr = expandSessionVariables(sql, executionContext)
+	if variableErr != nil {
+		return nil, variableErr
+	}
 	if e.identityService != nil {
 		if result, handled, err := e.executeIdentityStatement(ctx, sql); handled {
 			return result, err

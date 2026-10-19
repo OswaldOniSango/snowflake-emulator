@@ -33,7 +33,7 @@ func (e *Executor) authorizeObjectStatement(ctx context.Context, executionContex
 	if executionContext.Principal == nil || e.identityService == nil {
 		return nil
 	}
-	value := trimLeadingComments(sql)
+	value := maskSQLLiterals(trimLeadingComments(sql))
 	mainStatement := topLevelStatementAfterWith(value)
 	upper := strings.ToUpper(value)
 	if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(mainStatement)), "MERGE ") && (strings.Contains(upper, "WHEN NOT MATCHED") || strings.Contains(upper, "THEN DELETE")) {
@@ -134,7 +134,7 @@ func (e *Executor) authorizeStatementSources(ctx context.Context, executionConte
 	for _, source := range sources {
 		name := strings.Trim(source, `"`)
 		key := strings.ToUpper(name)
-		if seen[key] || cteNames[key] {
+		if seen[key] || cteNames[key] || sqlKeywords[key] || strings.HasPrefix(name, "(") {
 			continue
 		}
 		seen[key] = true
