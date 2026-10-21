@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	_ "github.com/duckdb/duckdb-go/v2"
 	"github.com/google/go-cmp/cmp"
@@ -398,8 +399,14 @@ func TestExecutor_DynamicTablePersistsAcrossRestart(t *testing.T) {
 	if _, err := executor.ExecuteWithContext(ctx, targetContext, "ALTER DYNAMIC TABLE persisted REFRESH"); err != nil {
 		t.Fatalf("refresh after restart: %v", err)
 	}
+	if _, err := executor.ExecuteWithContext(ctx, executionContext, "INSERT INTO source_values VALUES (44)"); err != nil {
+		t.Fatal(err)
+	}
+	if err := NewDynamicTableScheduler(executor, time.Second).RunDueTables(ctx, time.Now().Add(2*time.Hour)); err != nil {
+		t.Fatalf("scheduled refresh after restart: %v", err)
+	}
 	result, err = executor.QueryWithContext(ctx, targetContext, "SELECT * FROM persisted ORDER BY answer")
-	if err != nil || len(result.Rows) != 2 {
+	if err != nil || len(result.Rows) != 3 {
 		t.Fatalf("persisted source context refresh = %#v, %v", result, err)
 	}
 }

@@ -114,6 +114,7 @@ func (h *RestAPIv2Handler) SubmitStatement(w http.ResponseWriter, r *http.Reques
 	if sess := authenticatedSession; sess != nil {
 		userID = sess.UserID
 		username = sess.Username
+		executionContext.Variables = sess.SQLVariables
 		executionContext.SessionID = strconv.FormatInt(sess.ID, 10)
 		executionContext.Role = sess.ActiveRole
 		executionContext.Principal = &query.PrincipalContext{

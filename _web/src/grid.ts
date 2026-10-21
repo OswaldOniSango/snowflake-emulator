@@ -129,7 +129,7 @@ export function renderNotice(
 
   const content = document.createElement("div");
   content.append(cell("h4", title));
-  if (detail) {
+  if (detail && detail !== title) {
     content.append(cell("pre", detail));
   }
 

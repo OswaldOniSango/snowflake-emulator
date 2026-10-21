@@ -255,3 +255,34 @@ func TestHistoryCapturesExecutionUserAndWarehouseSize(t *testing.T) {
 		}
 	}
 }
+
+func TestSessionVariablesAcrossProtocols(t *testing.T) {
+	f := setupIsolation(t)
+	if got := f.submit(t, f.reader.Token, "SET siteid = 35"); got.SQLState != types.SQLState00000 {
+		t.Fatalf("SET: %+v", got)
+	}
+	if got := f.submit(t, f.reader.Token, "SELECT $siteid"); got.SQLState != types.SQLState00000 {
+		t.Fatalf("SELECT: %+v", got)
+	}
+	if got := f.submit(t, f.writer.Token, "SELECT $siteid"); got.SQLState == types.SQLState00000 {
+		t.Fatal("variable leaked between sessions")
+	}
+	second, err := f.handler.sessionMgr.CreateAuthenticatedSession(context.Background(), session.CreateInput{UserID: f.reader.UserID, Username: f.reader.Username, ActiveRoleID: f.reader.ActiveRoleID, ActiveRole: f.reader.ActiveRole, Database: "TEST_DB", Schema: "PUBLIC", Warehouse: "ISOLATION_WH"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := f.submit(t, second.Token, "SELECT $siteid"); got.SQLState == types.SQLState00000 {
+		t.Fatal("variable leaked between sessions of same user")
+	}
+	w := f.request(http.MethodPost, "/queries/v1/query-request", f.reader.Token, `{"sqlText":"SELECT CAST($siteid AS VARCHAR)"}`)
+	var result types.QueryResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if !result.Success {
+		t.Fatalf("driver could not read REST variable: %s", w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "35") {
+		t.Fatal(w.Body.String())
+	}
+}

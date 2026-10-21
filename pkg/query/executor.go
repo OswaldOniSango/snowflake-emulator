@@ -37,6 +37,7 @@ const defaultRowLimit = 1000
 
 // Executor executes SQL queries against DuckDB with Snowflake SQL translation.
 type Executor struct {
+	pinned                bool
 	mgr                   *connection.Manager
 	repo                  *metadata.Repository
 	translator            *Translator
@@ -137,6 +138,7 @@ func (e *Executor) withPinnedConnection(ctx context.Context, fn func(*Executor) 
 	return e.mgr.WithConnection(ctx, func(mgr *connection.Manager) error {
 		pinnedRepo := e.repo.WithManager(mgr)
 		pinned := NewExecutor(mgr, pinnedRepo, WithWarehouseValidator(e.warehouseValidator))
+		pinned.pinned = true
 		pinned.warehouseManager = e.warehouseManager
 		pinned.identityService = e.identityService.WithRepository(pinnedRepo)
 		if e.mergeProcessor != nil {
@@ -160,6 +162,11 @@ func (e *Executor) Query(ctx context.Context, sql string) (*Result, error) {
 
 // QueryWithContext executes a query using Snowflake database/schema context.
 func (e *Executor) QueryWithContext(ctx context.Context, executionContext ExecutionContext, sql string) (*Result, error) {
+	var variableErr error
+	sql, variableErr = expandSessionVariables(sql, executionContext)
+	if variableErr != nil {
+		return nil, variableErr
+	}
 	if e.identityService != nil {
 		if result, handled, err := e.queryIdentityStatement(ctx, sql); handled {
 			return result, err
@@ -561,6 +568,14 @@ func (e *Executor) Execute(ctx context.Context, sql string) (*ExecResult, error)
 
 // ExecuteWithContext executes a statement using Snowflake database/schema context.
 func (e *Executor) ExecuteWithContext(ctx context.Context, executionContext ExecutionContext, sql string) (*ExecResult, error) {
+	if result, handled, err := e.executeSessionVariable(ctx, executionContext, sql); handled {
+		return result, err
+	}
+	var variableErr error
+	sql, variableErr = expandSessionVariables(sql, executionContext)
+	if variableErr != nil {
+		return nil, variableErr
+	}
 	if e.identityService != nil {
 		if result, handled, err := e.executeIdentityStatement(ctx, sql); handled {
 			return result, err

@@ -2,6 +2,8 @@
 package query
 
 import (
+	"sync"
+
 	"github.com/nnnkkk7/snowflake-emulator/server/types"
 )
 
@@ -73,6 +75,8 @@ type PrincipalContext struct {
 // ExecutionContext contains the Snowflake session context used to resolve
 // unqualified object names while executing a statement.
 type ExecutionContext struct {
+	// Variables is owned by the authenticated session; copies share synchronized state.
+	Variables *sync.Map
 	Database  string
 	Schema    string
 	Warehouse string

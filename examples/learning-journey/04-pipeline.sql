@@ -17,7 +17,7 @@ SELECT COUNT(*) AS pending_rows FROM users_stream;
 CREATE TASK process_users_task WAREHOUSE = JOURNEY_WH SCHEDULE = '1 HOUR' AS CALL process_users();
 
 CREATE DYNAMIC TABLE users_by_region
-TARGET_LAG = '1 MINUTE'
+TARGET_LAG = '1 HOUR'
 WAREHOUSE = JOURNEY_WH
 AS SELECT region, COUNT(*) AS users FROM processed_users GROUP BY region;
 SELECT region, users FROM users_by_region ORDER BY region;
@@ -27,7 +27,7 @@ SELECT COUNT(*) AS pending_rows FROM users_stream;
 EXECUTE TASK process_users_task;
 SELECT COUNT(*) AS processed_rows FROM processed_users;
 SELECT COUNT(*) AS pending_rows FROM users_stream;
--- TARGET_LAG is metadata in this MVP. Materialized rows still total 3 here.
+-- Before the one-hour target elapses, materialized rows still total 3.
 SELECT SUM(users) AS materialized_users FROM users_by_region;
 ALTER DYNAMIC TABLE users_by_region REFRESH;
 SELECT region, users FROM users_by_region ORDER BY region;

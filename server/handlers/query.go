@@ -61,6 +61,7 @@ func (h *QueryHandler) ExecuteQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	executionContext := query.ExecutionContext{
+		Variables: sess.SQLVariables,
 		Database:  sess.Database,
 		Schema:    sess.CurrentSchema,
 		Warehouse: sess.Warehouse,

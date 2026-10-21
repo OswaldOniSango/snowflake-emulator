@@ -557,7 +557,7 @@ The emulator supports standard SQL operations with automatic Snowflake-to-DuckDB
 | **DML** | `INSERT`, `UPDATE`, `DELETE` | Data manipulation with rows affected count |
 | **DDL** | `CREATE TABLE`, `DROP TABLE`, `ALTER TABLE` | Schema management |
 | **DDL** | `CREATE [OR REPLACE] VIEW`, basic `SHOW VIEWS`, `DROP VIEW [IF EXISTS]` | Ordinary DuckDB-backed views, including qualified names |
-| **DDL** | `CREATE [OR REPLACE] DYNAMIC TABLE`, `SHOW DYNAMIC TABLES`, `ALTER DYNAMIC TABLE ... REFRESH`, `DROP DYNAMIC TABLE [IF EXISTS]` | Manually refreshed DuckDB-backed materializations |
+| **DDL** | `CREATE [OR REPLACE] DYNAMIC TABLE`, `SHOW DYNAMIC TABLES`, `ALTER DYNAMIC TABLE ... REFRESH`, `DROP DYNAMIC TABLE [IF EXISTS]` | DuckDB-backed materializations with time-based full refresh scheduling |
 | **DDL** | `CREATE TABLE ... AS <query>`, including a `WITH` clause | Function translation runs on the query body, not just a bare `SELECT` |
 | **DDL** | `CREATE [OR REPLACE] TEMPORARY TABLE ... AS <query>` | A true DuckDB TEMP table, visible to every statement in the session |
 | **DDL** | `CREATE DATABASE`, `DROP DATABASE` | Database management |
@@ -608,8 +608,9 @@ worksheet context and returns the basic columns `name`, `database_name`,
 (`LIKE` and `IN`) and its wider result shape are not yet emulated.
 
 Dynamic tables persist their defining query, `TARGET_LAG`, warehouse, and last
-successful refresh time. Creation materializes the query immediately; refresh
-is explicit in this MVP:
+successful refresh time. Creation materializes the query immediately. The server
+automatically performs full refreshes for time-based targets; explicit refresh
+remains available:
 
 ```sql
 CREATE DYNAMIC TABLE user_summary
@@ -621,9 +622,23 @@ ALTER DYNAMIC TABLE user_summary REFRESH;
 SHOW DYNAMIC TABLES;
 ```
 
-This is a DuckDB-backed approximation. `TARGET_LAG` is metadata only: automatic
-or incremental refresh, dependency graphs, suspend/resume, refresh history,
-and Snowflake's scheduling guarantees are not implemented yet.
+The server checks persisted definitions at startup and once per second. Time-based
+lags accept seconds, minutes, hours or days, with a minimum of 60 seconds. Refreshes
+use the definition-time database/schema and the stored owner role with current
+source/warehouse privileges. An unavailable warehouse or failing query leaves the
+last successful rows and timestamp intact; failures are exposed in `SHOW DYNAMIC
+TABLES` (`last_attempted_on`, `last_refresh_error`) and retried after 30 seconds,
+including after restart. Successful refresh clears the error. Refresh attempts
+have a 30-second timeout and are serialized with manual create/replace/drop.
+
+This is a best-effort full-refresh approximation, not an exact freshness SLA.
+Dynamic tables are scheduled independently: dependency graphs, incremental refresh,
+`DOWNSTREAM` propagation, suspend/resume and full refresh history are not implemented.
+A `TARGET_LAG = 'DOWNSTREAM'` table remains manually refreshed. Existing definitions
+without an owner fail closed when the server's identity service is enabled;
+recreate them under an authorized role before automatic refresh.
+
+Reference: [Snowflake target lag](https://docs.snowflake.com/en/user-guide/dynamic-tables/target-lag).
 
 </details>
 
@@ -692,7 +707,8 @@ again unless the first command used `PURGE = TRUE`.
 
 | Snowflake Type | DuckDB Type |
 |----------------|-------------|
-| NUMBER, NUMERIC, DECIMAL | DOUBLE / DECIMAL(p,s) |
+| NUMBER(p,s), NUMBER(p), NUMBER | DECIMAL(p,s), DECIMAL(p,0), DECIMAL(38,0) in CREATE TABLE column declarations |
+| NUMERIC, DECIMAL | DuckDB numeric/decimal types |
 | INTEGER, BIGINT, SMALLINT, TINYINT | INTEGER / BIGINT |
 | FLOAT, DOUBLE, REAL | DOUBLE |
 | VARCHAR, STRING, TEXT, CHAR | VARCHAR |
@@ -718,7 +734,7 @@ are not supported or have limited support:
 - Distributed processing / Clustering
 - Time Travel / Zero-Copy Cloning
 - Task graphs, task dependencies, `USING CRON` schedules, and Pipes
-- Automatic/incremental dynamic-table refresh and dynamic-table dependency graphs
+- Incremental dynamic-table refresh, dependency graphs, and `DOWNSTREAM` propagation (time-based independent full refresh is supported)
 - External stages (S3, Azure, GCS)
 - Stored procedures and functions with JavaScript, Python, or Java
 - Advanced Snowflake Scripting (loops, nested exception scopes, qualified/quoted dynamic identifiers, and procedure overloading)

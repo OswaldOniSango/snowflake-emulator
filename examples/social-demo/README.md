@@ -39,7 +39,8 @@ worksheets guardados en tu navegador habitual ni publica en redes.
 ## Límites actuales
 
 Las tasks quedan suspendidas y se ejecutan manualmente una vez con `EXECUTE TASK`.
-`TARGET_LAG` es metadata: las dynamic tables se refrescan explícitamente.
+`TARGET_LAG` programa refrescos completos para intervalos de al menos 60 segundos.
+El script también refresca explícitamente para mostrar resultados inmediatos.
 Los stages se crean vacíos; no se simula una conexión cloud. Las funciones se pueden
 consultar con `SHOW FUNCTIONS`, aunque todavía no aparecen en el explorador.
 Se usa `DECIMAL` en lugar de `NUMBER` y las llamadas a funciones requieren el
