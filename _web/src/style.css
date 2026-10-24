@@ -1933,6 +1933,9 @@ table.grid td { padding: 8px 14px; }
 .user-role { padding: 0 10px 16px; margin: 5px 0 0; color: var(--ink-3); font-size: 12px; overflow-wrap: anywhere; border-bottom: 1px solid var(--line); }
 .user-appearance { display: flex; align-items: center; justify-content: space-between; padding: 12px 10px; border-bottom: 1px solid var(--line); }
 .user-appearance .icon-btn { border: 1px solid var(--line); background: var(--sunk); }
+.identity-documentation { display: flex; align-items: center; justify-content: space-between; padding: 12px 10px; color: var(--ink); text-decoration: none; font-size: 14px; border-bottom: 1px solid var(--line); }
+.identity-documentation:hover { background: var(--sunk); border-radius: 5px; }
+.identity-documentation:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .user-popover .identity-signout { width: 100%; padding: 12px 10px; text-align: left; font-size: 14px; }
 .user-popover .identity-signout:hover { background: var(--sunk); border-radius: 5px; }
 

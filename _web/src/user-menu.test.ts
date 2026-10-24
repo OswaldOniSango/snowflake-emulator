@@ -17,6 +17,18 @@ describe("account menu", () => {
     expect(parent.textContent).toContain("Appearance");
     expect(parent.querySelector(".identity-signout")!.textContent).toBe("Sign out");
   });
+  it("links to public documentation in a new tab without passing session data", () => {
+    const parent = document.createElement("div");
+    renderIdentity(parent, user);
+    const link = parent.querySelector<HTMLAnchorElement>(".identity-documentation")!;
+    expect(link.href).toBe("https://oswaldonisango.github.io/snowflake-emulator-documentation/");
+    expect(link.target).toBe("_blank");
+    expect(link.rel).toBe("noopener noreferrer");
+    expect(link.getAttribute("aria-label")).toBe("Documentation (opens in a new tab)");
+    expect(link.textContent).toContain("Documentation");
+    expect(link.search).toBe("");
+    expect(link.hash).toBe("");
+  });
   it("closes on Escape and returns focus to the avatar", () => {
     const parent = document.createElement("div"); document.body.append(parent);
     renderIdentity(parent, user);
