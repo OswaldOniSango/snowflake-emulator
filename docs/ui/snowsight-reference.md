@@ -63,8 +63,9 @@ are included.
 
 The account avatar is anchored to the lower-left navigation area. Expanded
 navigation also shows the username and active role. Its upward-opening account
-panel contains the username, current role, the existing appearance toggle and
-Sign out. Role selection remains in the worksheet context picker. Account
+panel contains the username, current role, the existing appearance toggle, Documentation and
+Sign out. Documentation opens the public SQL reference and installation guide
+in a new tab without sending session credentials. Role selection remains in the worksheet context picker. Account
 switching, downloads, support and other unavailable product options are omitted.
 The navigation expand/collapse button is above the navigation destinations.
 The account panel closes on Escape or an outside click; Escape returns focus to

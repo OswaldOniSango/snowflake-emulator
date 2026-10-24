@@ -36,11 +36,22 @@ export function renderIdentity(parent: HTMLElement, value: AuthSession | null): 
   const label = document.createElement("span");
   label.textContent = "Appearance";
   appearance.append(label, createThemeToggle());
+  const documentation = document.createElement("a");
+  documentation.className = "identity-documentation";
+  documentation.href = "https://oswaldonisango.github.io/snowflake-emulator-documentation/";
+  documentation.target = "_blank";
+  documentation.rel = "noopener noreferrer";
+  documentation.textContent = "Documentation";
+  documentation.setAttribute("aria-label", "Documentation (opens in a new tab)");
+  const external = document.createElement("span");
+  external.textContent = "↗";
+  external.setAttribute("aria-hidden", "true");
+  documentation.append(external);
   const out = document.createElement("button");
   out.className = "identity-signout";
   out.textContent = "Sign out";
   out.addEventListener("click", () => void logout());
-  panel.append(heading, currentRole, appearance, out);
+  panel.append(heading, currentRole, appearance, documentation, out);
   menu.append(trigger, panel);
   menu.addEventListener("toggle", () => trigger.setAttribute("aria-expanded", String(menu.open)));
   menu.addEventListener("keydown", (event) => {
